@@ -6,6 +6,8 @@ from urllib.parse import urlparse, parse_qs
 PSQL = ['psql', '-h', '/tmp', '-p', '5544', '-U', 'postgres', '-d', 'gl', '-tAq', '-v', 'ON_ERROR_STOP=1']
 CODE = '123456'
 log = []
+pending = {}    # uid -> neue Mail (wartet auf Bestätigung)
+confirmed = {}  # uid -> bestätigte Mail
 
 
 def lit(v):
@@ -76,6 +78,18 @@ def handle(route, request):
         if body.get('token') != CODE:
             return reply(403, {'code': 403, 'error_code': 'otp_expired', 'msg': 'Token has expired or is invalid'})
         return reply(200, session(body['email']))
+    if path == '/auth/v1/signup':
+        u = str(uuid.uuid4())
+        subprocess.run(PSQL, input=f"insert into auth.users values ('{u}', null);", capture_output=True, text=True)
+        return reply(200, {'access_token': 'tok-' + u, 'refresh_token': 'ref-' + u, 'expires_in': 3600,
+                           'user': {'id': u, 'email': '', 'is_anonymous': True}})
+    if path == '/auth/v1/user':
+        a = request.headers.get('authorization', '')
+        u = a[len('Bearer tok-'):]
+        if request.method == 'PUT':
+            pending[u] = body['email']
+            return reply(200, {'id': u, 'email': '', 'new_email': body['email'], 'is_anonymous': True})
+        return reply(200, {'id': u, 'email': confirmed.get(u, ''), 'is_anonymous': u not in confirmed})
     if path == '/auth/v1/logout':
         return reply(204, {})
     auth = request.headers.get('authorization', '')

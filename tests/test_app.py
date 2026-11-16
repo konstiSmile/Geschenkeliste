@@ -32,10 +32,16 @@ def newpage(browser, errors):
     return p
 
 
+def start_anon(p, name, url=BASE):
+    p.goto(url)
+    p.fill('form[data-form=start] input[name=name]', name)
+    p.click('text=Los geht')
+
+
 def login(p, email, name, url=BASE):
     p.goto(url)
     p.fill('input[name=email]', email)
-    p.click('text=Code per Mail schicken')
+    p.click('text=Anmelde-Link schicken')
     p.wait_for_selector('input[name=code]')
     p.fill('input[name=code]', '000000')
     p.click('button:has-text("Anmelden")')
@@ -60,8 +66,9 @@ with sync_playwright() as pw:
     browser = pw.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--no-sandbox'])
     errs = []
     a = newpage(browser, errs)
-    login(a, 'anna@x.de', 'Anna')
+    start_anon(a, 'Anna')
     a.wait_for_selector('h1:has-text("Meine Wünsche")')
+    check('Anna ohne Mail gestartet, kein Namens-Bildschirm', a.locator('text=Wie heißt du?').count() == 0)
     check('Anna angemeldet, Hinweis ohne Gruppe', a.locator('text=Du bist noch in keiner Gruppe').count() == 1)
 
     # Gruppen anlegen
@@ -133,13 +140,12 @@ with sync_playwright() as pw:
     c = newpage(browser, errs)
     c.goto(BASE)
     c.fill('input[name=email]', 'clara@x.de')
-    c.click('text=Code per Mail schicken')
+    c.fill('form[data-form=start] input[name=name]', 'Clara')
+    c.click('text=Anmelde-Link schicken')
     c.fill('input[name=code]', 'https://qbdpzamygonpruaafcrt.supabase.co/auth/v1/verify?token=hash-123456&type=magiclink&redirect_to=https://konstismile.github.io/Geschenkeliste/')
     c.click('button:has-text("Anmelden")')
-    c.wait_for_selector('text=Wie heißt du?')
-    check('Anmeldung mit eingefügtem Link', True)
-    c.fill('input[name=name]', 'Clara')
-    c.click('text=Weiter')
+    c.wait_for_selector('h1:has-text("Meine Wünsche")')
+    check('Anmeldung mit eingefügtem Link, Name von der Startseite übernommen', True)
     c.wait_for_selector('h1:has-text("Meine Wünsche")')
     c.click('.tabs >> text=Gruppen')
     c.fill('input[name=code]', code.lower())
@@ -178,6 +184,21 @@ with sync_playwright() as pw:
     a.wait_for_selector('h1:has-text("Meine Wünsche")')
     check('Gelöscht', a.locator('text=Konzertkarte Jazz').count() == 0)
 
+    # Anna sichert ihr Konto
+    a.goto(BASE + '#/')
+    check('Hinweis „Mail ergänzen“ bei Anna', a.locator('text=Mail-Adresse ergänzen').count() == 1)
+    a.goto(BASE + '#/mehr')
+    a.fill('form[data-form=secure] input[name=email]', 'anna@x.de')
+    a.click('button:has-text("Sichern")')
+    a.wait_for_selector('text=Fast geschafft')
+    a.click('button:has-text("Prüfen")')
+    expect(a.locator('#toast')).to_contain_text('Noch nicht bestätigt')
+    uid = a.evaluate("JSON.parse(localStorage.getItem('geschenkeliste-v1')).session.user.id")
+    mock.confirmed[uid] = 'anna@x.de'
+    a.click('button:has-text("Prüfen")')
+    a.wait_for_selector('text=Angemeldet als anna@x.de')
+    check('Anna hat ihr Konto gesichert', a.locator('text=Konto sichern').count() == 0)
+
     # Name ändern, Gruppe verlassen, abmelden
     b.goto(BASE + '#/mehr')
     b.fill('input[name=name]', 'Benni')
@@ -193,18 +214,26 @@ with sync_playwright() as pw:
     check('Clara hat Familie verlassen', True)
     c.goto(BASE + '#/mehr')
     c.click('text=Abmelden')
-    c.wait_for_selector('text=Code per Mail schicken')
+    c.wait_for_selector('text=Los geht')
     check('Abgemeldet, kein Cache mehr', 'cache' not in c.evaluate("localStorage.getItem('geschenkeliste-v1') || ''"))
 
     # Login-Bildschirm fürs Bild
     d = newpage(browser, errs)
     d.goto(BASE)
-    d.wait_for_selector('text=Code per Mail schicken')
+    d.wait_for_selector('text=Los geht')
     shot(d, '1-login')
+    start_anon(d, 'Dora')
+    d.wait_for_selector('h1:has-text("Meine Wünsche")')
+    d.goto(BASE + '#/mehr')
+    d.click('button:has-text("Abmelden")')
+    d.wait_for_selector('text=Trotzdem abmelden')
+    check('Warnung beim Abmelden ohne Mail', True)
+    shot(d, '6-mehr-anon')
 
     # Start aus Cache ohne Netz: Daten bleiben sichtbar
     a.context.unroute('https://qbdpzamygonpruaafcrt.supabase.co/**')
     a.context.route('https://qbdpzamygonpruaafcrt.supabase.co/**', lambda r, q: r.abort())
+    a.goto(BASE + '#/')
     a.reload()
     a.wait_for_selector('.wish:has-text("Kochbuch")')
     check('Offline: Liste aus Zwischenspeicher', True)

@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.1';
+const VERSION = '1.2';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -72,6 +72,8 @@ function errText(j, status) {
   if (code === '42501' || /row-level security/i.test(m)) return 'Das darfst du leider nicht.';
   if (/Code nicht gefunden/.test(m)) return 'Diesen Gruppen-Code gibt es nicht.';
   if (/Zu viele Gruppen/.test(m)) return 'Du hast schon 20 Gruppen angelegt.';
+  if (/anonymous/i.test(m) && /disabled/i.test(m)) return 'Start ohne Mail ist in Supabase noch nicht eingeschaltet.';
+  if (/already/i.test(m) && /regist|exist/i.test(m)) return 'Für diese Mail-Adresse gibt es schon ein Konto.';
   if (/email/i.test(m) && /invalid/i.test(m)) return 'Diese Mail-Adresse sieht nicht richtig aus.';
   return m ? 'Fehler: ' + m : 'Fehler (' + status + ')';
 }
@@ -105,7 +107,7 @@ async function sb(path, opt = {}) {
 
 function setSession(j) {
   const exp = j.expires_at || Math.floor(Date.now() / 1000) + (j.expires_in || 3600);
-  S.session = { access_token: j.access_token, refresh_token: j.refresh_token, expires_at: exp, user: { id: j.user.id, email: j.user.email } };
+  S.session = { access_token: j.access_token, refresh_token: j.refresh_token, expires_at: exp, user: { id: j.user.id, email: j.user.email || '', anon: !!j.user.is_anonymous && !j.user.email } };
   delete S.loginSent;
   saveState();
 }
@@ -175,8 +177,23 @@ async function handleAuthHash() {
 }
 
 /* ---------- Daten laden ---------- */
+async function refreshUser() {
+  if (!S.session || !S.session.user.anon) return false;
+  try {
+    const u = await sb('/auth/v1/user');
+    if (u && u.email) {
+      S.session.user = { id: u.id, email: u.email, anon: false };
+      delete S.secureSent;
+      saveState();
+      return true;
+    }
+  } catch (e) { /* später nochmal */ }
+  return false;
+}
+
 async function sync(quiet) {
   if (!S.session) return;
+  if (S.session.user.anon && S.secureSent) refreshUser();
   try {
     const [profiles, groups, members, wishes, wg, res] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
@@ -224,29 +241,39 @@ function shell(title, body, opt = {}) {
 }
 
 function viewLogin() {
-  const invited = S.pendingJoin ? '<p class="note">Du wurdest in eine Gruppe eingeladen. Melde dich an, dann trittst du automatisch bei.</p>' : '';
+  const invited = S.pendingJoin ? '<p class="note">Du wurdest in eine Gruppe eingeladen. Nach dem Start bist du automatisch drin.</p>' : '';
   if (S.loginSent && S.loginEmail) {
     return `<main class="login">
       <div class="logo">🎁</div><h1>Geschenkeliste</h1>${invited}
       <p>Wir haben dir eine Mail an <b>${esc(S.loginEmail)}</b> geschickt.</p>
-      <p class="small">Steht dort ein Code, tippe ihn ein. Steht dort nur ein Link: <b>Link lang drücken → „Link kopieren“</b>, dann unten einfügen.</p>
+      <p class="small">Darin ist ein Link: <b>lang drücken → „Link kopieren“</b>, dann hier einfügen. Steht ein Code in der Mail, kannst du auch den eintippen.</p>
       <form data-form="verify">
-        <input name="code" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Code oder Link" required autofocus>
+        <input name="code" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Link oder Code" required autofocus>
         <button class="primary" type="submit">Anmelden</button>
       </form>
       <button class="link" data-act="pastelink">Kopierten Link einfügen</button>
-      <p class="muted small">Keine Mail? Schau im Spam-Ordner nach. Code und Link gelten etwa eine Stunde.</p>
-      <div class="row"><button class="link" data-act="resend">Code erneut senden</button><button class="link" data-act="otheremail">Andere Adresse</button></div>
+      <p class="muted small">Keine Mail? Schau im Spam-Ordner nach. Der Link gilt etwa eine Stunde.</p>
+      <div class="row"><button class="link" data-act="resend">Erneut senden</button><button class="link" data-act="otheremail">Zurück</button></div>
     </main>`;
   }
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone;
+  const tip = ios ? '<p class="note">Tipp: Erst <b>Teilen → Zum Home-Bildschirm</b>, dann die App von dort starten. Safari und Home-Bildschirm sind auf dem iPhone getrennt – sonst hast du zwei Konten.</p>' : '';
   return `<main class="login">
     <div class="logo">🎁</div><h1>Geschenkeliste</h1>
-    <p class="muted">Wunschlisten für Familie und Freunde. Was reserviert ist, sieht der Beschenkte nie.</p>${invited}
-    <form data-form="login">
-      <input name="email" type="email" autocomplete="email" placeholder="Deine Mail-Adresse" required value="${esc(S.loginEmail || '')}">
-      <button class="primary" type="submit">Code per Mail schicken</button>
+    <p class="muted">Wunschlisten für Familie und Freunde. Was reserviert ist, sieht der Beschenkte nie.</p>${invited}${tip}
+    <form data-form="start">
+      <input name="name" maxlength="40" placeholder="Dein Vorname" required autocomplete="given-name" value="${esc(S.pendingName || '')}">
+      <button class="primary" type="submit">Los geht’s</button>
     </form>
-    <p class="muted small">Kein Passwort nötig: Du bekommst einen Code per Mail.</p>
+    <div class="card mailcard">
+      <h3>Mit E-Mail (empfohlen)</h3>
+      <p class="small">Mit deiner Mail-Adresse kommst du jederzeit wieder an deine Liste und deine Reservierungen: auf einem neuen Handy, einem zweiten Gerät oder nach dem Löschen der Browserdaten. Ohne Mail hängt alles an diesem einen Gerät. Du bekommst nur Anmelde-Mails, keine Werbung.</p>
+      <form data-form="login">
+        <input name="email" type="email" autocomplete="email" placeholder="Deine Mail-Adresse" required value="${esc(S.loginEmail || '')}">
+        <button type="submit">Anmelde-Link schicken</button>
+      </form>
+      <p class="muted small">Schon ein Konto? Einfach hier deine Mail eingeben. Du kannst die Mail auch später in „Mehr“ ergänzen.</p>
+    </div>
   </main>`;
 }
 
@@ -282,7 +309,8 @@ function viewMine() {
       <p class="chips"><span class="chip">${esc(visLabel(w))}</span></p>
     </li>`).join('');
   const empty = `<div class="empty"><p>Noch keine Wünsche.</p><p class="muted">Lege los mit „+ Wunsch“.</p></div>`;
-  const noGroup = myGroups().length ? '' : `<p class="note">Du bist noch in keiner Gruppe. <a href="#/gruppen">Gruppe anlegen oder beitreten</a>, damit andere deine Wünsche sehen.</p>`;
+  const unsafe = S.session.user.anon && list.length ? `<p class="note">Deine Liste hängt noch an diesem Gerät. <a href="#/mehr">Mail-Adresse ergänzen</a>, damit sie sicher ist.</p>` : '';
+  const noGroup = myGroups().length ? unsafe : `<p class="note">Du bist noch in keiner Gruppe. <a href="#/gruppen">Gruppe anlegen oder beitreten</a>, damit andere deine Wünsche sehen.</p>`;
   return shell('Meine Wünsche', `
     ${noGroup}
     <a class="primary block" href="#/w/neu">+ Wunsch</a>
@@ -402,13 +430,34 @@ function viewPerson(gid, uid) {
   { tab: 'groups', back: '#/g/' + gid });
 }
 
+function secureCard() {
+  if (S.secureSent) {
+    return `<div class="card stack mailcard">
+      <h3>Fast geschafft</h3>
+      <p class="small">Wir haben eine Mail an <b>${esc(S.secureSent)}</b> geschickt. Tippe auf den Link darin (es darf sich Safari öffnen). Komm dann hierher zurück und tippe auf „Prüfen“.</p>
+      <button class="primary" data-act="checkuser">Prüfen</button>
+      <button class="link" data-act="securecancel">Andere Adresse</button>
+    </div>`;
+  }
+  return `<div class="card stack mailcard">
+    <h3>Konto sichern</h3>
+    <p class="small">Du nutzt die App gerade ohne Mail-Adresse. Deine Liste hängt an diesem Gerät: Beim Handywechsel oder Löschen der Browserdaten ist sie weg. Mit deiner Mail kannst du dich überall wieder anmelden.</p>
+    <form data-form="secure" class="inline"><input name="email" type="email" autocomplete="email" placeholder="Mail-Adresse" required><button type="submit">Sichern</button></form>
+  </div>`;
+}
+
 function viewMore() {
   const p = D.profiles.find(x => x.id === me()) || {};
   return shell('Mehr', `
     <div class="card stack">
       <form data-form="name" class="inline"><input name="name" maxlength="40" value="${esc(p.name || '')}" required><button type="submit">Name ändern</button></form>
-      <p class="muted small">Angemeldet als ${esc(S.session.user.email || '')}</p>
-      <button class="ghost" data-act="logout">Abmelden</button>
+      ${S.session.user.anon ? '' : `<p class="muted small">Angemeldet als ${esc(S.session.user.email)}</p>`}
+    </div>
+    ${S.session.user.anon ? secureCard() : ''}
+    <div class="card stack">
+      ${S.session.user.anon && ui.confirmLogout
+        ? `<p class="small">Ohne Mail-Adresse kommst du danach nicht mehr in dieses Konto zurück. Deine Liste wäre weg.</p><button class="danger" data-act="logout">Trotzdem abmelden</button>`
+        : `<button class="ghost" data-act="${S.session.user.anon ? 'asklogout' : 'logout'}">Abmelden</button>`}
     </div>
     <div class="card">
       <h3>Datenschutz in Kürze</h3>
@@ -435,7 +484,7 @@ function render() {
   }
   if (!S.session) { app.innerHTML = viewLogin(); return; }
   const prof = D.profiles.find(x => x.id === me());
-  if (D.loaded && (!prof || !prof.name)) { app.innerHTML = viewName(); return; }
+  if (D.loaded && (!prof || !prof.name)) { app.innerHTML = S.pendingName ? '<p class="boot">Lädt …</p>' : viewName(); return; }
   if (!D.loaded) { app.innerHTML = '<p class="boot">Lädt …</p>'; return; }
   let html;
   if (parts[0] === 'w' && parts[1]) html = viewWishForm(parts[1]);
@@ -479,7 +528,25 @@ async function run(fn) {
 }
 
 const forms = {
+  async start(f) {
+    const name = f.name.value.trim();
+    if (!name) return;
+    const j = await sb('/auth/v1/signup', { method: 'POST', auth: false, body: { data: {} } });
+    setSession(j);
+    S.pendingName = name;
+    saveState();
+    await afterLogin();
+  },
+  async secure(f) {
+    const email = f.email.value.trim().toLowerCase();
+    await sb('/auth/v1/user?redirect_to=' + encodeURIComponent(location.origin + location.pathname), { method: 'PUT', body: { email } });
+    S.secureSent = email;
+    saveState();
+    render();
+  },
   async login(f) {
+    const nm = $('form[data-form=start] input[name=name]');
+    if (nm && nm.value.trim()) S.pendingName = nm.value.trim();
     const email = f.email.value.trim().toLowerCase();
     await sb('/auth/v1/otp?redirect_to=' + encodeURIComponent(location.origin + location.pathname), { method: 'POST', auth: false, body: { email, create_user: true } });
     S.loginEmail = email;
@@ -581,6 +648,13 @@ const acts = {
     inp.value = t.trim();
     await forms.verify(inp.form);
   },
+  asklogout: async () => { ui.confirmLogout = 1; render(); },
+  checkuser: async () => {
+    const ok = await refreshUser();
+    toast(ok ? 'Konto gesichert.' : 'Noch nicht bestätigt. Hast du auf den Link in der Mail getippt?');
+    render();
+  },
+  securecancel: async () => { delete S.secureSent; saveState(); render(); },
   otheremail: async () => { delete S.loginSent; saveState(); render(); },
   logout: async () => {
     try { await sb('/auth/v1/logout', { method: 'POST' }); } catch (e) { /* egal */ }
@@ -632,6 +706,15 @@ async function afterLogin() {
   const c = S.cache;
   if (c && c.uid !== me()) delete S.cache;
   await sync();
+  const prof = D.profiles.find(x => x.id === me());
+  if (D.loaded && (!prof || !prof.name) && S.pendingName) {
+    try {
+      await sb('/rest/v1/profiles?on_conflict=id', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: { id: me(), name: S.pendingName } });
+      delete S.pendingName;
+      saveState();
+      await sync(true);
+    } catch (e) { toast(e.message); }
+  }
   if (S.pendingJoin) await doPendingJoin();
   else render();
 }
