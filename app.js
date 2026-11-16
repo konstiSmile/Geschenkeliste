@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.0';
+const VERSION = '1.1';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -228,12 +228,14 @@ function viewLogin() {
   if (S.loginSent && S.loginEmail) {
     return `<main class="login">
       <div class="logo">🎁</div><h1>Geschenkeliste</h1>${invited}
-      <p>Wir haben dir eine Mail an <b>${esc(S.loginEmail)}</b> geschickt. Gib den Code aus der Mail ein.</p>
+      <p>Wir haben dir eine Mail an <b>${esc(S.loginEmail)}</b> geschickt.</p>
+      <p class="small">Steht dort ein Code, tippe ihn ein. Steht dort nur ein Link: <b>Link lang drücken → „Link kopieren“</b>, dann unten einfügen.</p>
       <form data-form="verify">
-        <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="12" placeholder="Code" required autofocus>
+        <input name="code" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Code oder Link" required autofocus>
         <button class="primary" type="submit">Anmelden</button>
       </form>
-      <p class="muted small">Keine Mail? Schau im Spam-Ordner nach. Der Code gilt etwa eine Stunde.</p>
+      <button class="link" data-act="pastelink">Kopierten Link einfügen</button>
+      <p class="muted small">Keine Mail? Schau im Spam-Ordner nach. Code und Link gelten etwa eine Stunde.</p>
       <div class="row"><button class="link" data-act="resend">Code erneut senden</button><button class="link" data-act="otheremail">Andere Adresse</button></div>
     </main>`;
   }
@@ -486,9 +488,26 @@ const forms = {
     render();
   },
   async verify(f) {
-    const token = f.code.value.replace(/\D/g, '');
-    if (token.length < 6) throw new Error('Der Code hat mindestens 6 Ziffern.');
+    const raw = f.code.value.trim();
     let j;
+    const m = raw.match(/[?&#]token=([^&#\s]+)/);
+    if (m) {
+      // eingefügter Link aus der Mail: enthält einen gehashten Token
+      const tm = raw.match(/[?&#]type=([a-z_]+)/);
+      const type = tm ? tm[1] : 'magiclink';
+      const token_hash = decodeURIComponent(m[1]);
+      try {
+        j = await sb('/auth/v1/verify', { method: 'POST', auth: false, body: { type, token_hash } });
+      } catch (e) {
+        try { j = await sb('/auth/v1/verify', { method: 'POST', auth: false, body: { type: 'email', token_hash } }); } catch (e2) { throw new Error('Der Link ist abgelaufen oder schon benutzt. Fordere einen neuen an.'); }
+      }
+      setSession(j);
+      await afterLogin();
+      return;
+    }
+    if (/^https?:/i.test(raw)) throw new Error('Das ist nicht der Anmelde-Link aus der Mail.');
+    const token = raw.replace(/\D/g, '');
+    if (token.length < 6) throw new Error('Der Code hat mindestens 6 Ziffern.');
     try {
       j = await sb('/auth/v1/verify', { method: 'POST', auth: false, body: { type: 'email', email: S.loginEmail, token } });
     } catch (e) {
@@ -553,6 +572,14 @@ const acts = {
   resend: async () => {
     await sb('/auth/v1/otp?redirect_to=' + encodeURIComponent(location.origin + location.pathname), { method: 'POST', auth: false, body: { email: S.loginEmail, create_user: true } });
     toast('Neuer Code ist unterwegs.');
+  },
+  pastelink: async () => {
+    let t = '';
+    try { t = await navigator.clipboard.readText(); } catch (e) { /* nicht erlaubt */ }
+    const inp = $('input[name=code]');
+    if (!t) { inp.focus(); toast('Ins Feld tippen und „Einsetzen“ wählen.'); return; }
+    inp.value = t.trim();
+    await forms.verify(inp.form);
   },
   otheremail: async () => { delete S.loginSent; saveState(); render(); },
   logout: async () => {

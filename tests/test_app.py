@@ -131,7 +131,15 @@ with sync_playwright() as pw:
 
     # Dritte Person mit Code-Eingabe sieht Bens Reservierung
     c = newpage(browser, errs)
-    login(c, 'clara@x.de', 'Clara')
+    c.goto(BASE)
+    c.fill('input[name=email]', 'clara@x.de')
+    c.click('text=Code per Mail schicken')
+    c.fill('input[name=code]', 'https://qbdpzamygonpruaafcrt.supabase.co/auth/v1/verify?token=hash-123456&type=magiclink&redirect_to=https://konstismile.github.io/Geschenkeliste/')
+    c.click('button:has-text("Anmelden")')
+    c.wait_for_selector('text=Wie heißt du?')
+    check('Anmeldung mit eingefügtem Link', True)
+    c.fill('input[name=name]', 'Clara')
+    c.click('text=Weiter')
     c.wait_for_selector('h1:has-text("Meine Wünsche")')
     c.click('.tabs >> text=Gruppen')
     c.fill('input[name=code]', code.lower())

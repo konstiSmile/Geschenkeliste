@@ -71,6 +71,8 @@ def handle(route, request):
     if path == '/auth/v1/otp':
         return reply(200, {})
     if path == '/auth/v1/verify':
+        if body.get('token_hash') == 'hash-' + CODE:
+            return reply(200, session('clara@x.de'))
         if body.get('token') != CODE:
             return reply(403, {'code': 403, 'error_code': 'otp_expired', 'msg': 'Token has expired or is invalid'})
         return reply(200, session(body['email']))
