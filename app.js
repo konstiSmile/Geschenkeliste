@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.3';
+const VERSION = '1.4';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -226,293 +226,395 @@ function wishesOf(uid, gid) {
 }
 
 
-/* ---------- Illustrationen (flach, leicht animiert) ---------- */
-const ART = {
-  gift: `<svg class="art art-gift" viewBox="0 0 160 150" aria-hidden="true">
-    <ellipse cx="80" cy="142" rx="54" ry="6" fill="#1A2821" opacity=".12"/>
-    <path class="spark s1" d="M26 22 L29 30 L37 33 L29 36 L26 44 L23 36 L15 33 L23 30 Z" fill="#B27F49"/>
-    <path class="spark s2" d="M134 14 L136 19 L141 21 L136 23 L134 28 L132 23 L127 21 L132 19 Z" fill="#B27F49"/>
-    <path class="spark s3" d="M144 62 L146 67 L151 69 L146 71 L144 76 L142 71 L137 69 L142 67 Z" fill="#28604C"/>
-    <rect x="34" y="74" width="92" height="64" rx="8" fill="#A0061B"/>
-    <rect x="34" y="74" width="40" height="64" rx="8" fill="#B5203A"/>
-    <rect x="72" y="74" width="16" height="64" fill="#B27F49"/>
-    <g class="lid">
-      <path d="M80 60 C66 34 42 38 50 52 C56 61 70 60 80 60 Z" fill="#B27F49"/>
-      <path d="M80 60 C94 34 118 38 110 52 C104 61 90 60 80 60 Z" fill="#9A6A3A"/>
-      <rect x="28" y="58" width="104" height="22" rx="6" fill="#7E0516"/>
-      <rect x="72" y="58" width="16" height="22" fill="#C9965F"/>
-      <circle cx="80" cy="58" r="7" fill="#C9965F"/>
-    </g>
-  </svg>`,
-  letter: `<svg class="art art-letter" viewBox="0 0 160 130" aria-hidden="true">
-    <ellipse cx="80" cy="122" rx="56" ry="5" fill="#1A2821" opacity=".12"/>
-    <path d="M24 52 L80 16 L136 52 V112 H24 Z" fill="#7E0516"/>
-    <g class="sheet">
-      <rect x="38" y="30" width="84" height="68" rx="5" fill="#FBF4E8"/>
-      <path d="M80 66 C68 58 64 52 68 47 C72 42 78 44 80 48 C82 44 88 42 92 47 C96 52 92 58 80 66 Z" fill="#C9536A"/>
-    </g>
-    <path d="M24 52 L80 88 L136 52 V110 Q136 116 130 116 H30 Q24 116 24 110 Z" fill="#A0061B"/>
-    <path d="M24 114 L68 80 M136 114 L92 80" stroke="#7E0516" stroke-width="2" fill="none"/>
-  </svg>`,
-  bauble: `<svg class="art art-bauble" viewBox="0 0 140 160" aria-hidden="true">
-    <path d="M6 14 Q40 2 70 10 Q100 2 134 14" stroke="#28604C" stroke-width="7" fill="none" stroke-linecap="round"/>
-    <path d="M22 9 l-6 -8 M40 6 l-2 -9 M100 6 l2 -9 M118 9 l6 -8 M30 12 l-5 9 M110 12 l5 9" stroke="#3E5647" stroke-width="3" stroke-linecap="round"/>
-    <circle cx="60" cy="14" r="4" fill="#A0061B"/><circle cx="68" cy="18" r="4" fill="#A0061B"/>
-    <g class="swing">
-      <line x1="70" y1="12" x2="70" y2="44" stroke="#B27F49" stroke-width="2"/>
-      <rect x="61" y="42" width="18" height="11" rx="2.5" fill="#B27F49"/>
-      <circle cx="70" cy="94" r="40" fill="#A0061B"/>
-      <path d="M32 86 Q70 104 108 86" stroke="#B27F49" stroke-width="3.5" fill="none"/>
-      <path d="M33 104 Q70 122 107 104" stroke="#B27F49" stroke-width="2" fill="none" stroke-dasharray="2 6" stroke-linecap="round"/>
-      <ellipse cx="54" cy="76" rx="8" ry="13" fill="#FFFFFF" opacity=".22" transform="rotate(35 54 76)"/>
-    </g>
-  </svg>`
+/* ---------- Bausteine der Oberfläche ---------- */
+const I = {
+  home: '<path d="M3.5 10.5 12 4l8.5 6.5V20a1 1 0 0 1-1 1h-5v-6h-5v6h-5a1 1 0 0 1-1-1z"/>',
+  gift: '<path d="M4 11h16v9H4zM3 7.5h18V11H3zM12 7.5V20M12 7.5C10 4 6.5 3.5 6.5 5.6S10 7.5 12 7.5zm0 0c2-3.5 5.5-4 5.5-1.9S14 7.5 12 7.5z"/>',
+  people: '<circle cx="9" cy="8" r="3.4"/><path d="M2.6 20c.8-3.9 3.3-6 6.4-6s5.6 2.1 6.4 6"/><circle cx="17" cy="9" r="2.5"/><path d="M16.3 14c2.7 0 4.6 1.8 5.3 5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.4 4.2-7 8-7s7 2.6 8 7"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  chev: '<path d="m9 6 6 6-6 6"/>',
+  back: '<path d="m15 6-6 6 6 6"/>',
+  share: '<path d="M12 3v12M7.5 7.5 12 3l4.5 4.5M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  sync: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/>',
+  lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  eyeoff: '<path d="M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c5 0 8.5 4.2 9.5 6-.4.8-1.3 2.1-2.6 3.3M6.6 7.6C4.6 8.9 3.2 10.8 2.5 12c1 1.8 4.5 6 9.5 6 1.4 0 2.7-.3 3.8-.9M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 6.5 8.5 6.5 8.5-6.5"/>',
+  heart: '<path d="M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.4-7.5 10-7.5 10z"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3M14 9l2 2"/>'
 };
-const ICON = {
-  gift: '<svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11h16v9H4zM3 7.5h18V11H3zM12 7.5V20M12 7.5C10 4 6.5 3.5 6.5 5.6S10 7.5 12 7.5zm0 0c2-3.5 5.5-4 5.5-1.9S14 7.5 12 7.5z"/></svg>',
-  people: '<svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.4"/><path d="M2.6 20c.8-3.9 3.3-6 6.4-6s5.6 2.1 6.4 6"/><circle cx="17" cy="9" r="2.5"/><path d="M16.3 14c2.7 0 4.6 1.8 5.3 5"/></svg>',
-  more: '<svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>'
-};
+const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
+
+const BAUBLE = `<svg class="art" viewBox="0 0 140 160" aria-hidden="true">
+  <path d="M6 14 Q40 2 70 10 Q100 2 134 14" stroke="#3E5647" stroke-width="7" fill="none" stroke-linecap="round"/>
+  <path d="M22 9 l-6 -8 M40 6 l-2 -9 M100 6 l2 -9 M118 9 l6 -8 M30 12 l-5 9 M110 12 l5 9" stroke="#28604C" stroke-width="3" stroke-linecap="round"/>
+  <g class="swing">
+    <line x1="70" y1="12" x2="70" y2="44" stroke="#B27F49" stroke-width="2"/>
+    <rect x="61" y="42" width="18" height="11" rx="2.5" fill="#B27F49"/>
+    <circle cx="70" cy="94" r="40" fill="#A0061B"/>
+    <path d="M32 86 Q70 104 108 86" stroke="#B27F49" stroke-width="3.5" fill="none"/>
+    <path d="M33 104 Q70 122 107 104" stroke="#B27F49" stroke-width="2" fill="none" stroke-dasharray="2 6" stroke-linecap="round"/>
+    <ellipse cx="54" cy="76" rx="8" ry="13" fill="#FFFFFF" opacity=".22" transform="rotate(35 54 76)"/>
+  </g>
+</svg>`;
+
+function hueIdx(id) {
+  let h = 0;
+  for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h % 6;
+}
+function initials(name) {
+  const p = String(name || '?').trim().split(/\s+/);
+  return ((p[0] || '?')[0] + (p[1] ? p[1][0] : '')).toUpperCase();
+}
+function myName() { return (D.profiles.find(x => x.id === me()) || {}).name || ''; }
+function avatar(uid, size = '') {
+  const n = uid === me() ? myName() : nameOf(uid);
+  return `<span class="av ${size} c${hueIdx(uid)}">${esc(initials(n))}</span>`;
+}
+function avStack(uids, max = 4) {
+  const shown = uids.slice(0, max).map(u => avatar(u, 'xs')).join('');
+  const more = uids.length > max ? `<span class="av xs more">+${uids.length - max}</span>` : '';
+  return `<span class="avs">${shown}${more}</span>`;
+}
+function tile(w) {
+  const d = w.url ? domain(w.url) : '';
+  return d ? `<span class="tile c${hueIdx(d)}">${esc(d[0].toUpperCase())}</span>` : `<span class="tile plain">${icon('gift')}</span>`;
+}
+function plural(n, one, many) { return `${n} ${n === 1 ? one : many}`; }
+function ago(ts) {
+  const d0 = new Date(ts), now = new Date();
+  const a = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate());
+  const b = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const n = Math.round((b - a) / 864e5);
+  if (n <= 0) return 'heute';
+  if (n === 1) return 'gestern';
+  if (n < 7) return `vor ${n} Tagen`;
+  return new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'short' }).format(d0);
+}
+function daysToXmas() {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let x = new Date(now.getFullYear(), 11, 24);
+  if (today > x) x = new Date(now.getFullYear() + 1, 11, 24);
+  return Math.round((x - today) / 864e5);
+}
+function groupFor(w) {
+  const g = myGroups().find(g => membersOf(g.id).some(m => m.user_id === w.owner) && visibleIn(w, g.id));
+  return g ? g.id : null;
+}
+function emptyState(ic, title, text, action = '') {
+  return `<div class="emptystate"><span class="emptyicon">${icon(ic)}</span><h3>${title}</h3><p>${text}</p>${action}</div>`;
+}
+function visLabel(w) {
+  if (w.all_groups) return 'Alle Gruppen';
+  const names = groupIdsOf(w.id).map(g => (D.groups.find(x => x.id === g) || {}).name).filter(Boolean);
+  return names.length ? names.join(', ') : 'Nicht freigegeben';
+}
 
 /* ---------- Ansichten ---------- */
 function shell(title, body, opt = {}) {
   const tab = opt.tab || '';
-  const back = opt.back ? `<a class="back" href="${opt.back}" aria-label="Zurück">‹</a>` : '';
+  const back = opt.back ? `<a class="back" href="${opt.back[0]}">${icon('back')}<span>${esc(opt.back[1])}</span></a>` : '<span></span>';
+  const T = (h, t, n, label) => `<a href="${h}" class="${tab === t ? 'on' : ''}">${icon(n)}<span>${label}</span></a>`;
   return `
-  <header class="top">${back}<h1 class="display">${esc(title)}</h1>
-    <button class="icon" data-act="sync" aria-label="Aktualisieren" title="Aktualisieren">↻</button></header>
+  <header class="top">
+    <div class="topbar">${back}<button class="iconbtn" data-act="sync" aria-label="Aktualisieren">${icon('sync')}</button></div>
+    ${opt.eyebrow ? `<p class="eyebrow">${esc(opt.eyebrow)}</p>` : ''}
+    <h1 class="title">${esc(title)}</h1>
+    ${opt.sub ? `<p class="subtitle">${opt.sub}</p>` : ''}
+  </header>
   <main>${body}</main>
-  <nav class="tabs">
-    <a href="#/" class="${tab === 'mine' ? 'on' : ''}">${ICON.gift}Meine Wünsche</a>
-    <a href="#/gruppen" class="${tab === 'groups' ? 'on' : ''}">${ICON.people}Gruppen</a>
-    <a href="#/mehr" class="${tab === 'more' ? 'on' : ''}">${ICON.more}Mehr</a>
-  </nav>`;
+  <nav class="tabs">${T('#/', 'home', 'home', 'Start')}${T('#/liste', 'list', 'gift', 'Wunschliste')}${T('#/gruppen', 'groups', 'people', 'Gruppen')}${T('#/konto', 'acc', 'user', 'Konto')}</nav>`;
+}
+
+function brand() {
+  return `<div class="brand"><img class="brandmark" src="icons/icon-192.png" alt=""><span>Geschenkeliste</span></div>`;
 }
 
 function viewLogin() {
-  const invited = S.pendingJoin ? '<p class="note">Du wurdest in eine Gruppe eingeladen. Nach dem Start bist du automatisch drin.</p>' : '';
+  const invited = S.pendingJoin ? `<div class="banner">${icon('people')}<span><b>Du wurdest eingeladen</b><small>Nach der Anmeldung bist du automatisch in der Gruppe.</small></span></div>` : '';
   if (S.loginSent && S.loginEmail) {
     return `<main class="login">
-      ${ART.gift}<h1 class="display hero">Geschenke-<br>liste</h1>${invited}
-      <p>Wir haben dir eine Mail an <b>${esc(S.loginEmail)}</b> geschickt.</p>
-      <p class="small">Darin ist ein Link: <b>lang drücken → „Link kopieren“</b>, dann hier einfügen. Steht ein Code in der Mail, kannst du auch den eintippen.</p>
-      <form data-form="verify">
-        <input name="code" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Link oder Code" required autofocus>
+      ${brand()}
+      <h1 class="title xl">Schau in dein Postfach</h1>
+      <p class="lead">Wir haben einen Anmelde-Link an <b>${esc(S.loginEmail)}</b> geschickt.</p>
+      ${invited}
+      <ol class="steps">
+        <li>Öffne die Mail und drücke lang auf den Link.</li>
+        <li>Wähle „Link kopieren“.</li>
+        <li>Komm zurück und füge ihn hier ein.</li>
+      </ol>
+      <form data-form="verify" class="card stack">
+        <label>Link oder Code<input name="code" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://… oder 123456" required></label>
         <button class="primary" type="submit">Anmelden</button>
+        <button type="button" class="secondary" data-act="pastelink">Kopierten Link einfügen</button>
       </form>
-      <button class="link" data-act="pastelink">Kopierten Link einfügen</button>
-      <p class="muted small">Keine Mail? Schau im Spam-Ordner nach. Der Link gilt etwa eine Stunde.</p>
-      <div class="row"><button class="link" data-act="resend">Erneut senden</button><button class="link" data-act="otheremail">Zurück</button></div>
+      <p class="muted small">Keine Mail bekommen? Sieh im Spam-Ordner nach. Der Link ist eine Stunde gültig.</p>
+      <div class="linkrow"><button class="link" data-act="resend">Erneut senden</button><button class="link" data-act="otheremail">Andere Adresse</button></div>
     </main>`;
   }
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone;
-  const tip = ios ? '<p class="note">Tipp: Erst <b>Teilen → Zum Home-Bildschirm</b>, dann die App von dort starten. Safari und Home-Bildschirm sind auf dem iPhone getrennt – sonst hast du zwei Konten.</p>' : '';
+  const tip = ios ? `<div class="banner">${icon('share')}<span><b>Tipp fürs iPhone</b><small>Erst über Teilen „Zum Home-Bildschirm“ hinzufügen und die App von dort öffnen. Safari und Home-Bildschirm speichern getrennt.</small></span></div>` : '';
   return `<main class="login">
-    ${ART.gift}<h1 class="display hero">Geschenke-<br>liste</h1>
-    <p class="muted">Wunschlisten für Familie und Freunde. Was reserviert ist, sieht der Beschenkte nie.</p>${invited}${tip}
-    <form data-form="start">
-      <input name="name" maxlength="40" placeholder="Dein Vorname" required autocomplete="given-name" value="${esc(S.pendingName || '')}">
-      <button class="primary" type="submit">Los geht’s</button>
+    ${brand()}
+    <h1 class="title xl">Wünsche teilen, ohne die Überraschung zu verderben.</h1>
+    <ul class="features">
+      <li>${icon('people')}<span><b>Für Familie und Freunde</b>Eine Wunschliste, beliebig viele Gruppen.</span></li>
+      <li>${icon('eyeoff')}<span><b>Reservierungen bleiben geheim</b>Wer sich etwas wünscht, sieht nicht, was schon vergeben ist.</span></li>
+      <li>${icon('heart')}<span><b>Kostenlos und ohne Werbung</b>Es wird nur gespeichert, was die App braucht.</span></li>
+    </ul>
+    ${invited}${tip}
+    <form data-form="start" class="card stack">
+      <label>Wie heißt du?<input name="name" maxlength="40" placeholder="Vorname" required autocomplete="given-name" value="${esc(S.pendingName || '')}"></label>
+      <button class="primary" type="submit">Weiter</button>
     </form>
-    <div class="card mailcard">
-      <h3>Mit E-Mail (empfohlen)</h3>
-      <p class="small">Mit deiner Mail-Adresse kommst du jederzeit wieder an deine Liste und deine Reservierungen: auf einem neuen Handy, einem zweiten Gerät oder nach dem Löschen der Browserdaten. Ohne Mail hängt alles an diesem einen Gerät. Du bekommst nur Anmelde-Mails, keine Werbung.</p>
-      <form data-form="login">
-        <input name="email" type="email" autocomplete="email" placeholder="Deine Mail-Adresse" required value="${esc(S.loginEmail || '')}">
-        <button type="submit">Anmelde-Link schicken</button>
+    <div class="card stack mailcard">
+      <div class="mailhead">${icon('mail')}<b>Mit E-Mail anmelden</b><span class="badge">Empfohlen</span></div>
+      <p class="small muted">Mit deiner Mail-Adresse kommst du auf jedem Gerät an deine Liste, auch nach einem Handywechsel. Ohne Mail bleibt alles auf diesem Gerät. Wir schicken nur Anmelde-Links.</p>
+      <form data-form="login" class="stack">
+        <input name="email" type="email" autocomplete="email" placeholder="name@beispiel.de" required value="${esc(S.loginEmail || '')}">
+        <button type="submit" class="secondary">Anmelde-Link schicken</button>
       </form>
-      <p class="muted small">Schon ein Konto? Einfach hier deine Mail eingeben. Du kannst die Mail auch später in „Mehr“ ergänzen.</p>
     </div>
   </main>`;
 }
 
 function viewName() {
   return `<main class="login">
-    ${ART.bauble}<h1 class="display hero">Wie heißt du?</h1>
-    <p class="muted">So sehen dich die anderen in deinen Gruppen.</p>
-    <form data-form="name">
+    ${brand()}
+    <h1 class="title xl">Wie heißt du?</h1>
+    <p class="lead">So sehen dich die anderen in deinen Gruppen.</p>
+    <form data-form="name" class="card stack">
       <input name="name" maxlength="40" placeholder="Vorname" required autofocus autocomplete="given-name">
       <button class="primary" type="submit">Weiter</button>
     </form>
   </main>`;
 }
 
-function visLabel(w) {
-  if (w.all_groups) return 'Alle Gruppen';
-  const names = groupIdsOf(w.id).map(g => (D.groups.find(x => x.id === g) || {}).name).filter(Boolean);
-  return names.length ? names.join(', ') : 'Für niemanden sichtbar';
+function viewHome() {
+  const gs = myGroups();
+  const mine = wishesOf(me());
+  const errands = D.res.filter(r => r.user_id === me())
+    .map(r => ({ r, w: D.wishes.find(w => w.id === r.wish_id) })).filter(x => x.w);
+  const bought = errands.filter(x => x.r.status === 'gekauft').length;
+  const days = daysToXmas();
+  const today = new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
+
+  const secure = S.session.user.anon ? `<a class="banner tap" href="#/konto">${icon('lock')}<span><b>Konto sichern</b><small>Mit E-Mail bleibt deine Liste auch beim Handywechsel erhalten.</small></span>${icon('chev', 'chev')}</a>` : '';
+  const hero = `<section class="hero">
+      <div><p class="hero-num">${days === 0 ? 'Heute' : days}</p><p class="hero-label">${days === 0 ? 'ist Heiligabend' : (days === 1 ? 'Tag bis Heiligabend' : 'Tage bis Heiligabend')}</p></div>
+      ${BAUBLE}
+    </section>`;
+  const stats = `<div class="stats">
+      <a href="#/liste"><b>${mine.length}</b><span>${mine.length === 1 ? 'Wunsch' : 'Wünsche'}</span></a>
+      <div><b>${errands.length ? `${bought}<small>/${errands.length}</small>` : '0'}</b><span>besorgt</span></div>
+      <a href="#/gruppen"><b>${gs.length}</b><span>${gs.length === 1 ? 'Gruppe' : 'Gruppen'}</span></a>
+    </div>`;
+
+  if (!gs.length) {
+    return shell('Hallo ' + myName(), `${secure}${hero}${stats}
+      <div class="card cta">
+        <h3>Starte mit deiner Familie</h3>
+        <p>Lege eine Gruppe an und teile den Einladungscode. Alle in der Gruppe sehen gegenseitig ihre Wunschlisten.</p>
+        <div class="btnrow"><a class="primary" href="#/gruppen">Gruppe anlegen</a><a class="secondary" href="#/gruppen">Code eingeben</a></div>
+      </div>`, { tab: 'home', eyebrow: today });
+  }
+
+  const errHtml = errands.length ? `<ul class="rows">${errands.map(({ r, w }) => {
+    const g = groupFor(w);
+    const done = r.status === 'gekauft';
+    return `<li class="row-item ${done ? 'done' : ''}">
+        <button class="tick ${done ? 'on' : ''}" data-act="resstatus" data-id="${w.id}" data-s="${done ? 'reserviert' : 'gekauft'}" aria-label="${done ? 'Doch nicht gekauft' : 'Als gekauft markieren'}">${icon('check')}</button>
+        <a class="row-main" href="${g ? `#/g/${g}/p/${w.owner}` : '#/'}"><span class="row-title">${esc(w.title)}</span><span class="row-meta">für ${esc(nameOf(w.owner))} · ${done ? 'gekauft' : 'reserviert'}</span></a>
+        ${avatar(w.owner, 'sm')}
+      </li>`;
+  }).join('')}</ul>`
+    : `<p class="empty-line">Noch nichts reserviert. Öffne eine Liste in deinen Gruppen und tippe auf „Reservieren“.</p>`;
+
+  const feed = D.wishes.filter(w => w.owner !== me()).slice(0, 6);
+  const feedHtml = feed.length ? `<ul class="rows">${feed.map(w => {
+    const g = groupFor(w);
+    const r = resOf(w.id);
+    return `<li><a class="row-item" href="${g ? `#/g/${g}/p/${w.owner}` : '#/'}">${avatar(w.owner)}
+        <span class="row-main"><span class="row-title">${esc(w.title)}</span><span class="row-meta">${esc(nameOf(w.owner))} · ${ago(w.created_at)}${r ? ' · vergeben' : ''}</span></span>${icon('chev', 'chev')}</a></li>`;
+  }).join('')}</ul>`
+    : `<p class="empty-line">Sobald jemand aus deinen Gruppen etwas einträgt, erscheint es hier.</p>`;
+
+  return shell('Hallo ' + myName(), `${secure}${hero}${stats}
+    <h2>Deine Besorgungen</h2>${errHtml}
+    <h2>Neu in deinen Gruppen</h2>${feedHtml}`, { tab: 'home', eyebrow: today });
 }
 
-function wishBody(w) {
-  const link = w.url ? `<a class="link-out" href="${esc(w.url)}" target="_blank" rel="noopener noreferrer">${esc(domain(w.url) || 'Link')} ↗</a>` : '';
-  const note = w.note ? `<p class="wnote">${esc(w.note)}</p>` : '';
-  return `<h3>${esc(w.title)}</h3>${note}${link}`;
-}
-
-function viewMine() {
+function viewList() {
   const list = wishesOf(me());
-  const items = list.map(w => `
-    <li class="card wish">
-      <a class="cover" href="#/w/${w.id}" aria-label="Bearbeiten"></a>
-      ${wishBody(w)}
-      <p class="chips"><span class="chip">${esc(visLabel(w))}</span></p>
-    </li>`).join('');
-  const empty = `<div class="empty">${ART.bauble}<p>Noch keine Wünsche.</p><p class="muted">Lege los mit „+ Wunsch“.</p></div>`;
-  const unsafe = S.session.user.anon && list.length ? `<p class="note">Deine Liste hängt noch an diesem Gerät. <a href="#/mehr">Mail-Adresse ergänzen</a>, damit sie sicher ist.</p>` : '';
-  const noGroup = myGroups().length ? unsafe : `<p class="note">Du bist noch in keiner Gruppe. <a href="#/gruppen">Gruppe anlegen oder beitreten</a>, damit andere deine Wünsche sehen.</p>`;
-  return shell('Meine Wünsche', `
-    ${noGroup}
-    <a class="primary block" href="#/w/neu">+ Wunsch</a>
-    <ul class="list">${items || ''}</ul>${list.length ? '' : empty}
-    <p class="muted small center">Ob etwas reserviert ist, siehst du nicht – die Überraschung bleibt.</p>`, { tab: 'mine' });
+  const rows = list.map(w => `<li><a class="row-item wish" href="#/w/${w.id}">${tile(w)}
+      <span class="row-main"><span class="row-title">${esc(w.title)}</span>
+      <span class="row-meta">${esc([w.url ? domain(w.url) : '', visLabel(w)].filter(Boolean).join(' · '))}</span></span>${icon('chev', 'chev')}</a></li>`).join('');
+  const add = `<a class="primary withicon" href="#/w/neu">${icon('plus')}Wunsch hinzufügen</a>`;
+  const body = list.length
+    ? `${add}<ul class="rows">${rows}</ul><p class="foot">${icon('eyeoff')}<span>Ob etwas reserviert ist, siehst du nicht. So bleibt es eine Überraschung.</span></p>`
+    : emptyState('gift', 'Deine Liste ist noch leer', 'Trag ein, worüber du dich freuen würdest. Ein Link hilft den anderen, genau das Richtige zu finden.', add);
+  return shell('Meine Wunschliste', body, { tab: 'list', sub: plural(list.length, 'Wunsch', 'Wünsche') });
 }
 
 function viewWishForm(id) {
   const w = id === 'neu' ? { title: '', url: '', note: '', all_groups: true } : D.wishes.find(x => x.id === id && x.owner === me());
-  if (!w) return shell('Wunsch', '<div class="empty"><p>Wunsch nicht gefunden.</p></div>', { tab: 'mine', back: '#/' });
+  if (!w) return shell('Wunsch', emptyState('gift', 'Nicht gefunden', 'Diesen Wunsch gibt es nicht mehr.'), { tab: 'list', back: ['#/liste', 'Wunschliste'] });
   const gs = myGroups();
   const sel = id === 'neu' ? [] : groupIdsOf(id);
-  const boxes = gs.map(g => `<label class="check"><input type="checkbox" name="g" value="${g.id}" ${sel.includes(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('');
+  const boxes = gs.map(g => `<label class="check"><input type="checkbox" name="g" value="${g.id}" ${sel.includes(g.id) ? 'checked' : ''}><span>${esc(g.name)}</span></label>`).join('');
   const vis = gs.length ? `
-    <fieldset><legend>Wer sieht den Wunsch?</legend>
-      <label class="check"><input type="radio" name="vis" value="all" ${w.all_groups ? 'checked' : ''}> Alle meine Gruppen</label>
-      <label class="check"><input type="radio" name="vis" value="some" ${w.all_groups ? '' : 'checked'}> Nur ausgewählte Gruppen</label>
+    <h2>Sichtbar für</h2>
+    <div class="card options">
+      <label class="check"><input type="radio" name="vis" value="all" ${w.all_groups ? 'checked' : ''}><span>Alle meine Gruppen</span></label>
+      <label class="check"><input type="radio" name="vis" value="some" ${w.all_groups ? '' : 'checked'}><span>Nur ausgewählte Gruppen</span></label>
       <div class="sub ${w.all_groups ? 'hide' : ''}" id="gsel">${boxes}</div>
-    </fieldset>` : '<p class="note">Sichtbar für alle Gruppen, denen du beitrittst.</p>';
+    </div>` : `<p class="foot">${icon('people')}<span>Sichtbar für alle Gruppen, denen du später beitrittst.</span></p>`;
   const del = id === 'neu' ? '' : (ui.confirmDel === id
     ? `<button type="button" class="danger" data-act="delwish" data-id="${id}">Wirklich löschen</button>`
-    : `<button type="button" class="ghost" data-act="askdel" data-id="${id}">Löschen</button>`);
+    : `<button type="button" class="ghost danger-text" data-act="askdel" data-id="${id}">Wunsch löschen</button>`);
   return shell(id === 'neu' ? 'Neuer Wunsch' : 'Wunsch bearbeiten', `
     <form data-form="wish" data-id="${id}" class="stack">
-      <label>Was wünschst du dir?<input name="title" maxlength="120" required value="${esc(w.title)}" placeholder="z. B. Kochbuch „Simple“"></label>
-      <label>Link (optional)<input name="url" inputmode="url" autocomplete="off" value="${esc(w.url || '')}" placeholder="https://…"></label>
-      <label>Notiz (optional)<textarea name="note" maxlength="1000" rows="3" placeholder="Größe, Farbe, Alternativen …">${esc(w.note || '')}</textarea></label>
+      <div class="card fields">
+        <label>Was wünschst du dir?<input name="title" maxlength="120" required value="${esc(w.title)}" placeholder="z. B. Kochbuch „Simple“"></label>
+        <label>Link<input name="url" inputmode="url" autocomplete="off" value="${esc(w.url || '')}" placeholder="https://"></label>
+        <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Größe, Farbe, Alternativen">${esc(w.note || '')}</textarea></label>
+      </div>
       ${vis}
       <button class="primary" type="submit">Speichern</button>
       ${del}
-    </form>`, { tab: 'mine', back: '#/' });
+    </form>`, { tab: 'list', back: ['#/liste', 'Wunschliste'] });
 }
 
 function viewGroups() {
   const gs = myGroups();
-  const items = gs.map(g => {
-    const n = membersOf(g.id).length;
-    return `<li class="card"><a class="cover" href="#/g/${g.id}" aria-label="${esc(g.name)} öffnen"></a>
-      <h3>${esc(g.name)}</h3><p class="muted small">${n} ${n === 1 ? 'Mitglied' : 'Mitglieder'}</p></li>`;
+  const rows = gs.map(g => {
+    const ms = membersOf(g.id).map(m => m.user_id);
+    const n = D.wishes.filter(w => ms.includes(w.owner) && w.owner !== me() && visibleIn(w, g.id)).length;
+    return `<li><a class="row-item group" href="#/g/${g.id}"><span class="tile c${hueIdx(g.id)}">${esc(initials(g.name))}</span>
+      <span class="row-main"><span class="row-title">${esc(g.name)}</span><span class="row-meta">${plural(ms.length, 'Mitglied', 'Mitglieder')} · ${plural(n, 'Wunsch', 'Wünsche')}</span></span>
+      ${avStack(ms)}${icon('chev', 'chev')}</a></li>`;
   }).join('');
   const forms = `
-    <div class="card">
-      <form data-form="newgroup" class="inline"><input name="name" maxlength="40" placeholder="Neue Gruppe, z. B. Familie" required><button class="primary" type="submit">Anlegen</button></form>
-    </div>
-    <div class="card">
-      <form data-form="join" class="inline"><input name="code" maxlength="12" placeholder="Code einer Gruppe" autocapitalize="characters" autocomplete="off" required><button type="submit">Beitreten</button></form>
-    </div>`;
-  return shell('Gruppen', `
-    <ul class="list">${items}</ul>
-    ${gs.length ? '' : '<div class="empty">' + ART.letter + '<p>Noch in keiner Gruppe.</p><p class="muted">Lege eine an und lade andere ein, oder tritt mit einem Code bei.</p></div>'}
-    ${forms}`, { tab: 'groups' });
+    <h2>Neue Gruppe</h2>
+    <div class="card"><form data-form="newgroup" class="inline"><input name="name" maxlength="40" placeholder="Name, z. B. Familie" required><button class="primary" type="submit">Anlegen</button></form></div>
+    <h2>Mit Code beitreten</h2>
+    <div class="card"><form data-form="join" class="inline"><input name="code" maxlength="12" placeholder="ABCD-1234" autocapitalize="characters" autocomplete="off" required><button class="secondary" type="submit">Beitreten</button></form></div>`;
+  const body = gs.length
+    ? `<ul class="rows">${rows}</ul>${forms}`
+    : emptyState('people', 'Noch in keiner Gruppe', 'Lege eine Gruppe an und lade andere mit dem Code ein, oder tritt einer bestehenden Gruppe bei.') + forms;
+  return shell('Gruppen', body, { tab: 'groups', sub: gs.length ? plural(gs.length, 'Gruppe', 'Gruppen') : '' });
 }
 
 function viewGroup(gid) {
   const g = myGroups().find(x => x.id === gid);
-  if (!g) return shell('Gruppe', '<div class="empty"><p>Diese Gruppe gibt es nicht (mehr).</p></div>', { tab: 'groups', back: '#/gruppen' });
+  if (!g) return shell('Gruppe', emptyState('people', 'Nicht gefunden', 'Diese Gruppe gibt es nicht mehr.'), { tab: 'groups', back: ['#/gruppen', 'Gruppen'] });
   const ms = membersOf(gid).slice().sort((a, b) => (a.user_id === me()) - (b.user_id === me()) || nameOf(a.user_id).localeCompare(nameOf(b.user_id), 'de'));
   const rows = ms.map(m => {
     const ws = wishesOf(m.user_id, gid);
     if (m.user_id === me()) {
-      return `<li class="card person self"><a class="cover" href="#/" aria-label="Meine Wünsche"></a>
-        <h3>Du</h3><p class="muted small">${ws.length} ${ws.length === 1 ? 'Wunsch' : 'Wünsche'} für diese Gruppe sichtbar</p></li>`;
+      return `<li><a class="row-item person self" href="#/liste">${avatar(m.user_id)}
+        <span class="row-main"><span class="row-title">Du</span><span class="row-meta">${plural(ws.length, 'Wunsch', 'Wünsche')} für diese Gruppe sichtbar</span></span>${icon('chev', 'chev')}</a></li>`;
     }
     const taken = ws.filter(w => resOf(w.id)).length;
-    return `<li class="card person"><a class="cover" href="#/g/${gid}/p/${m.user_id}" aria-label="${esc(nameOf(m.user_id))}"></a>
-      <h3>${esc(nameOf(m.user_id))}</h3>
-      <p class="muted small">${ws.length} ${ws.length === 1 ? 'Wunsch' : 'Wünsche'}${taken ? ` · ${taken} vergeben` : ''}</p></li>`;
+    const meta = ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${ws.length - taken} frei` : 'Noch keine Wünsche';
+    return `<li><a class="row-item person" href="#/g/${gid}/p/${m.user_id}">${avatar(m.user_id)}
+      <span class="row-main"><span class="row-title">${esc(nameOf(m.user_id))}</span><span class="row-meta">${meta}</span></span>${icon('chev', 'chev')}</a></li>`;
   }).join('');
-  const manage = ui.manage === gid ? `
-    <div class="card stack">
-      <form data-form="rename" data-id="${gid}" class="inline"><input name="name" maxlength="40" value="${esc(g.name)}" required><button type="submit">Umbenennen</button></form>
-      ${ui.confirmLeave === gid
-        ? `<button class="danger" data-act="leave" data-id="${gid}">Wirklich verlassen</button>`
-        : `<button class="ghost" data-act="askleave" data-id="${gid}">Gruppe verlassen</button>`}
-      <p class="muted small">Wer die Gruppe verlässt, sieht ihre Listen nicht mehr. Deine Wünsche sind dort dann nicht mehr sichtbar.</p>
-    </div>` : `<button class="link center-btn" data-act="manage" data-id="${gid}">Gruppe verwalten</button>`;
+  const leave = ui.confirmLeave === gid
+    ? `<button class="danger" data-act="leave" data-id="${gid}">Wirklich verlassen</button>`
+    : `<button class="ghost danger-text" data-act="askleave" data-id="${gid}">Gruppe verlassen</button>`;
   return shell(g.name, `
     <div class="card invite">
-      <p class="muted small">Einladungs-Code</p>
-      <p class="code" id="gcode">${esc(fmtCode(g.code))}</p>
-      <button class="primary" data-act="invite" data-id="${gid}">Einladen</button>
+      <div><p class="eyebrow">Einladungscode</p><p class="code" id="gcode">${esc(fmtCode(g.code))}</p></div>
+      <button class="primary withicon" data-act="invite" data-id="${gid}">${icon('share')}Einladen</button>
     </div>
     <h2>Mitglieder</h2>
-    <ul class="list">${rows}</ul>
-    ${manage}`, { tab: 'groups', back: '#/gruppen' });
+    <ul class="rows">${rows}</ul>
+    <h2>Verwalten</h2>
+    <div class="card stack">
+      <form data-form="rename" data-id="${gid}" class="inline"><input name="name" maxlength="40" value="${esc(g.name)}" required><button class="secondary" type="submit">Umbenennen</button></form>
+      ${leave}
+    </div>`, { tab: 'groups', back: ['#/gruppen', 'Gruppen'], sub: `${plural(ms.length, 'Mitglied', 'Mitglieder')}` });
 }
 
 function viewPerson(gid, uid) {
   const g = myGroups().find(x => x.id === gid);
   if (!g || !membersOf(gid).some(m => m.user_id === uid) || uid === me()) {
-    return shell('Liste', '<div class="empty"><p>Diese Liste ist nicht verfügbar.</p></div>', { tab: 'groups', back: '#/g/' + gid });
+    return shell('Liste', emptyState('gift', 'Nicht verfügbar', 'Diese Liste kannst du nicht sehen.'), { tab: 'groups', back: ['#/g/' + gid, 'Gruppe'] });
   }
   const name = nameOf(uid);
   const ws = wishesOf(uid, gid);
+  const taken = ws.filter(w => resOf(w.id)).length;
   const items = ws.map(w => {
     const r = resOf(w.id);
-    let status, acts;
+    let pill = '', acts = '';
     if (!r) {
-      status = '';
-      acts = `<button class="primary" data-act="reserve" data-id="${w.id}">Reservieren</button>`;
+      acts = `<button class="primary sm" data-act="reserve" data-id="${w.id}">Reservieren</button>`;
     } else if (r.user_id === me()) {
-      status = r.status === 'gekauft' ? '<p class="status mine">✓ Von dir gekauft</p>' : '<p class="status mine">Von dir reserviert</p>';
+      pill = `<span class="pill green">${r.status === 'gekauft' ? 'Von dir gekauft' : 'Von dir reserviert'}</span>`;
       acts = (r.status === 'gekauft'
-        ? `<button data-act="resstatus" data-id="${w.id}" data-s="reserviert">Doch nicht gekauft</button>`
-        : `<button class="primary" data-act="resstatus" data-id="${w.id}" data-s="gekauft">Als gekauft markieren</button>`)
-        + `<button class="ghost" data-act="unreserve" data-id="${w.id}">Freigeben</button>`;
+        ? `<button class="secondary sm" data-act="resstatus" data-id="${w.id}" data-s="reserviert">Doch nicht gekauft</button>`
+        : `<button class="primary sm" data-act="resstatus" data-id="${w.id}" data-s="gekauft">Als gekauft markieren</button>`)
+        + `<button class="ghost sm" data-act="unreserve" data-id="${w.id}">Freigeben</button>`;
     } else {
-      status = `<p class="status other">${r.status === 'gekauft' ? 'Gekauft' : 'Reserviert'} von ${esc(nameOf(r.user_id))}</p>`;
-      acts = '';
+      pill = `<span class="pill gold">${r.status === 'gekauft' ? 'Gekauft' : 'Reserviert'} von ${esc(nameOf(r.user_id))}</span>`;
     }
-    return `<li class="card wish ${r ? 'taken' : ''}">${wishBody(w)}${status}${acts ? `<div class="row">${acts}</div>` : ''}</li>`;
+    const link = w.url ? `<a class="link-out" href="${esc(w.url)}" target="_blank" rel="noopener noreferrer">${icon('link')}${esc(domain(w.url) || 'Link')}</a>` : '';
+    return `<li class="card wish ${r ? 'taken' : ''}">
+      <div class="wish-head">${tile(w)}<div class="row-main"><h3>${esc(w.title)}</h3>${link}</div></div>
+      ${w.note ? `<p class="wnote">${esc(w.note)}</p>` : ''}
+      ${pill || acts ? `<div class="wish-foot">${pill}${acts ? `<div class="acts">${acts}</div>` : ''}</div>` : ''}
+    </li>`;
   }).join('');
-  return shell(genitive(name) + ' Wünsche', `
-    <p class="note">${esc(name)} sieht nicht, was reserviert oder gekauft ist.</p>
-    <ul class="list">${items}</ul>
-    ${ws.length ? '' : `<div class="empty"><p>${esc(name)} hat für diese Gruppe noch keine Wünsche.</p></div>`}`,
-  { tab: 'groups', back: '#/g/' + gid });
+  const head = `<section class="profile">${avatar(uid, 'lg')}<div class="profile-main">
+      <p class="row-meta">${ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${ws.length - taken} noch frei` : 'Noch keine Wünsche'}</p>
+      ${ws.length ? `<progress max="${ws.length}" value="${taken}"></progress>` : ''}</div></section>
+    <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert oder gekauft ist.</span></p>`;
+  return shell(name, head + (ws.length ? `<ul class="cards">${items}</ul>` : emptyState('gift', 'Noch leer', `${esc(name)} hat für diese Gruppe noch nichts eingetragen.`)),
+    { tab: 'groups', back: ['#/g/' + gid, g.name] });
 }
 
 function secureCard() {
   if (S.secureSent) {
     return `<div class="card stack mailcard">
-      <h3>Fast geschafft</h3>
-      <p class="small">Wir haben eine Mail an <b>${esc(S.secureSent)}</b> geschickt. Tippe auf den Link darin (es darf sich Safari öffnen). Komm dann hierher zurück und tippe auf „Prüfen“.</p>
+      <div class="mailhead">${icon('mail')}<b>Bestätigung ausstehend</b></div>
+      <p class="small muted">Wir haben eine Mail an <b>${esc(S.secureSent)}</b> geschickt. Tippe auf den Link darin. Es ist in Ordnung, wenn sich Safari öffnet. Danach hier auf „Prüfen“ tippen.</p>
       <button class="primary" data-act="checkuser">Prüfen</button>
       <button class="link" data-act="securecancel">Andere Adresse</button>
     </div>`;
   }
   return `<div class="card stack mailcard">
-    <h3>Konto sichern</h3>
-    <p class="small">Du nutzt die App gerade ohne Mail-Adresse. Deine Liste hängt an diesem Gerät: Beim Handywechsel oder Löschen der Browserdaten ist sie weg. Mit deiner Mail kannst du dich überall wieder anmelden.</p>
-    <form data-form="secure" class="inline"><input name="email" type="email" autocomplete="email" placeholder="Mail-Adresse" required><button type="submit">Sichern</button></form>
+    <div class="mailhead">${icon('lock')}<b>Konto sichern</b></div>
+    <p class="small muted">Gerade hängt dein Konto an diesem Gerät. Mit deiner Mail-Adresse kannst du dich überall wieder anmelden.</p>
+    <form data-form="secure" class="inline"><input name="email" type="email" autocomplete="email" placeholder="name@beispiel.de" required><button class="primary" type="submit">Sichern</button></form>
   </div>`;
 }
 
-function viewMore() {
-  const p = D.profiles.find(x => x.id === me()) || {};
-  return shell('Mehr', `
+function viewAccount() {
+  const anon = S.session.user.anon;
+  return shell('Konto', `
+    <section class="profile">${avatar(me(), 'lg')}<div class="profile-main">
+      <p class="row-title big">${esc(myName())}</p>
+      <p class="row-meta">${anon ? 'Ohne E-Mail angemeldet' : `Angemeldet als ${esc(S.session.user.email)}`}</p></div></section>
+    ${anon ? secureCard() : ''}
+    <h2>Profil</h2>
+    <div class="card"><form data-form="name" class="inline"><input name="name" maxlength="40" value="${esc(myName())}" required><button class="secondary" type="submit">Name ändern</button></form></div>
+    <h2>Datenschutz</h2>
+    <div class="card prose">
+      <p>Name, Mail-Adresse, Gruppen, Wünsche und Reservierungen liegen in einer Datenbank bei Supabase in der EU.</p>
+      <p>Andere sehen deinen Namen und die Wünsche, die du für ihre Gruppe freigibst. Reservierungen sieht der Beschenkte nie.</p>
+      <p>Auf dem Gerät bleiben nur die Anmeldung und eine Kopie der Listen, damit die App schnell startet.</p>
+    </div>
     <div class="card stack">
-      <form data-form="name" class="inline"><input name="name" maxlength="40" value="${esc(p.name || '')}" required><button type="submit">Name ändern</button></form>
-      ${S.session.user.anon ? '' : `<p class="muted small">Angemeldet als ${esc(S.session.user.email)}</p>`}
+      ${anon && ui.confirmLogout
+        ? `<p class="small">Ohne Mail-Adresse kommst du danach nicht mehr in dieses Konto zurück. Deine Liste wäre verloren.</p><button class="danger" data-act="logout">Trotzdem abmelden</button>`
+        : `<button class="ghost danger-text" data-act="${anon ? 'asklogout' : 'logout'}">Abmelden</button>`}
     </div>
-    ${S.session.user.anon ? secureCard() : ''}
-    <div class="card stack">
-      ${S.session.user.anon && ui.confirmLogout
-        ? `<p class="small">Ohne Mail-Adresse kommst du danach nicht mehr in dieses Konto zurück. Deine Liste wäre weg.</p><button class="danger" data-act="logout">Trotzdem abmelden</button>`
-        : `<button class="ghost" data-act="${S.session.user.anon ? 'asklogout' : 'logout'}">Abmelden</button>`}
-    </div>
-    <div class="card">
-      <h3>Datenschutz in Kürze</h3>
-      <p class="small">Dein Name, deine Mail-Adresse, Gruppen, Wünsche und Reservierungen liegen in einer Supabase-Datenbank in der EU. Andere sehen nur deinen Namen und die Wünsche, die du für ihre Gruppe freigibst. Reservierungen sieht der Beschenkte nie. Auf dem Gerät bleibt nur die Anmeldung und eine Kopie der Listen für den schnellen Start.</p>
-    </div>
-    <p class="muted small center">Geschenkeliste ${VERSION}</p>`, { tab: 'more' });
+    <p class="version">Geschenkeliste ${VERSION}</p>`, { tab: 'acc' });
 }
 
 /* ---------- Router ---------- */
@@ -540,8 +642,9 @@ function render() {
   else if (parts[0] === 'gruppen') html = viewGroups();
   else if (parts[0] === 'g' && parts[1] && parts[2] === 'p' && parts[3]) html = viewPerson(parts[1], parts[3]);
   else if (parts[0] === 'g' && parts[1]) html = viewGroup(parts[1]);
-  else if (parts[0] === 'mehr') html = viewMore();
-  else html = viewMine();
+  else if (parts[0] === 'liste') html = viewList();
+  else if (parts[0] === 'konto' || parts[0] === 'mehr') html = viewAccount();
+  else html = viewHome();
   const y = render.lastKey === location.hash ? window.scrollY : 0;
   app.innerHTML = html;
   if (render.lastKey === location.hash) window.scrollTo(0, y); else window.scrollTo(0, 0);
@@ -664,7 +767,7 @@ const forms = {
     if (!all) await sb('/rest/v1/wish_groups', { method: 'POST', prefer: 'return=minimal', body: sel.map(g => ({ wish_id: wid, group_id: g })) });
     await sync(true);
     toast('Gespeichert.');
-    go('#/');
+    go('#/liste');
   },
   async newgroup(f) {
     const g = await sb('/rest/v1/rpc/create_group', { method: 'POST', body: { p_name: f.name.value.trim() } });
@@ -715,7 +818,7 @@ const acts = {
     ui = {};
     await sync(true);
     toast('Gelöscht.');
-    go('#/');
+    go('#/liste');
   },
   manage: async el => { ui.manage = el.dataset.id; render(); },
   askleave: async el => { ui.confirmLeave = el.dataset.id; render(); },
