@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.2';
+const VERSION = '1.3';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -225,18 +225,67 @@ function wishesOf(uid, gid) {
   return D.wishes.filter(w => w.owner === uid && (gid ? visibleIn(w, gid) : true));
 }
 
+
+/* ---------- Illustrationen (flach, leicht animiert) ---------- */
+const ART = {
+  gift: `<svg class="art art-gift" viewBox="0 0 160 150" aria-hidden="true">
+    <ellipse cx="80" cy="142" rx="54" ry="6" fill="#1A2821" opacity=".12"/>
+    <path class="spark s1" d="M26 22 L29 30 L37 33 L29 36 L26 44 L23 36 L15 33 L23 30 Z" fill="#B27F49"/>
+    <path class="spark s2" d="M134 14 L136 19 L141 21 L136 23 L134 28 L132 23 L127 21 L132 19 Z" fill="#B27F49"/>
+    <path class="spark s3" d="M144 62 L146 67 L151 69 L146 71 L144 76 L142 71 L137 69 L142 67 Z" fill="#28604C"/>
+    <rect x="34" y="74" width="92" height="64" rx="8" fill="#A0061B"/>
+    <rect x="34" y="74" width="40" height="64" rx="8" fill="#B5203A"/>
+    <rect x="72" y="74" width="16" height="64" fill="#B27F49"/>
+    <g class="lid">
+      <path d="M80 60 C66 34 42 38 50 52 C56 61 70 60 80 60 Z" fill="#B27F49"/>
+      <path d="M80 60 C94 34 118 38 110 52 C104 61 90 60 80 60 Z" fill="#9A6A3A"/>
+      <rect x="28" y="58" width="104" height="22" rx="6" fill="#7E0516"/>
+      <rect x="72" y="58" width="16" height="22" fill="#C9965F"/>
+      <circle cx="80" cy="58" r="7" fill="#C9965F"/>
+    </g>
+  </svg>`,
+  letter: `<svg class="art art-letter" viewBox="0 0 160 130" aria-hidden="true">
+    <ellipse cx="80" cy="122" rx="56" ry="5" fill="#1A2821" opacity=".12"/>
+    <path d="M24 52 L80 16 L136 52 V112 H24 Z" fill="#7E0516"/>
+    <g class="sheet">
+      <rect x="38" y="30" width="84" height="68" rx="5" fill="#FBF4E8"/>
+      <path d="M80 66 C68 58 64 52 68 47 C72 42 78 44 80 48 C82 44 88 42 92 47 C96 52 92 58 80 66 Z" fill="#C9536A"/>
+    </g>
+    <path d="M24 52 L80 88 L136 52 V110 Q136 116 130 116 H30 Q24 116 24 110 Z" fill="#A0061B"/>
+    <path d="M24 114 L68 80 M136 114 L92 80" stroke="#7E0516" stroke-width="2" fill="none"/>
+  </svg>`,
+  bauble: `<svg class="art art-bauble" viewBox="0 0 140 160" aria-hidden="true">
+    <path d="M6 14 Q40 2 70 10 Q100 2 134 14" stroke="#28604C" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <path d="M22 9 l-6 -8 M40 6 l-2 -9 M100 6 l2 -9 M118 9 l6 -8 M30 12 l-5 9 M110 12 l5 9" stroke="#3E5647" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="60" cy="14" r="4" fill="#A0061B"/><circle cx="68" cy="18" r="4" fill="#A0061B"/>
+    <g class="swing">
+      <line x1="70" y1="12" x2="70" y2="44" stroke="#B27F49" stroke-width="2"/>
+      <rect x="61" y="42" width="18" height="11" rx="2.5" fill="#B27F49"/>
+      <circle cx="70" cy="94" r="40" fill="#A0061B"/>
+      <path d="M32 86 Q70 104 108 86" stroke="#B27F49" stroke-width="3.5" fill="none"/>
+      <path d="M33 104 Q70 122 107 104" stroke="#B27F49" stroke-width="2" fill="none" stroke-dasharray="2 6" stroke-linecap="round"/>
+      <ellipse cx="54" cy="76" rx="8" ry="13" fill="#FFFFFF" opacity=".22" transform="rotate(35 54 76)"/>
+    </g>
+  </svg>`
+};
+const ICON = {
+  gift: '<svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11h16v9H4zM3 7.5h18V11H3zM12 7.5V20M12 7.5C10 4 6.5 3.5 6.5 5.6S10 7.5 12 7.5zm0 0c2-3.5 5.5-4 5.5-1.9S14 7.5 12 7.5z"/></svg>',
+  people: '<svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.4"/><path d="M2.6 20c.8-3.9 3.3-6 6.4-6s5.6 2.1 6.4 6"/><circle cx="17" cy="9" r="2.5"/><path d="M16.3 14c2.7 0 4.6 1.8 5.3 5"/></svg>',
+  more: '<svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>'
+};
+
 /* ---------- Ansichten ---------- */
 function shell(title, body, opt = {}) {
   const tab = opt.tab || '';
   const back = opt.back ? `<a class="back" href="${opt.back}" aria-label="Zurück">‹</a>` : '';
   return `
-  <header class="top">${back}<h1>${esc(title)}</h1>
+  <header class="top">${back}<h1 class="display">${esc(title)}</h1>
     <button class="icon" data-act="sync" aria-label="Aktualisieren" title="Aktualisieren">↻</button></header>
   <main>${body}</main>
   <nav class="tabs">
-    <a href="#/" class="${tab === 'mine' ? 'on' : ''}"><span>🎁</span>Meine Wünsche</a>
-    <a href="#/gruppen" class="${tab === 'groups' ? 'on' : ''}"><span>👥</span>Gruppen</a>
-    <a href="#/mehr" class="${tab === 'more' ? 'on' : ''}"><span>⚙︎</span>Mehr</a>
+    <a href="#/" class="${tab === 'mine' ? 'on' : ''}">${ICON.gift}Meine Wünsche</a>
+    <a href="#/gruppen" class="${tab === 'groups' ? 'on' : ''}">${ICON.people}Gruppen</a>
+    <a href="#/mehr" class="${tab === 'more' ? 'on' : ''}">${ICON.more}Mehr</a>
   </nav>`;
 }
 
@@ -244,7 +293,7 @@ function viewLogin() {
   const invited = S.pendingJoin ? '<p class="note">Du wurdest in eine Gruppe eingeladen. Nach dem Start bist du automatisch drin.</p>' : '';
   if (S.loginSent && S.loginEmail) {
     return `<main class="login">
-      <div class="logo">🎁</div><h1>Geschenkeliste</h1>${invited}
+      ${ART.gift}<h1 class="display hero">Geschenke-<br>liste</h1>${invited}
       <p>Wir haben dir eine Mail an <b>${esc(S.loginEmail)}</b> geschickt.</p>
       <p class="small">Darin ist ein Link: <b>lang drücken → „Link kopieren“</b>, dann hier einfügen. Steht ein Code in der Mail, kannst du auch den eintippen.</p>
       <form data-form="verify">
@@ -259,7 +308,7 @@ function viewLogin() {
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone;
   const tip = ios ? '<p class="note">Tipp: Erst <b>Teilen → Zum Home-Bildschirm</b>, dann die App von dort starten. Safari und Home-Bildschirm sind auf dem iPhone getrennt – sonst hast du zwei Konten.</p>' : '';
   return `<main class="login">
-    <div class="logo">🎁</div><h1>Geschenkeliste</h1>
+    ${ART.gift}<h1 class="display hero">Geschenke-<br>liste</h1>
     <p class="muted">Wunschlisten für Familie und Freunde. Was reserviert ist, sieht der Beschenkte nie.</p>${invited}${tip}
     <form data-form="start">
       <input name="name" maxlength="40" placeholder="Dein Vorname" required autocomplete="given-name" value="${esc(S.pendingName || '')}">
@@ -279,7 +328,7 @@ function viewLogin() {
 
 function viewName() {
   return `<main class="login">
-    <div class="logo">👋</div><h1>Wie heißt du?</h1>
+    ${ART.bauble}<h1 class="display hero">Wie heißt du?</h1>
     <p class="muted">So sehen dich die anderen in deinen Gruppen.</p>
     <form data-form="name">
       <input name="name" maxlength="40" placeholder="Vorname" required autofocus autocomplete="given-name">
@@ -308,7 +357,7 @@ function viewMine() {
       ${wishBody(w)}
       <p class="chips"><span class="chip">${esc(visLabel(w))}</span></p>
     </li>`).join('');
-  const empty = `<div class="empty"><p>Noch keine Wünsche.</p><p class="muted">Lege los mit „+ Wunsch“.</p></div>`;
+  const empty = `<div class="empty">${ART.bauble}<p>Noch keine Wünsche.</p><p class="muted">Lege los mit „+ Wunsch“.</p></div>`;
   const unsafe = S.session.user.anon && list.length ? `<p class="note">Deine Liste hängt noch an diesem Gerät. <a href="#/mehr">Mail-Adresse ergänzen</a>, damit sie sicher ist.</p>` : '';
   const noGroup = myGroups().length ? unsafe : `<p class="note">Du bist noch in keiner Gruppe. <a href="#/gruppen">Gruppe anlegen oder beitreten</a>, damit andere deine Wünsche sehen.</p>`;
   return shell('Meine Wünsche', `
@@ -360,7 +409,7 @@ function viewGroups() {
     </div>`;
   return shell('Gruppen', `
     <ul class="list">${items}</ul>
-    ${gs.length ? '' : '<div class="empty"><p>Noch in keiner Gruppe.</p><p class="muted">Lege eine an und lade andere ein, oder tritt mit einem Code bei.</p></div>'}
+    ${gs.length ? '' : '<div class="empty">' + ART.letter + '<p>Noch in keiner Gruppe.</p><p class="muted">Lege eine an und lade andere ein, oder tritt mit einem Code bei.</p></div>'}
     ${forms}`, { tab: 'groups' });
 }
 
