@@ -31,3 +31,12 @@ create table auth.identities (
 create function auth.uid() returns uuid language sql stable as
   $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 grant execute on function auth.uid() to anon, authenticated;
+-- ab 1.9: Rolle der Edge Function und Attrappe von pg_net (merkt sich nur die Aufrufe)
+do $$ begin
+  if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
+end $$;
+create schema net;
+create table net.calls (id bigserial primary key, url text, body jsonb, headers jsonb, at timestamptz default now());
+create function net.http_post(url text, body jsonb default '{}', params jsonb default '{}',
+  headers jsonb default '{}', timeout_milliseconds int default 5000) returns bigint
+language sql as $$ insert into net.calls (url, body, headers) values (url, body, headers) returning id $$;

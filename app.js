@@ -2,12 +2,13 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.8';
+const VERSION = '1.9';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
 const MAIL_DOMAIN = '@nutzer.geschenkeliste.invalid'; // nur intern, es wird nie eine Mail verschickt
 const USER_RE = /^[a-z0-9][a-z0-9._-]{2,23}$/;
+const APP_URL = 'https://konstismile.github.io/Geschenkeliste/'; // Absender der Benachrichtigungen (VAPID)
 
 /* ---------- Speicher ---------- */
 let S = loadState();      // {session, pendingJoin, pendingName, cache}
@@ -17,7 +18,7 @@ let ui = {};              // flüchtiger Zustand der Ansicht (offene Formulare, 
 let fresh = null;         // neu erzeugter Wiederherstellungscode {code, username, reason}, nur im Speicher
 
 function emptyData() {
-  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], at: 0, loaded: false };
+  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], pp: null, ps: null, at: 0, loaded: false };
 }
 function loadState() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; }
@@ -163,6 +164,10 @@ function errText(j, status) {
   if (/Zu viele Ausschlüsse/.test(m)) return 'Mehr als 200 Ausschlüsse gehen nicht.';
   if (/Zwei verschiedene Personen/.test(m)) return 'Wähle zwei verschiedene Personen.';
   if (/Kein Mitglied/.test(m)) return 'Diese Person ist nicht mehr in der Gruppe.';
+  if (/Kein Gerät angemeldet/.test(m)) return 'Schalte die Benachrichtigungen zuerst auf diesem Gerät ein.';
+  if (/Push nicht eingerichtet/.test(m)) return 'Die Benachrichtigungen sind noch nicht eingerichtet.';
+  if (/Push-Adresse ungültig/.test(m)) return 'Dieser Browser wird für Benachrichtigungen nicht unterstützt.';
+  if (/Schlüssel ungültig|Adresse ungültig|Absender ungültig/.test(m)) return 'Die Schlüssel ließen sich nicht speichern.';
   if (/Code nicht gefunden/.test(m)) return 'Diesen Gruppen-Code gibt es nicht.';
   if (/Zu viele Gruppen/.test(m)) return 'Du hast schon 20 Gruppen angelegt.';
   if (/anonymous/i.test(m) && /disabled/i.test(m)) return 'Start ohne Mail ist in Supabase noch nicht eingeschaltet.';
@@ -242,6 +247,9 @@ function logout(msg) {
   ui = {};
   seen = null;
   flash = new Set();
+  push.sub = null;
+  push.done = '';
+  push.auto = false;
   appBadge(0);
   saveState();
   if (msg) toast(msg);
@@ -262,7 +270,7 @@ async function passwordLogin(username, password) {
 async function sync(quiet) {
   if (!S.session) return;
   try {
-    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo] = await Promise.all([
+    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
       sb('/rest/v1/groups?select=id,name,code,created_by,created_at&order=created_at'),
       sb('/rest/v1/members?select=group_id,user_id,joined_at&order=joined_at'),
@@ -278,11 +286,14 @@ async function sync(quiet) {
       sb('/rest/v1/wichtel_draws?select=group_id,drawn_at,participants').catch(() => []),
       sb('/rest/v1/wichtel_pairs?select=group_id,receiver').catch(() => []),
       sb('/rest/v1/wichtel_exclusions?select=group_id,a,b,created_at&order=created_at').catch(() => []),
-      sb('/rest/v1/wichtel_out?select=group_id,user_id').catch(() => [])
+      sb('/rest/v1/wichtel_out?select=group_id,user_id').catch(() => []),
+      // Benachrichtigungen ab 1.9
+      sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have').catch(() => null)
     ]);
+    const ps = admin === true ? await sb('/rest/v1/rpc/push_status', { method: 'POST', body: {} }).catch(() => null) : null;
     if (!S.session) return;
     D = { profiles, groups, members, wishes, wg, res, account: acc && acc[0] ? acc[0] : null, admin: admin === true,
-      wd: wd || [], wp: wp || [], wx: wx || [], wo: wo || [], at: Date.now(), loaded: true };
+      wd: wd || [], wp: wp || [], wx: wx || [], wo: wo || [], pp: pp && pp[0] ? pp[0] : null, ps, at: Date.now(), loaded: true };
     S.cache = { uid: me(), D };
     saveState();
     seenSync();
@@ -445,9 +456,11 @@ function paintBadges() {
   appBadge(n);
 }
 function appBadge(n) {
-  if (!('setAppBadge' in navigator)) return;
   if (appBadge.last === n) return;
   appBadge.last = n;
+  // der Service Worker zählt bei Benachrichtigungen von hier aus weiter (1.9)
+  try { const c = navigator.serviceWorker && navigator.serviceWorker.controller; if (c) c.postMessage({ type: 'badge', n }); } catch (e) { /* egal */ }
+  if (!('setAppBadge' in navigator)) return;
   (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
 }
 /* Zähler am App-Symbol: iPhone und Mac zeigen ihn nur mit erlaubten Mitteilungen */
@@ -670,6 +683,193 @@ function badgeCard(ctx) {
     <p class="small muted">${text}</p><button class="secondary withicon" data-act="badgeperm">${icon('bell')}Einschalten</button></section>`;
 }
 
+/* ---------- Benachrichtigungen (1.9) ----------
+   Das Gerät meldet ein Push-Abo bei der Datenbank an. Was verschickt wird, entscheidet die Datenbank,
+   die Edge Function „push“ verschickt. Der Schlüssel kommt vom Server (Verwaltung → Schlüssel erzeugen). */
+const PREFS = [
+  ['wish', 'Neue Wünsche', 'Aus deinen Gruppen'],
+  ['member', 'Neue Mitglieder', 'Wenn jemand beitritt'],
+  ['draw', 'Wichteln', 'Wenn ausgelost wurde'],
+  ['have', 'Schon vorhanden', 'Bei etwas, das du reserviert hast'],
+  ['remind', 'Erinnerung vor Heiligabend', '14, 7 und 1 Tag vorher']
+];
+const PUSH_OFF = 'geschenkeliste-push-aus';   // auf diesem Gerät bewusst ausgeschaltet
+let push = { key: undefined, reg: null, sub: null, done: '', auto: false };
+function b64u(bytes) {
+  let s = '';
+  for (const b of new Uint8Array(bytes)) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function unb64u(str) {
+  const s = atob(String(str).replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((str.length + 3) % 4));
+  return Uint8Array.from(s, c => c.charCodeAt(0));
+}
+function pushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+function pushOffHere() { try { return localStorage.getItem(PUSH_OFF) === '1'; } catch (e) { return false; } }
+function setPushOff(on) { try { on ? localStorage.setItem(PUSH_OFF, '1') : localStorage.removeItem(PUSH_OFF); } catch (e) { /* egal */ } }
+/* none | install (iPhone ohne Home-Bildschirm) | off (Server nicht eingerichtet) | denied | ask | on */
+function pushState() {
+  if (!pushSupported()) return platform() === 'ios' && !isStandalone() && push.key ? 'install' : 'none';
+  if (!push.key) return 'off';
+  if (Notification.permission === 'denied') return 'denied';
+  return Notification.permission === 'granted' && push.sub ? 'on' : 'ask';
+}
+function sameKey(sub, key) {
+  const k = sub && sub.options && sub.options.applicationServerKey;
+  if (!k) return true;
+  const a = k instanceof ArrayBuffer ? new Uint8Array(k) : new Uint8Array(k.buffer, k.byteOffset, k.byteLength);
+  return b64u(a) === key;
+}
+async function swReg() {
+  if (push.reg) return push.reg;
+  try { push.reg = (await navigator.serviceWorker.getRegistration()) || (await navigator.serviceWorker.register('sw.js')); } catch (e) { push.reg = null; }
+  return push.reg;
+}
+async function pushRegister(sub) {
+  const j = sub.toJSON();
+  const id = me() + ' ' + j.endpoint;
+  if (push.done === id) return;
+  await sb('/rest/v1/rpc/push_subscribe', { method: 'POST', body: { p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth } });
+  push.done = id;
+}
+/* beim Start und beim Zurückkehren: Schlüssel holen, Abo prüfen und anmelden. Mit erlaubten Mitteilungen
+   (z. B. für den Zähler aus 1.8) wird das Gerät ohne Nachfrage angemeldet. */
+async function pushInit() {
+  if (!S.session) return;
+  try {
+    if (push.key === undefined) push.key = await sb('/rest/v1/rpc/push_public_key', { method: 'POST', body: {} });
+  } catch (e) { push.key = /Datenbank/.test(e.message) ? null : undefined; }
+  if (!push.key || !pushSupported()) { paintPush(); return; }
+  const reg = await swReg();
+  if (!reg || !reg.pushManager) return;
+  try {
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && !sameKey(sub, push.key)) { await sub.unsubscribe().catch(() => {}); sub = null; }
+    if (!sub && Notification.permission === 'granted' && !pushOffHere()) {
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64u(push.key) });
+      push.auto = true;
+    }
+    push.sub = sub;
+    if (sub) await pushRegister(sub);
+  } catch (e) { /* nächstes Mal */ }
+  paintPush();
+}
+/* im Klick aufrufen: iPhone fragt nur nach einer Geste */
+async function pushEnable() {
+  if (!push.key) throw new Error('Die Benachrichtigungen sind noch nicht eingerichtet.');
+  const reg = push.reg;
+  const opt = { userVisibleOnly: true, applicationServerKey: unb64u(push.key) };
+  let sub;
+  try {
+    sub = reg && reg.pushManager ? await reg.pushManager.subscribe(opt) : null;
+    if (!sub) {
+      await Notification.requestPermission();
+      const r = await swReg();
+      if (Notification.permission === 'granted' && r) sub = await r.pushManager.subscribe(opt);
+    }
+  } catch (e) { sub = null; }
+  if (!sub) {
+    if (Notification.permission === 'denied') throw new Error('Benachrichtigungen sind auf diesem Gerät abgelehnt.');
+    throw new Error('Benachrichtigungen ließen sich nicht einschalten.');
+  }
+  setPushOff(false);
+  push.sub = sub;
+  push.done = '';
+  await pushRegister(sub);
+}
+/* vor dem Abmelden: Gerät nicht mehr für dieses Konto benachrichtigen */
+async function pushDetach() {
+  if (!push.sub) return;
+  try { await sb('/rest/v1/rpc/push_unsubscribe', { method: 'POST', body: { p_endpoint: push.sub.endpoint } }); } catch (e) { /* egal */ }
+  push.done = '';
+}
+const prefOn = k => !D.pp || D.pp[k] !== false;
+function notifyBody(st, ctx) {
+  if (st === 'install') return `<p class="small muted">Auf dem iPhone kommen Benachrichtigungen nur in der App vom Home-Bildschirm.${ctx === 'konto' && !isStandalone() ? ' Wie das geht, steht oben unter App.' : ''}</p>`;
+  if (st === 'denied') return '<p class="small muted">Sind auf diesem Gerät ausgeschaltet. Du kannst sie in den Einstellungen unter Mitteilungen bei Geschenkeliste erlauben.</p>';
+  return `<p class="small muted">Bei neuen Wünschen, neuen Mitgliedern und wenn beim Wichteln ausgelost wurde. Was du bekommst, stellst du danach ein.</p>
+    <button class="primary withicon" data-act="pushon">${icon('bell')}Benachrichtigungen erlauben</button>`;
+}
+function notifySection() {
+  const st = pushState();
+  if (st === 'none' || st === 'off') {
+    const b = badgeCard('konto');
+    return b ? (isStandalone() ? '<h2>App</h2>' : '') + b : '';
+  }
+  if (st !== 'on') {
+    return `<h2>Benachrichtigungen</h2><section class="card install"><div class="cardhead">${icon('bell')}<b>${st === 'denied' ? 'Ausgeschaltet' : 'Benachrichtigungen'}</b></div>${notifyBody(st, 'konto')}</section>`;
+  }
+  const rows = PREFS.map(([k, t, d]) => {
+    const on = prefOn(k);
+    return `<li class="row-item"><span class="row-main"><span class="row-title">${t}</span><span class="row-meta">${d}</span></span>
+      <button class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" aria-label="${t}" data-act="pref" data-k="${k}" data-on="${on ? '0' : '1'}"></button></li>`;
+  }).join('');
+  return `<h2>Benachrichtigungen</h2>
+    <ul class="rows plain">${rows}</ul>
+    <p class="foot">${icon('eyeoff')}<span>Was du dir wünschst, wer etwas reserviert und wen jemand beim Wichteln gezogen hat, verrät keine Nachricht.</span></p>
+    <div class="card stack">
+      <button class="secondary withicon" data-act="pushtest">${icon('bell')}Testnachricht senden</button>
+      <button class="ghost danger-text" data-act="pushoff">Auf diesem Gerät ausschalten</button>
+    </div>`;
+}
+/* Startseite: einmal fragen, sonst wie 1.8 der Hinweis zum Zähler */
+function notifyBanner() {
+  const st = pushState();
+  if (st === 'on' && push.auto && !S.pushNotice) {
+    return `<div class="banner">${icon('bell')}<span><b>Benachrichtigungen sind an</b><small>Was du bekommst, stellst du unter Konto ein.</small></span><button class="link" data-act="pushnotice">OK</button></div>`;
+  }
+  if (st === 'ask' && !S.pushAsked) {
+    return `<div class="banner">${icon('bell')}<span><b>Benachrichtigungen</b><small>Bei Neuem in deinen Gruppen.</small></span>
+      <span class="bannerbtns"><button class="link" data-act="pushon">Erlauben</button><button class="link muted" data-act="pushlater">Später</button></span></div>`;
+  }
+  return st === 'none' || st === 'off' ? badgeCard('home') : '';
+}
+/* nur den Bereich neu zeichnen, wenn sich am Stand etwas geändert hat */
+function paintPush() {
+  const st = pushState() + (push.auto ? '+' : '');
+  if (paintPush.last === st) return;
+  paintPush.last = st;
+  const v = route()[0];
+  if (S.session && D.loaded && !busy && !fresh && (!v || v === 'konto' || v === 'mehr')) render();
+}
+function pushAdmin() {
+  const ps = D.ps;
+  if (!ps) return '';
+  const when = ts => ts ? `${ago(ts)}, ${fmtTime(ts)} Uhr` : 'noch nie';
+  let body;
+  if (!ps.configured) {
+    body = `<p class="small muted">Erst die Edge Function „push“ in Supabase anlegen, wie in der Anleitung beschrieben. Dann hier die Schlüssel erzeugen. Sie werden in der Datenbank gespeichert.</p>
+      <button class="primary withicon" data-act="pushsetup">${icon('key')}Schlüssel erzeugen</button>`;
+  } else {
+    const warn = [
+      !ps.net ? 'pg_net fehlt, die Edge Function wird nicht geweckt. schema.sql erneut ausführen.' : '',
+      !ps.cron ? 'pg_cron fehlt, Erinnerungen und gebündelte Nachrichten kommen nicht.' : '',
+      ps.last_error ? 'Letzter Fehler: ' + ps.last_error : ''
+    ].filter(Boolean).map(t => `<p class="small hint">${esc(t)}</p>`).join('');
+    body = `<ul class="facts">
+        <li><span>Eingerichtet</span><b>${esc(fmtDay(ps.since))}</b></li>
+        <li><span>Geräte</span><b>${ps.devices} von ${plural(ps.people, 'Person', 'Personen')}</b></li>
+        <li><span>Zuletzt verschickt</span><b>${esc(when(ps.last_run_at))}</b></li>
+        <li><span>Letzte 24 Stunden</span><b>${plural(ps.sent_day, 'Nachricht', 'Nachrichten')}${ps.pending ? `, ${ps.pending} warten` : ''}</b></li>
+      </ul>${warn}
+      ${ui.confirmKeys
+        ? `<p class="small">Alle Geräte werden abgemeldet und melden sich beim nächsten Öffnen der App neu an.</p><button class="danger" data-act="pushsetup">Wirklich neue Schlüssel</button>`
+        : `<button class="ghost" data-act="askkeys">Neue Schlüssel erzeugen</button>`}`;
+  }
+  return `<div class="card stack"><div class="cardhead">${icon('bell')}<b>Benachrichtigungen</b></div>${body}</div>`;
+}
+async function makeVapid() {
+  const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const j = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  const pub = new Uint8Array(65);
+  pub[0] = 4;
+  pub.set(unb64u(j.x), 1);
+  pub.set(unb64u(j.y), 33);
+  return { pub: b64u(pub), priv: j.d };
+}
+
 function viewLogin() {
   const invited = S.pendingJoin ? `<div class="banner">${icon('people')}<span><b>Du wurdest eingeladen</b><small>Nach der Anmeldung bist du automatisch in der Gruppe.</small></span></div>` : '';
   return `<main class="login">
@@ -768,7 +968,7 @@ function viewHome() {
     </div>`;
 
   if (!gs.length) {
-    return shell('Hallo ' + myName(), `${secure}${badgeCard('home')}${hero}${stats}
+    return shell('Hallo ' + myName(), `${secure}${notifyBanner()}${hero}${stats}
       <div class="card cta">
         <h3>Starte mit deiner Familie</h3>
         <p>Lege eine Gruppe an und teile den Einladungscode. Alle in der Gruppe sehen gegenseitig ihre Wunschlisten.</p>
@@ -835,7 +1035,7 @@ function viewHome() {
       : `<p class="empty-line">Sobald jemand aus deinen Gruppen etwas einträgt, erscheint es hier.</p>`;
   }
 
-  return shell('Hallo ' + myName(), `${secure}${badgeCard('home')}${hero}${stats}${wichtelHtml}
+  return shell('Hallo ' + myName(), `${secure}${notifyBanner()}${hero}${stats}${wichtelHtml}
     <h2>Deine Besorgungen</h2>${errHtml}
     ${feedHead}${feedHtml}`, { tab: 'home', eyebrow: today });
 }
@@ -1164,7 +1364,8 @@ function adminSection() {
       <p class="small muted">Wer Passwort und Code verloren hat, bekommt hier einen Rücksetz-Code.</p>
       <form data-form="adminsearch" class="inline"><input name="q" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Name oder Benutzername" value="${esc(ui.adminQuery || '')}" required><button class="secondary" type="submit">Suchen</button></form>
     </div>
-    ${result}${list}`;
+    ${result}${list}
+    ${pushAdmin()}`;
 }
 
 function viewAccount() {
@@ -1180,11 +1381,12 @@ function viewAccount() {
     ${acc ? `<h2>Anmeldung</h2>${codeCard()}` : ''}
     ${adminSection()}
     <div id="install" data-ctx="konto">${installCard('konto')}</div>
-    ${badgeCard('konto') ? (isStandalone() ? '<h2>App</h2>' : '') + badgeCard('konto') : ''}
+    ${notifySection()}
     <h2>Datenschutz</h2>
     <div class="card prose">
       <p>Name, Benutzername, Gruppen, Wünsche und Reservierungen liegen in einer Datenbank bei Supabase in der EU. Passwort und Wiederherstellungscode werden nur verschlüsselt gespeichert.</p>
       <p>Andere sehen deinen Namen und die Wünsche, die du für ihre Gruppe freigibst. Reservierungen sieht der Beschenkte nie.</p>
+      <p>Für Benachrichtigungen wird eine Adresse des Push-Dienstes deines Geräts gespeichert (Apple, Google oder Mozilla). Die Nachrichten sind verschlüsselt.</p>
       <p>Auf dem Gerät bleiben nur die Anmeldung und eine Kopie der Listen, damit die App schnell startet.</p>
     </div>
     <div class="card stack">
@@ -1392,6 +1594,48 @@ const forms = {
 const acts = {
   sync: () => sync(),
   badgelater: async () => { S.badgeAsked = 1; saveState(); render(); },
+  pushlater: async () => { S.pushAsked = 1; saveState(); render(); },
+  pushnotice: async () => { S.pushNotice = 1; saveState(); render(); },
+  pushon: async () => {
+    S.pushAsked = 1;
+    S.pushNotice = 1;
+    saveState();
+    try { await pushEnable(); } finally { render(); }   // fragt im Klick nach der Erlaubnis
+    appBadge.last = null;
+    render();
+    toast('Benachrichtigungen sind eingeschaltet.');
+  },
+  pushoff: async () => {
+    const sub = push.sub;
+    await pushDetach();
+    if (sub) await sub.unsubscribe().catch(() => {});
+    push.sub = null;
+    setPushOff(true);
+    render();
+    toast('Auf diesem Gerät ausgeschaltet.');
+  },
+  pushtest: async () => {
+    await sb('/rest/v1/rpc/push_test', { method: 'POST', body: {} });
+    toast('Testnachricht ist unterwegs.');
+  },
+  pref: async el => {
+    const body = Object.assign({ wish: true, member: true, draw: true, remind: true, have: true }, D.pp || {}, { [el.dataset.k]: el.dataset.on === '1', user_id: me() });
+    await sb('/rest/v1/push_prefs?on_conflict=user_id', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body });
+    delete body.user_id;
+    D.pp = body;
+    render();
+  },
+  askkeys: async () => { ui.confirmKeys = 1; render(); },
+  pushsetup: async () => {
+    const k = await makeVapid();
+    await sb('/rest/v1/rpc/push_setup', { method: 'POST', body: { p_public: k.pub, p_private: k.priv, p_subject: APP_URL, p_url: SB_URL + '/functions/v1/push', p_key: SB_KEY } });
+    delete ui.confirmKeys;
+    push.key = k.pub;
+    push.done = '';
+    await sync(true);
+    await pushInit();
+    toast('Schlüssel gespeichert.');
+  },
   seenall: async () => { seenAll(); flash = new Set(); render(); },
   badgeperm: async () => {
     S.badgeAsked = 1;
@@ -1441,6 +1685,7 @@ const acts = {
   },
   copyreset: async () => copyText(fmtRecovery(ui.resetResult.code), 'Code kopiert.'),
   logout: async () => {
+    await pushDetach();
     try { await sb('/auth/v1/logout', { method: 'POST' }); } catch (e) { /* egal */ }
     logout('Abgemeldet.');
   },
@@ -1567,6 +1812,7 @@ async function afterLogin() {
   }
   if (S.pendingJoin) await doPendingJoin();
   else render();
+  pushInit();
 }
 
 /* ---------- Start ---------- */
@@ -1603,8 +1849,18 @@ window.addEventListener('hashchange', () => {
   if (S.session && Date.now() - D.at > 20000) sync(true);
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && S.session && Date.now() - D.at > 20000) sync(true);
+  if (document.visibilityState !== 'visible' || !S.session) return;
+  if (Date.now() - D.at > 20000) sync(true);
+  pushInit();   // Erlaubnis kann sich in den Einstellungen geändert haben
 });
+/* Nachrichten vom Service Worker: Benachrichtigung angetippt oder eingetroffen */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', e => {
+    const d = e.data || {};
+    if (d.type === 'nav' && typeof d.url === 'string' && /^#\/[\w/-]*$/.test(d.url) && S.session) go(d.url);
+    else if (d.type === 'sync' && S.session) sync(true);
+  });
+}
 
 /* Android: Teilen aus einer anderen App öffnet ./?title=…&text=…&url=… (share_target im Manifest) */
 function takeShare() {

@@ -403,5 +403,176 @@ ok, _ = rpc(B, f"public.wichtel_set_participant('{wg}', '{D}', false)")
 ok2, _ = rpc(A, f"public.wichtel_draw('{wg}')")
 check('Neuer Gründer darf verwalten, alter nicht mehr', ok and not ok2)
 
+# ---------- Benachrichtigungen (1.9) ----------
+H, I2, J, K = (str(uuid.uuid4()) for _ in range(4))
+run('truncate public.push_config, public.push_outbox, net.calls;')
+for u, n in ((H, 'Hanna'), (I2, 'Ivo'), (J, 'Jule'), (K, 'Karl')):
+    run(f"insert into auth.users (id, email) values ('{u}', '{n.lower()}@x.de');")
+    as_exec(u, f"insert into public.profiles (id, name) values ('{u}', '{n}')")
+P256 = 'B' + 'A' * 86
+AUTH = 'abcdefghijklmnopqrstuv'
+ep = lambda n: f'https://fcm.googleapis.com/fcm/send/{n}'
+
+
+def outbox(where='true'):
+    _, out, _ = run(f"select coalesce(json_agg(o order by id), '[]') from public.push_outbox o where {where}")
+    return json.loads(out)
+
+
+def claim():
+    ok, r = as_user(None, 'select public.push_claim(100) as r', role='service_role')
+    return r[0]['r'] if ok else r
+
+
+ok, _ = rpc(H, f"public.push_subscribe('http://localhost:8080/x', '{P256}', '{AUTH}')")
+check('Push: nur bekannte Push-Dienste als Adresse', not ok)
+ok, _ = rpc(None, f"public.push_subscribe('{ep('anon')}', '{P256}', '{AUTH}')", role='anon')
+check('Push: ohne Anmeldung kein Abo', not ok)
+ok, _ = rpc(H, f"public.push_subscribe('{ep('h')}', 'kurz', '{AUTH}')")
+check('Push: Schlüssel des Geräts wird geprüft', not ok)
+for u, n in ((H, 'h'), (I2, 'i'), (J, 'j'), (K, 'shared')):
+    ok, _ = rpc(u, f"public.push_subscribe('{ep(n)}', '{P256}', '{AUTH}')")
+check('Push: Geräte angemeldet', ok)
+ok, _ = rpc(I2, f"public.push_subscribe('{ep('shared')}', '{P256}', '{AUTH}')")
+_, out, _ = run(f"select user_id from public.push_subs where endpoint = '{ep('shared')}'")
+check('Push: Gerät gehört dem zuletzt angemeldeten Konto', out == I2)
+rpc(I2, f"public.push_unsubscribe('{ep('shared')}')")
+rpc(K, f"public.push_unsubscribe('{ep('i')}')")
+_, out, _ = run("select string_agg(right(endpoint, 1), '' order by endpoint) from public.push_subs")
+check('Push: abmelden nur für eigene Geräte', out == 'hij')
+ok, _ = as_user(H, 'select * from public.push_subs')
+ok2, _ = as_user(H, 'select * from public.push_config')
+ok3, _ = as_user(H, 'select * from public.push_outbox')
+check('Push: Abos, Schlüssel und Ausgang für die App nicht lesbar', not ok and not ok2 and not ok3)
+
+PUB = 'B' + 'x' * 86
+PRIV = 'y' * 43
+URL = 'https://qbdpzamygonpruaafcrt.supabase.co/functions/v1/push'
+ok, _ = rpc(H, f"public.push_setup('{PUB}', '{PRIV}', 'https://example.org/', '{URL}', 'sb_publishable_x')")
+check('Push: Einrichten nur für Admins', not ok)
+ok, _ = rpc(D, f"public.push_setup('{PUB}', 'zu-kurz', 'https://example.org/', '{URL}', 'sb_publishable_x')")
+check('Push: ungültige Schlüssel abgelehnt', not ok)
+ok, _ = rpc(D, f"public.push_setup('{PUB}', '{PRIV}', 'https://example.org/', 'https://evil.example/x', 'k')")
+check('Push: fremde Adresse abgelehnt', not ok)
+ok, _ = rpc(D, f"public.push_setup('{PUB}', '{PRIV}', 'https://example.org/', '{URL}', 'sb_publishable_x')")
+ok2, key = rpc(H, 'public.push_public_key()')
+check('Push: Admin richtet ein, öffentlicher Schlüssel für alle lesbar', ok and key == PUB)
+ok, st = rpc(D, 'public.push_status()')
+ok2, _ = rpc(H, 'public.push_status()')
+check('Push: Status nur für Admins', ok and st['configured'] and st['devices'] == 3 and not ok2)
+
+run('truncate public.push_outbox, net.calls;')
+ok, r = as_user(H, "select * from public.create_group('Push')")
+pg = r[0]
+ok, r = as_user(K, "select * from public.create_group('Ohne Ivo')")
+kg = r[0]
+for u in (I2, J):
+    as_user(u, f"select public.join_group('{pg['code']}') as g")
+as_user(H, f"select public.join_group('{kg['code']}') as g")
+as_user(J, f"select public.join_group('{kg['code']}') as g")
+o = outbox("kind = 'member'")
+check('Push: Beitritt meldet nur, wer schon da ist und ein Gerät hat',
+      sorted((x['user_id'], x['actor']) for x in o) == sorted([(H, I2), (H, J), (I2, J), (H, J)]))
+_, out, _ = run('select count(*) || url from net.calls group by url')
+check('Push: Edge Function wird geweckt', out.endswith(URL) and int(out[:-len(URL)]) >= 1)
+
+run('truncate public.push_outbox;')
+ok, r = as_user(H, "insert into public.wishes (title) values ('Fahrrad') returning id")
+wa = r[0]['id']
+o = outbox("kind = 'wish'")
+check('Push: neuer Wunsch an alle aus den Gruppen, nie an sich selbst', sorted(x['user_id'] for x in o) == sorted([I2, J]))
+ok, r = as_user(H, "insert into public.wishes (title, all_groups) values ('Ohne Ivo', false) returning id")
+wb = r[0]['id']
+as_exec(H, f"insert into public.wish_groups values ('{wb}', '{kg['id']}')")
+o = outbox(f"wish_id = '{wb}'")
+check('Push: Wunsch nur für eine Gruppe meldet nur diese Gruppe', [x['user_id'] for x in o] == [J])
+as_exec(H, f"delete from public.wish_groups where wish_id = '{wb}'")
+as_exec(H, f"insert into public.wish_groups values ('{wb}', '{kg['id']}')")
+check('Push: erneut freigegeben meldet nicht doppelt', len(outbox(f"wish_id = '{wb}'")) == 1)
+run(f"insert into public.wishes (owner, title, all_groups, created_at) values ('{H}', 'Alt', false, now() - interval '2 hours')")
+run(f"update public.wishes set all_groups = true where title = 'Alt'")
+check('Push: alte Wünsche lösen beim Bearbeiten nichts aus', outbox("wish_id = (select id from public.wishes where title = 'Alt')") == [])
+ok, _ = as_exec(I2, f"insert into public.push_prefs (user_id, wish) values ('{J}', false)")
+check('Push: Einstellungen anderer nicht änderbar', not ok)
+ok, _ = as_exec(J, f"insert into public.push_prefs (user_id, wish) values ('{J}', false)")
+as_user(H, "insert into public.wishes (title) values ('Mütze') returning id")
+o = outbox("kind = 'wish' and wish_id = (select id from public.wishes where title = 'Mütze')")
+check('Push: wer neue Wünsche abbestellt, bekommt keine', ok and [x['user_id'] for x in o] == [I2])
+ok, r = as_user(J, 'select wish, member from public.push_prefs')
+check('Push: eigene Einstellungen lesbar', r == [{'wish': False, 'member': True}])
+
+as_exec(I2, f"insert into public.reservations (wish_id) values ('{wa}')")
+run('truncate public.push_outbox;')
+as_exec(H, f"update public.wishes set have_at = now() where id = '{wa}'")
+o = outbox()
+check('Push: „Hab ich schon“ nur an die Person, die reserviert hat', [(x['user_id'], x['kind']) for x in o] == [(I2, 'have')])
+
+ok, _ = rpc(H, f"public.wichtel_draw('{pg['id']}')")
+o = outbox("kind = 'draw'")
+check('Push: Auslosung an alle Teilnehmer außer dem, der auslost', ok and sorted(x['user_id'] for x in o) == sorted([I2, J]))
+ok, _ = as_user(H, 'select public.push_claim(10) as r')
+check('Push: Versand-Funktionen nur für die Edge Function', not ok)
+c = claim()
+msgs = {(it['subs'][0]['endpoint'][-1], it['message']['kind']): it['message'] for it in c['items']}
+check('Push: Versand bekommt Schlüssel und Geräte', c['config']['public'] == PUB and c['config']['private'] == PRIV
+      and all(len(it['subs']) == 1 for it in c['items']))
+dm = msgs.get(('i', 'draw'), {})
+names = ['Hanna', 'Ivo', 'Jule']
+check('Push: Wichtel-Nachricht ohne Namen, mit Link zur Seite', dm.get('title') == 'Wichteln in Push'
+      and not any(n in dm.get('body', '') for n in names) and dm.get('url') == f"#/g/{pg['id']}/wichteln")
+hm = msgs.get(('i', 'have'), {})
+check('Push: „Hab ich schon“-Text', hm.get('title') == 'Hanna hat „Fahrrad“ schon' and 'Reservierung frei' in hm.get('body', ''))
+check('Push: Verschicktes wird nicht doppelt geholt', claim()['items'] == [])
+ok, _ = rpc(H, f"public.wichtel_draw('{pg['id']}')")
+run("update public.push_outbox set sent_at = now() - interval '3 minutes' where sent_at is not null")
+c = claim()
+dm = next((it['message'] for it in c['items'] if it['message']['kind'] == 'draw'), {})
+check('Push: neu ausgelost', 'neu ausgelost' in dm.get('body', ''))
+
+run('truncate public.push_outbox;')
+for t in ('Buch', 'Schal'):
+    as_user(H, f"insert into public.wishes (title) values ('{t}') returning id")
+c = claim()
+wm = next((it['message'] for it in c['items'] if it['subs'][0]['endpoint'].endswith('/i')), {})
+check('Push: zwei Wünsche auf einmal = eine Nachricht', wm.get('title') == 'Hanna hat 2 neue Wünsche'
+      and wm.get('body') == 'Buch und Schal' and wm.get('badge') == 2 and wm.get('url') == f"#/g/{pg['id']}/p/{H}")
+as_user(H, "insert into public.wishes (title) values ('Tasse') returning id")
+check('Push: gleiche Person und gleiches Thema höchstens alle 2 Minuten', claim()['items'] == [])
+run("update public.push_outbox set sent_at = now() - interval '3 minutes' where sent_at is not null")
+c = claim()
+wm = next((it['message'] for it in c['items'] if it['subs'][0]['endpoint'].endswith('/i')), {})
+check('Push: danach gebündelt mit Zähler nur für das Neue', wm.get('title') == 'Hanna hat 3 neue Wünsche'
+      and wm.get('body') == 'Buch, Schal und Tasse' and wm.get('badge') == 1)
+run('truncate public.push_outbox;')
+as_user(H, "insert into public.wishes (title) values ('Gelöscht') returning id")
+as_exec(H, "delete from public.wishes where title = 'Gelöscht'")
+check('Push: gelöschter Wunsch wird nicht gemeldet', claim()['items'] == [])
+
+run('truncate public.push_outbox;')
+ok, n = rpc(None, "public.push_daily('2026-12-11')", role='postgres')
+ok2, n2 = rpc(None, "public.push_daily('2026-12-17')", role='postgres')
+c = claim()
+rm = next((it['message'] for it in c['items'] if it['subs'][0]['endpoint'].endswith('/i')), {})
+check('Push: Erinnerung nur 14, 7 und 1 Tag vorher, an alle in Gruppen mit Gerät', n == 0 and n2 == 3)
+check('Push: Erinnerung mit passendem Text', rm.get('title') == 'Noch 7 Tage bis Heiligabend' and rm.get('body', '').startswith('Deine Wunschliste ist noch leer'))
+ok, n3 = rpc(None, "public.push_daily('2026-12-17')", role='postgres')
+check('Push: Erinnerung pro Tag nur einmal', n3 == 0)
+
+ok, _ = rpc(K, 'public.push_test()')
+check('Push: Testnachricht ohne Gerät abgelehnt', not ok)
+ok, _ = rpc(H, 'public.push_test()')
+ok2, _ = rpc(H, 'public.push_test()')
+check('Push: Testnachricht höchstens eine pro Minute', ok and ok2 and len(outbox(f"user_id = '{H}' and kind = 'test'")) == 1)
+
+_, sid_h, _ = run(f"select id from public.push_subs where endpoint = '{ep('h')}'")
+_, sid_i, _ = run(f"select id from public.push_subs where endpoint = '{ep('i')}'")
+ok, _ = as_user(None, f"""select public.push_report('[{{"id": "{sid_h}", "status": 410}}, {{"id": "{sid_i}", "status": 500}}]', 'Fehler 500') as r""", role='service_role')
+_, out, _ = run(f"select string_agg(right(endpoint, 1) || fails, ',' order by endpoint) from public.push_subs")
+_, err, _ = run('select last_error from public.push_config')
+check('Push: abgelaufenes Abo gelöscht, Fehler gezählt', ok and out == 'i1,j0' and err == 'Fehler 500')
+ok, _ = rpc(D, f"public.push_setup('C{'x' * 86}', '{PRIV}', 'https://example.org/', '{URL}', 'k')")
+_, out, _ = run('select count(*) from public.push_subs')
+check('Push: neue Schlüssel melden alle Geräte ab', ok and out == '0')
+
 print('\nAlle Tests grün' if not fails else f'\n{fails} Fehler')
 sys.exit(1 if fails else 0)

@@ -1,8 +1,8 @@
 // Geschenkeliste – Service Worker
 // Bei jeder Änderung CACHE erhöhen.
-const CACHE = 'geschenkeliste-v11';
-const SHELL = ['./', 'index.html', 'app.js?v=11', 'app.css?v=11', 'manifest.webmanifest',
-  'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
+const CACHE = 'geschenkeliste-v12';
+const SHELL = ['./', 'index.html', 'app.js?v=12', 'app.css?v=12', 'manifest.webmanifest',
+  'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/badge-96.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -25,4 +25,62 @@ self.addEventListener('fetch', e => {
       return r;
     }).catch(() => caches.match(e.request, { ignoreSearch: false }).then(r => r || caches.match('index.html')))
   );
+});
+
+// ---------- Benachrichtigungen (1.9) ----------
+// Die Zahl am App-Symbol: die App meldet den genauen Stand, bei jeder Benachrichtigung wird weitergezählt.
+const BADGE = 'gl-badge';   // eigener Speicher, bleibt bei neuen Versionen erhalten
+const SAFE = /^#\/[\w/-]*$/;
+async function badgeGet() {
+  const r = await (await caches.open(BADGE)).match('n');
+  return r ? Number(await r.text()) || 0 : 0;
+}
+async function badgeSave(n) {
+  await (await caches.open(BADGE)).put('n', new Response(String(n)));
+}
+async function badgeShow(n) {
+  if (!('setAppBadge' in self.navigator)) return;
+  try { await (n ? self.navigator.setAppBadge(n) : self.navigator.clearAppBadge()); } catch (e) { /* ohne Erlaubnis */ }
+}
+
+self.addEventListener('message', e => {
+  const d = e.data || {};
+  if (d.type === 'badge' && Number.isInteger(d.n) && d.n >= 0) e.waitUntil(badgeSave(d.n));
+});
+
+self.addEventListener('push', e => {
+  let m = {};
+  try { m = e.data ? e.data.json() : {}; } catch (x) { m = {}; }
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    wins.forEach(w => w.postMessage({ type: 'sync' }));   // offene App lädt neu
+    if (m.badge > 0) {
+      const n = (await badgeGet().catch(() => 0)) + m.badge;
+      await badgeSave(n).catch(() => {});
+      await badgeShow(n);
+    }
+    await self.registration.showNotification(m.title || 'Geschenkeliste', {
+      body: m.body || '',
+      tag: m.tag || undefined,
+      renotify: !!m.tag,
+      icon: 'icons/icon-192.png',
+      badge: 'icons/badge-96.png',
+      lang: 'de',
+      data: { url: SAFE.test(m.url || '') ? m.url : '#/' }
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const hash = SAFE.test((e.notification.data || {}).url || '') ? e.notification.data.url : '#/';
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const w = wins.find(x => x.url.startsWith(self.registration.scope)) || wins[0];
+    if (w) {
+      w.postMessage({ type: 'nav', url: hash });
+      return w.focus();
+    }
+    return self.clients.openWindow(new URL('./' + hash, self.registration.scope).href);
+  })());
 });

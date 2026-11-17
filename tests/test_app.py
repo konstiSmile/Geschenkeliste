@@ -13,7 +13,7 @@ import mock_supabase as mock
 BASE = 'http://localhost:8766/'
 SHOTS = sys.argv[1] if len(sys.argv) > 1 else None
 fails = 0
-subprocess.run(mock.PSQL, input='truncate auth.users, public.login_attempts cascade;', capture_output=True, text=True)
+subprocess.run(mock.PSQL, input='truncate auth.users, public.login_attempts, public.push_config cascade;', capture_output=True, text=True)
 
 
 def check(name, cond):
@@ -768,6 +768,162 @@ with sync_playwright() as pw:
     check('Kein Überlauf (1.8)', overflow(j) and overflow(k))
     for x in (j, k, l):
         x.context.close()
+
+    # ---------- 1.9 Benachrichtigungen ----------
+    # Push nachgestellt: Abo, Erlaubnis und Service Worker im Browser (Playwright blockiert echte Service Worker)
+    PUSH = """(() => {
+      const P256 = 'B' + 'A'.repeat(86), AUTH = 'abcdefghijklmnopqrstuv';
+      const ls = localStorage;
+      const perm = v => { ls.setItem('__perm', v); return v; };
+      if (!ls.getItem('__perm')) perm(window.__perm0 || 'default');
+      window.PushManager = function () {};
+      window.Notification = { get permission() { return ls.getItem('__perm'); },
+        requestPermission: async () => perm(window.__deny ? 'denied' : 'granted') };
+      const mk = (ep, key) => ({ endpoint: ep, options: { applicationServerKey: Uint8Array.from(atob(key), c => c.charCodeAt(0)).buffer },
+        toJSON() { return { endpoint: this.endpoint, keys: { p256dh: P256, auth: AUTH } }; },
+        unsubscribe: async () => { ls.removeItem('__sub'); return true; } });
+      const cur = () => { const x = JSON.parse(ls.getItem('__sub') || 'null'); return x && mk(x.ep, x.key); };
+      const reg = { pushManager: { getSubscription: async () => cur(),
+        subscribe: async o => {
+          if (window.__deny) { perm('denied'); throw new DOMException('nein', 'NotAllowedError'); }
+          perm('granted');
+          const key = btoa(String.fromCharCode(...new Uint8Array(o.applicationServerKey)));
+          ls.setItem('__sub', JSON.stringify({ ep: 'https://fcm.googleapis.com/fcm/send/' + Math.random().toString(36).slice(2), key }));
+          return cur(); } } };
+      Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: {
+        getRegistration: async () => reg, register: async () => reg, ready: Promise.resolve(reg),
+        controller: { postMessage: m => { window.__swmsg = m; } },
+        addEventListener: (t, f) => { if (t === 'message') window.__swl = f; } } });
+    })();"""
+    GRANTED = "window.__perm0 = 'granted';" + PUSH
+
+    def q(sql):
+        return subprocess.run(mock.PSQL, input=sql, capture_output=True, text=True).stdout.strip()
+
+    def uid_of(x):
+        return x.evaluate("JSON.parse(localStorage.getItem('geschenkeliste-v1')).session.user.id")
+
+    m = newpage(browser, errs, None, PUSH)
+    start_anon(m, 'Mia')
+    m.wait_for_selector('h1:has-text("Hallo Mia")')
+    uid_m = uid_of(m)
+    check('1.9: ohne Einrichtung kein Hinweis auf Benachrichtigungen', m.locator('text=Benachrichtigungen').count() == 0)
+    q(f"insert into public.app_admins values ('{uid_m}');")
+    m.goto(BASE + '#/konto')
+    m.reload()
+    m.wait_for_selector('.card:has-text("Benachrichtigungen") [data-act=pushsetup]')
+    check('1.9: Konto ohne Einrichtung: kein Bereich Benachrichtigungen', m.locator('h2:has-text("Benachrichtigungen")').count() == 0)
+    m.click('[data-act=pushsetup]')
+    toast(m, 'Schlüssel gespeichert')
+    row = q("select vapid_public || '|' || vapid_private || '|' || subject || '|' || function_url from public.push_config").split('|')
+    from cryptography.hazmat.primitives.asymmetric import ec
+    import base64
+    ub = lambda s: base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
+    pt = ec.derive_private_key(int.from_bytes(ub(row[1]), 'big'), ec.SECP256R1()).public_key().public_numbers()
+    check('1.9: Admin erzeugt Schlüsselpaar im Browser, passt zusammen', ub(row[0]) == b'\x04' + pt.x.to_bytes(32, 'big') + pt.y.to_bytes(32, 'big'))
+    check('1.9: Adresse der Edge Function und Absender gespeichert', row[2] == 'https://konstismile.github.io/Geschenkeliste/'
+          and row[3] == 'https://qbdpzamygonpruaafcrt.supabase.co/functions/v1/push')
+    m.wait_for_selector('h2:has-text("Benachrichtigungen") + section [data-act=pushon]')
+    check('1.9: Verwaltung zeigt Stand', 'Eingerichtet' in m.inner_text('.card:has-text("Zuletzt verschickt")'))
+    m.click('section [data-act=pushon]')
+    toast(m, 'Benachrichtigungen sind eingeschaltet')
+    m.wait_for_selector('.switch[data-k=wish]')
+    check('1.9: erlaubt: Gerät angemeldet, 5 Schalter', q(f"select count(*) from public.push_subs where user_id = '{uid_m}'") == '1'
+          and m.locator('.switch.on').count() == 5)
+    m.click('.switch[data-k=wish]')
+    m.wait_for_selector('.switch[data-k=wish]:not(.on)')
+    check('1.9: Schalter speichert Einstellung', q(f"select wish::text || member::text from public.push_prefs where user_id = '{uid_m}'") == 'falsetrue')
+    m.reload()
+    m.wait_for_selector('.switch[data-k=member]')
+    check('1.9: Einstellung bleibt nach Neuladen, Gerät bleibt angemeldet', m.locator('.switch.on').count() == 4
+          and m.get_attribute('.switch[data-k=wish]', 'aria-checked') == 'false')
+    check('1.9: Verwaltung zählt das Gerät', '1 von 1 Person' in m.inner_text('.facts'))
+    m.locator('h2:has-text("Benachrichtigungen")').scroll_into_view_if_needed()
+    shot(m, '24-benachrichtigungen')
+    m.locator('.facts').scroll_into_view_if_needed()
+    shot(m, '25-verwaltung-push')
+    m.click('[data-act=pushtest]')
+    toast(m, 'Testnachricht ist unterwegs')
+    check('1.9: Testnachricht im Ausgang', q(f"select count(*) from public.push_outbox where user_id = '{uid_m}' and kind = 'test'") == '1')
+    check('1.9: App meldet die Zahl am Symbol an den Service Worker', m.evaluate('window.__swmsg && window.__swmsg.type') == 'badge')
+
+    m.click('.tabs >> text=Gruppen')
+    m.fill('form[data-form=newgroup] input', 'Glocke')
+    m.click('button:has-text("Anlegen")')
+    m.wait_for_selector('h1:has-text("Glocke")')
+    pcode = m.inner_text('#gcode').strip()
+    # Nils hat Mitteilungen schon erlaubt (z. B. für den Zähler aus 1.8): wird ohne Nachfrage angemeldet
+    n = newpage(browser, errs, None, GRANTED)
+    start_anon(n, 'Nils', BASE + '#/join/' + pcode)
+    n.wait_for_selector('h1:has-text("Glocke")')
+    uid_n = uid_of(n)
+    n.click('.tabs >> text=Start')
+    n.wait_for_selector('.banner:has-text("Benachrichtigungen sind an")')
+    check('1.9: schon erlaubt: Gerät ohne Nachfrage angemeldet, Hinweis', q(f"select count(*) from public.push_subs where user_id = '{uid_n}'") == '1')
+    n.click('[data-act=pushnotice]')
+    n.wait_for_selector('.banner:has-text("Benachrichtigungen sind an")', state='detached')
+    check('1.9: Beitritt landet bei Mia im Ausgang', q(f"select count(*) from public.push_outbox where user_id = '{uid_m}' and kind = 'member' and actor = '{uid_n}'") == '1')
+    n.click('.tabs >> text=Wunschliste')
+    n.click('text=Wunsch hinzufügen')
+    n.fill('input[name=title]', 'Taschenlampe')
+    n.click('button:has-text("Speichern")')
+    n.wait_for_selector('.wish:has-text("Taschenlampe")')
+    check('1.9: Mia hat neue Wünsche abbestellt', q(f"select count(*) from public.push_outbox where user_id = '{uid_m}' and kind = 'wish'") == '0')
+    m.click('.tabs >> text=Wunschliste')
+    m.click('text=Wunsch hinzufügen')
+    m.fill('input[name=title]', 'Laterne')
+    m.click('button:has-text("Speichern")')
+    m.wait_for_selector('.wish:has-text("Laterne")')
+    check('1.9: Nils bekommt Mias neuen Wunsch, Mia nicht', q(f"select string_agg(user_id::text, ',') from public.push_outbox where kind = 'wish'") == uid_n)
+    n.evaluate("window.__swl({ data: { type: 'nav', url: '#/gruppen' } })")
+    n.wait_for_selector('h1:has-text("Gruppen")')
+    n.evaluate("window.__swl({ data: { type: 'nav', url: 'javascript:alert(1)' } })")
+    check('1.9: Antippen öffnet die Seite, fremde Adressen nicht', n.url.endswith('#/gruppen'))
+    n.goto(BASE + '#/konto')
+    n.wait_for_selector('[data-act=pushoff]')
+    n.click('[data-act=pushoff]')
+    toast(n, 'ausgeschaltet')
+    n.wait_for_selector('section [data-act=pushon]')
+    check('1.9: ausschalten meldet das Gerät ab', q(f"select count(*) from public.push_subs where user_id = '{uid_n}'") == '0')
+    n.reload()
+    n.wait_for_selector('section [data-act=pushon]')
+    check('1.9: bleibt aus, auch mit Erlaubnis', q(f"select count(*) from public.push_subs where user_id = '{uid_n}'") == '0')
+    n.click('section [data-act=pushon]')
+    n.wait_for_selector('.switch[data-k=wish]')
+    check('1.9: wieder einschalten', q(f"select count(*) from public.push_subs where user_id = '{uid_n}'") == '1')
+    n.click('[data-act=asklogout]')
+    n.click('[data-act=logout]')
+    n.wait_for_selector('form[data-form=start]')
+    check('1.9: abmelden meldet das Gerät für das Konto ab', q(f"select count(*) from public.push_subs where user_id = '{uid_n}'") == '0')
+    n.context.close()
+
+    # Otto: noch nicht erlaubt → Hinweis auf der Startseite, dann abgelehnt
+    o = newpage(browser, errs, None, PUSH)
+    start_anon(o, 'Otto')
+    o.wait_for_selector('.banner:has-text("Benachrichtigungen") [data-act=pushon]')
+    shot(o, '26-push-hinweis')
+    o.click('[data-act=pushlater]')
+    o.wait_for_selector('.banner [data-act=pushon]', state='detached')
+    o.reload()
+    o.wait_for_selector('h1:has-text("Hallo Otto")')
+    check('1.9: „Später“ bleibt', o.locator('.banner [data-act=pushon]').count() == 0)
+    o.evaluate('window.__deny = true')
+    o.goto(BASE + '#/konto')
+    o.click('section [data-act=pushon]')
+    toast(o, 'abgelehnt')
+    o.wait_for_selector('.card:has-text("Ausgeschaltet")')
+    check('1.9: abgelehnt: Hinweis auf die Einstellungen', 'Einstellungen' in o.inner_text('.card:has-text("Ausgeschaltet")'))
+    check('Kein Überlauf (1.9)', overflow(m) and overflow(o))
+    o.context.close()
+    # iPhone in Safari: Push gibt es nur in der installierten App
+    p = newpage(browser, errs, IPHONE, 'delete window.PushManager;')
+    start_anon(p, 'Pia')
+    p.wait_for_selector('h1:has-text("Hallo Pia")')
+    p.goto(BASE + '#/konto')
+    p.wait_for_selector('h2:has-text("Benachrichtigungen")')
+    check('1.9: iPhone in Safari: Hinweis auf die App', 'nur in der App vom Home-Bildschirm' in p.inner_text('main'))
+    p.context.close()
+    m.context.close()
 
     # Start aus Cache ohne Netz: Daten bleiben sichtbar
     a.context.unroute('https://qbdpzamygonpruaafcrt.supabase.co/**')
