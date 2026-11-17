@@ -348,3 +348,21 @@ form h2 { margin-top: 22px; }
 .install details .steps { margin: 10px 0 4px; }
 .install details + details { margin-top: 0; }
 @media (prefers-reduced-motion: reduce) { .install summary .ic { transition: none; } }
+
+/* Neu seit letztem Besuch (1.8) */
+.count { flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; background: var(--red); color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; font-variant-numeric: tabular-nums; }
+.tabs a { position: relative; }
+.tabs a .tabcount { position: absolute; top: 3px; left: calc(50% + 6px); min-width: 18px; height: 18px; line-height: 18px; font-size: 11px; padding: 0 5px; border: 2px solid var(--card); box-sizing: content-box; }
+.newdot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--red); }
+.newtxt { color: var(--red); font-weight: 600; }
+.tag.new { background: color-mix(in srgb, var(--red) 10%, transparent); color: var(--red); }
+.row-title .tag.new { margin-left: 8px; vertical-align: 2px; }
+.row-meta .tag.new { margin-right: 6px; }
+.card.wish.isnew { border-color: color-mix(in srgb, var(--red) 35%, var(--line)); }
+.reveal .tag.new { align-self: center; margin-top: 4px; }
+.sechead { display: flex; align-items: baseline; justify-content: space-between; }
+.sechead h2 { margin-right: 8px; }
+.sechead .link { padding: 0 4px; font-size: 14px; flex: none; }
+.bannerbtns { display: flex; flex-direction: column; align-items: flex-end; flex: none; }
+.bannerbtns .link { padding: 4px; }
+.link.muted { color: var(--text-2); font-weight: 500; }

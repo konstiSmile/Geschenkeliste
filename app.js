@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.7.1';
+const VERSION = '1.8';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -240,6 +240,9 @@ function logout(msg) {
   D = emptyData();
   fresh = null;
   ui = {};
+  seen = null;
+  flash = new Set();
+  appBadge(0);
   saveState();
   if (msg) toast(msg);
   go('#/');
@@ -282,6 +285,7 @@ async function sync(quiet) {
       wd: wd || [], wp: wp || [], wx: wx || [], wo: wo || [], at: Date.now(), loaded: true };
     S.cache = { uid: me(), D };
     saveState();
+    seenSync();
     render();
   } catch (e) {
     if (!quiet) toast(e.message);
@@ -321,6 +325,140 @@ function wichtelState(gid) {
   return { drawn: true, at: d.drawn_at, stale, inDraw, receiver: pair ? pair.receiver : null, missing: inDraw && !pair };
 }
 
+/* ---------- Neu seit letztem Besuch (1.8) ----------
+   Nur auf diesem Gerät: welche Wünsche, Mitglieder und Auslosungen schon gesehen wurden.
+   Eigener Speicher, damit es das Abmelden übersteht (pro Konto). Beim ersten Mal und für
+   frisch beigetretene Gruppen gilt alles Vorhandene als gesehen. */
+const SEEN_KEY = 'geschenkeliste-seen';
+let seen = null;            // {uid, w:{id:1}, m:{'gid:uid':1}, g:{gid:1}, d:{gid:drawn_at}}
+let flash = new Set();      // in dieser Ansicht gerade gesehen: Markierung bleibt bis zum Seitenwechsel
+let marks = [];             // während des Zeichnens gesammelt, danach gespeichert
+const mkey = (gid, uid) => gid + ':' + uid;
+function seenLoad() {
+  if (seen && seen.uid === me()) return seen;
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(SEEN_KEY)) || {}; } catch (e) { /* kaputt: neu anfangen */ }
+  const s = all[me()];
+  seen = s && s.w ? Object.assign({ m: {}, g: {}, d: {} }, s, { uid: me() }) : null;
+  return seen;
+}
+function seenSave() {
+  if (!seen) return;
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(SEEN_KEY)) || {}; } catch (e) { /* neu */ }
+  const { uid, ...rest } = seen;
+  all[uid] = rest;
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch (e) { /* voll oder gesperrt */ }
+}
+const othersWishes = () => D.wishes.filter(w => w.owner !== me() && !w.have_at);
+function othersMembers() {
+  const gs = myGroups().map(g => g.id);
+  return D.members.filter(m => m.user_id !== me() && gs.includes(m.group_id));
+}
+function myDraws() {
+  return myGroups().map(g => ({ gid: g.id, st: wichtelState(g.id) })).filter(x => x.st.receiver).map(x => ({ gid: x.gid, at: x.st.at }));
+}
+/* nach jedem Laden: neue Gruppen und den allerersten Start still als gesehen übernehmen, Altes aufräumen */
+function seenSync() {
+  if (!D.loaded || !me()) return;
+  const gs = myGroups().map(g => g.id);
+  let s = seenLoad();
+  const first = !s;
+  if (first) s = seen = { uid: me(), w: {}, m: {}, g: {}, d: {} };
+  for (const gid of gs) {
+    if (!first && s.g[gid]) continue;
+    s.g[gid] = 1;
+    D.wishes.filter(w => w.owner !== me() && visibleIn(w, gid) && membersOf(gid).some(m => m.user_id === w.owner)).forEach(w => { s.w[w.id] = 1; });
+    membersOf(gid).forEach(m => { s.m[mkey(gid, m.user_id)] = 1; });
+    const st = wichtelState(gid);
+    if (st.receiver) s.d[gid] = st.at;
+  }
+  // wer auslost, hat es selbst gesehen
+  myGroups().filter(isFounder).forEach(g => { const st = wichtelState(g.id); if (st.receiver) s.d[g.id] = st.at; });
+  const keepW = new Set(D.wishes.map(w => w.id));
+  const keepM = new Set(D.members.map(m => mkey(m.group_id, m.user_id)));
+  s.w = Object.fromEntries(Object.keys(s.w).filter(k => keepW.has(k)).map(k => [k, 1]));
+  s.m = Object.fromEntries(Object.keys(s.m).filter(k => keepM.has(k)).map(k => [k, 1]));
+  s.g = Object.fromEntries(Object.keys(s.g).filter(k => gs.includes(k)).map(k => [k, 1]));
+  s.d = Object.fromEntries(Object.entries(s.d).filter(([k]) => gs.includes(k)));
+  seenSave();
+}
+function isNewWish(w) {
+  if (w.owner === me() || w.have_at) return false;
+  const s = seenLoad();
+  return !!s && (!s.w[w.id] || flash.has('w' + w.id));
+}
+function isNewMember(gid, uid) {
+  if (uid === me()) return false;
+  const s = seenLoad();
+  return !!s && (!s.m[mkey(gid, uid)] || flash.has('m' + mkey(gid, uid)));
+}
+function isNewDraw(gid) {
+  const s = seenLoad();
+  const st = wichtelState(gid);
+  return !!s && !!st.receiver && (s.d[gid] !== st.at || flash.has('d' + gid));
+}
+const newWishes = () => othersWishes().filter(w => { const s = seenLoad(); return s && !s.w[w.id]; });
+const newMembers = () => othersMembers().filter(m => { const s = seenLoad(); return s && !s.m[mkey(m.group_id, m.user_id)]; });
+const newDraws = () => myDraws().filter(x => { const s = seenLoad(); return s && s.d[x.gid] !== x.at; });
+/* Wünsche, die in dieser Gruppe neu sind (für Zähler in Gruppenliste und Gruppe) */
+function newIn(gid, uid) {
+  return newWishes().filter(w => visibleIn(w, gid) && (uid ? w.owner === uid : membersOf(gid).some(m => m.user_id === w.owner)));
+}
+function newCount() {
+  if (!D.loaded || !seenLoad()) return 0;
+  return newWishes().length + newMembers().length + newDraws().length;
+}
+/* aus den Ansichten heraus: als gesehen vormerken, die Markierung bleibt in dieser Ansicht stehen */
+function markSeen(kind, key, val = 1) { marks.push([kind, key, val]); }
+function applyMarks() {
+  const s = seenLoad();
+  if (!s || !marks.length) { marks = []; return; }
+  for (const [kind, key, val] of marks) {
+    const cur = s[kind][key];
+    if (cur === val) continue;
+    s[kind][key] = val;
+    flash.add(kind + key);
+  }
+  marks = [];
+  seenSave();
+}
+function seenAll() {
+  const s = seenLoad();
+  if (!s) return;
+  othersWishes().forEach(w => { s.w[w.id] = 1; });
+  othersMembers().forEach(m => { s.m[mkey(m.group_id, m.user_id)] = 1; });
+  myDraws().forEach(x => { s.d[x.gid] = x.at; });
+  seenSave();
+}
+const countBadge = (n, cls = '') => n ? `<span class="count ${cls}" aria-label="${plural(n, 'neuer Eintrag', 'neue Einträge')}">${n > 99 ? '99+' : n}</span>` : '';
+const newTag = (label = 'Neu') => `<span class="tag new">${label}</span>`;
+/* Tab „Gruppen“ und Zähler am App-Symbol */
+function paintBadges() {
+  const n = newCount();
+  const tab = document.querySelector('.tabs a[href="#/gruppen"]');
+  if (tab) {
+    const old = tab.querySelector('.count');
+    if (old) old.remove();
+    if (n) tab.insertAdjacentHTML('beforeend', countBadge(n, 'tabcount'));
+  }
+  appBadge(n);
+}
+function appBadge(n) {
+  if (!('setAppBadge' in navigator)) return;
+  if (appBadge.last === n) return;
+  appBadge.last = n;
+  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+}
+/* Zähler am App-Symbol: iPhone und Mac zeigen ihn nur mit erlaubten Mitteilungen */
+function badgeState() {
+  if (!('setAppBadge' in navigator)) return 'none';
+  const ua = navigator.userAgent;
+  const apple = platform() === 'ios' || (/Safari\//.test(ua) && !/Chrome|Chromium|Edg|OPR|Firefox/.test(ua));
+  if (!apple || !('Notification' in window)) return 'ok';
+  return Notification.permission === 'granted' ? 'ok' : Notification.permission; // default | denied
+}
+
 
 /* ---------- Bausteine der Oberfläche ---------- */
 const I = {
@@ -346,6 +484,7 @@ const I = {
   addsq: '<rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M12 8.5v7M8.5 12h7"/>',
   more: '<circle cx="12" cy="5.5" r="1.1"/><circle cx="12" cy="12" r="1.1"/><circle cx="12" cy="18.5" r="1.1"/>',
   download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
+  bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"/>',
   shuffle: '<path d="M4 7h3.2c1.9 0 3 .9 4.2 2.8l1.2 2c1.2 1.9 2.4 3.2 4.3 3.2H20M4 17h3.2c1.3 0 2.2-.5 3-1.4M13.6 8.4c.8-.9 1.8-1.4 3.1-1.4H20M17.5 4.5 20 7l-2.5 2.5M17.5 12.5 20 15l-2.5 2.5"/>'
 };
 const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
@@ -513,6 +652,24 @@ window.addEventListener('appinstalled', () => {
   paintInstall();
 });
 
+/* Zähler am App-Symbol (1.8): Hinweis auf der Startseite und unter Konto */
+function badgeCard(ctx) {
+  const st = badgeState();
+  if (st === 'none' || st === 'ok') return '';
+  if (ctx === 'home' && (st === 'denied' || S.badgeAsked)) return '';
+  if (st === 'denied') {
+    return `<section class="card install"><div class="cardhead">${icon('bell')}<b>Zähler am App-Symbol</b></div>
+      <p class="small muted">Ist ausgeschaltet. Du kannst ihn in den Einstellungen unter Mitteilungen bei Geschenkeliste erlauben.</p></section>`;
+  }
+  const text = 'Zeigt am Symbol auf dem Home-Bildschirm, wie viel neu ist. Dafür fragt das Gerät nach Mitteilungen. Nachrichten schickt die App noch keine.';
+  if (ctx === 'home') {
+    return `<div class="banner">${icon('bell')}<span><b>Zähler am App-Symbol</b><small>Zeigt am Symbol, wie viel neu ist.</small></span>
+      <span class="bannerbtns"><button class="link" data-act="badgeperm">Einschalten</button><button class="link muted" data-act="badgelater">Später</button></span></div>`;
+  }
+  return `<section class="card install"><div class="cardhead">${icon('bell')}<b>Zähler am App-Symbol</b></div>
+    <p class="small muted">${text}</p><button class="secondary withicon" data-act="badgeperm">${icon('bell')}Einschalten</button></section>`;
+}
+
 function viewLogin() {
   const invited = S.pendingJoin ? `<div class="banner">${icon('people')}<span><b>Du wurdest eingeladen</b><small>Nach der Anmeldung bist du automatisch in der Gruppe.</small></span></div>` : '';
   return `<main class="login">
@@ -611,7 +768,7 @@ function viewHome() {
     </div>`;
 
   if (!gs.length) {
-    return shell('Hallo ' + myName(), `${secure}${hero}${stats}
+    return shell('Hallo ' + myName(), `${secure}${badgeCard('home')}${hero}${stats}
       <div class="card cta">
         <h3>Starte mit deiner Familie</h3>
         <p>Lege eine Gruppe an und teile den Einladungscode. Alle in der Gruppe sehen gegenseitig ihre Wunschlisten.</p>
@@ -625,8 +782,10 @@ function viewHome() {
         <span class="row-main"><span class="row-title">Wichteln in ${esc(g.name)}</span><span class="row-meta">Deine Zuteilung fehlt, es muss neu ausgelost werden</span></span>${icon('chev', 'chev')}</a></li>`;
     }
     const n = openWishes(st.receiver, g.id).length;
+    const drawNew = isNewDraw(g.id);
+    if (drawNew) markSeen('d', g.id, st.at);
     return `<li><a class="row-item" href="#/g/${g.id}/p/${st.receiver}">${avatar(st.receiver)}
-      <span class="row-main"><span class="row-title">Du beschenkst ${esc(nameOf(st.receiver))}</span><span class="row-meta">${esc(g.name)} · ${n ? plural(n, 'Wunsch', 'Wünsche') : 'noch keine Wünsche'}</span></span>${icon('chev', 'chev')}</a></li>`;
+      <span class="row-main"><span class="row-title">Du beschenkst ${esc(nameOf(st.receiver))}</span><span class="row-meta">${drawNew ? newTag('Neu ausgelost') : ''}${esc(g.name)} · ${n ? plural(n, 'Wunsch', 'Wünsche') : 'noch keine Wünsche'}</span></span>${icon('chev', 'chev')}</a></li>`;
   }).join('');
   const wichtelHtml = wRows ? `<h2>Wichteln</h2><ul class="rows">${wRows}</ul>` : '';
 
@@ -644,18 +803,41 @@ function viewHome() {
   }).join('')}</ul>`
     : `<p class="empty-line">Noch nichts reserviert. Öffne eine Liste in deinen Gruppen und tippe auf „Reservieren“.</p>`;
 
-  const feed = D.wishes.filter(w => w.owner !== me() && !w.have_at).slice(0, 6);
-  const feedHtml = feed.length ? `<ul class="rows">${feed.map(w => {
+  // Neu seit dem letzten Besuch: erst neue Mitglieder, dann neue Wünsche (sonst die letzten 6)
+  const nw = newWishes(), nm = newMembers();
+  const FEED_MAX = 8;
+  const wishRow = w => {
     const g = groupFor(w);
     const r = resOf(w.id);
-    return `<li><a class="row-item" href="${g ? `#/g/${g}/p/${w.owner}` : '#/'}">${avatar(w.owner)}
-        <span class="row-main"><span class="row-title">${esc(w.title)}</span><span class="row-meta">${esc(nameOf(w.owner))} · ${ago(w.created_at)}${r ? ' · vergeben' : ''}</span></span>${icon('chev', 'chev')}</a></li>`;
-  }).join('')}</ul>`
-    : `<p class="empty-line">Sobald jemand aus deinen Gruppen etwas einträgt, erscheint es hier.</p>`;
+    const isNew = nw.includes(w);
+    return `<li><a class="row-item ${isNew ? 'isnew' : ''}" href="${g ? `#/g/${g}/p/${w.owner}` : '#/'}">${avatar(w.owner)}
+        <span class="row-main"><span class="row-title">${esc(w.title)}</span><span class="row-meta">${esc(nameOf(w.owner))} · ${ago(w.created_at)}${r ? ' · vergeben' : ''}</span></span>${isNew ? '<span class="newdot" aria-label="neu"></span>' : ''}${icon('chev', 'chev')}</a></li>`;
+  };
+  const memberRow = m => {
+    const g = D.groups.find(x => x.id === m.group_id);
+    const n = openWishes(m.user_id, m.group_id).length;
+    return `<li><a class="row-item isnew" href="#/g/${m.group_id}/p/${m.user_id}">${avatar(m.user_id)}
+        <span class="row-main"><span class="row-title">${esc(nameOf(m.user_id))} ist dabei</span><span class="row-meta">${esc(g ? g.name : '')} · ${ago(m.joined_at)}${n ? ' · ' + plural(n, 'Wunsch', 'Wünsche') : ''}</span></span><span class="newdot" aria-label="neu"></span>${icon('chev', 'chev')}</a></li>`;
+  };
+  let feedHtml, feedHead;
+  if (nw.length || nm.length) {
+    // Wünsche neuer Mitglieder stehen schon in deren Zeile
+    const own = nw.filter(w => !nm.some(m => m.user_id === w.owner));
+    const ws = own.slice(0, Math.max(0, FEED_MAX - nm.length));
+    const rest = own.length - ws.length;
+    feedHead = `<div class="sechead"><h2>Neu seit deinem letzten Besuch</h2><button class="link" data-act="seenall">Alles gesehen</button></div>`;
+    feedHtml = `<ul class="rows">${nm.map(memberRow).join('')}${ws.map(wishRow).join('')}</ul>`
+      + (rest > 0 ? `<p class="empty-line">Und ${plural(rest, 'weiterer Wunsch', 'weitere Wünsche')}. <a href="#/gruppen">Zu den Gruppen</a></p>` : '');
+  } else {
+    const feed = othersWishes().slice(0, 6);
+    feedHead = '<h2>Neu in deinen Gruppen</h2>';
+    feedHtml = feed.length ? `<ul class="rows">${feed.map(wishRow).join('')}</ul>`
+      : `<p class="empty-line">Sobald jemand aus deinen Gruppen etwas einträgt, erscheint es hier.</p>`;
+  }
 
-  return shell('Hallo ' + myName(), `${secure}${hero}${stats}${wichtelHtml}
+  return shell('Hallo ' + myName(), `${secure}${badgeCard('home')}${hero}${stats}${wichtelHtml}
     <h2>Deine Besorgungen</h2>${errHtml}
-    <h2>Neu in deinen Gruppen</h2>${feedHtml}`, { tab: 'home', eyebrow: today });
+    ${feedHead}${feedHtml}`, { tab: 'home', eyebrow: today });
 }
 
 function wishMeta(w, extra = []) {
@@ -728,9 +910,10 @@ function viewGroups() {
   const rows = gs.map(g => {
     const ms = membersOf(g.id).map(m => m.user_id);
     const n = D.wishes.filter(w => ms.includes(w.owner) && w.owner !== me() && !w.have_at && visibleIn(w, g.id)).length;
+    const nnew = newIn(g.id).length + newMembers().filter(m => m.group_id === g.id).length + (newDraws().some(x => x.gid === g.id) ? 1 : 0);
     return `<li><a class="row-item group" href="#/g/${g.id}"><span class="tile c${hueIdx(g.id)}">${esc(initials(g.name))}</span>
-      <span class="row-main"><span class="row-title">${esc(g.name)}</span><span class="row-meta">${plural(ms.length, 'Mitglied', 'Mitglieder')} · ${plural(n, 'Wunsch', 'Wünsche')}</span></span>
-      ${avStack(ms)}${icon('chev', 'chev')}</a></li>`;
+      <span class="row-main"><span class="row-title">${esc(g.name)}</span><span class="row-meta">${plural(ms.length, 'Mitglied', 'Mitglieder')} · ${plural(n, 'Wunsch', 'Wünsche')}${nnew ? ` · <b class="newtxt">${nnew} neu</b>` : ''}</span></span>
+      ${nnew ? countBadge(nnew) : avStack(ms)}${icon('chev', 'chev')}</a></li>`;
   }).join('');
   const forms = `
     <h2>Neue Gruppe</h2>
@@ -755,8 +938,11 @@ function viewGroup(gid) {
     }
     const taken = ws.filter(w => resOf(w.id)).length;
     const meta = ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${ws.length - taken} frei` : 'Noch keine Wünsche';
+    const joined = isNewMember(gid, m.user_id);
+    if (joined) markSeen('m', mkey(gid, m.user_id));
+    const nn = newIn(gid, m.user_id).length;
     return `<li><a class="row-item person" href="#/g/${gid}/p/${m.user_id}">${avatar(m.user_id)}
-      <span class="row-main"><span class="row-title">${esc(nameOf(m.user_id))}</span><span class="row-meta">${meta}</span></span>${icon('chev', 'chev')}</a></li>`;
+      <span class="row-main"><span class="row-title">${esc(nameOf(m.user_id))}</span><span class="row-meta">${joined ? newTag('Neu dabei') : ''}${meta}${nn ? ` · <b class="newtxt">${nn} neu</b>` : ''}</span></span>${countBadge(nn)}${icon('chev', 'chev')}</a></li>`;
   }).join('');
   const leave = ui.confirmLeave === gid
     ? `<button class="danger" data-act="leave" data-id="${gid}">Wirklich verlassen</button>`
@@ -765,6 +951,7 @@ function viewGroup(gid) {
   let wMeta = '';
   if (st.drawn) {
     if (st.receiver) wMeta = `Du beschenkst ${esc(nameOf(st.receiver))}`;
+    if (isNewDraw(gid)) { wMeta = newTag('Neu ausgelost') + wMeta; markSeen('d', gid, st.at); }
     else if (st.missing) wMeta = 'Deine Zuteilung fehlt, neu auslosen';
     else wMeta = `Ausgelost am ${esc(fmtDay(st.at))}`;
   } else if (isFounder(g)) wMeta = 'Noch nicht ausgelost';
@@ -795,6 +982,9 @@ function viewPerson(gid, uid) {
   const ws = all.filter(w => !w.have_at).sort(byPrio);
   const had = all.filter(w => w.have_at);
   const taken = ws.filter(w => resOf(w.id)).length;
+  // Beim Ansehen der Liste gilt alles darauf als gesehen; die Markierung bleibt, bis du die Seite verlässt
+  if (isNewMember(gid, uid)) markSeen('m', mkey(gid, uid));
+  ws.filter(isNewWish).forEach(w => markSeen('w', w.id));
   const card = w => {
     const r = resOf(w.id);
     let pill = '', acts = '', warn = '';
@@ -817,8 +1007,8 @@ function viewPerson(gid, uid) {
     }
     const link = w.url ? `<a class="link-out" href="${esc(w.url)}" target="_blank" rel="noopener noreferrer">${icon('link')}${esc(domain(w.url) || 'Link')}</a>` : '';
     const meta = wishMeta(w);
-    const tag = w.have_at ? '' : (prio(w) === 3 ? `<span class="tag hi">${icon('heart')}Sehr gern</span>` : (prio(w) === 1 ? '<span class="tag">Nur eine Idee</span>' : ''));
-    return `<li class="card wish ${r || w.have_at ? 'taken' : ''} ${w.have_at ? 'had' : ''}">
+    const tag = (isNewWish(w) ? newTag() : '') + (w.have_at ? '' : prio(w) === 3 ? `<span class="tag hi">${icon('heart')}Sehr gern</span>` : (prio(w) === 1 ? '<span class="tag">Nur eine Idee</span>' : ''));
+    return `<li class="card wish ${r || w.have_at ? 'taken' : ''} ${w.have_at ? 'had' : ''} ${isNewWish(w) ? 'isnew' : ''}">
       <div class="wish-head">${tile(w)}<div class="row-main"><h3>${esc(w.title)}</h3>
         ${meta || tag ? `<p class="wmeta">${tag}${meta ? `<span>${esc(meta)}</span>` : ''}</p>` : ''}${link}</div></div>
       ${w.note ? `<p class="wnote">${esc(w.note)}</p>` : ''}
@@ -858,8 +1048,11 @@ function viewWichteln(gid) {
   let top = '';
   if (st.receiver) {
     const n = openWishes(st.receiver, gid).length;
+    const drawNew = isNewDraw(gid);
+    if (drawNew) markSeen('d', gid, st.at);
     top = `<div class="card reveal">
       ${avatar(st.receiver, 'lg')}
+      ${drawNew ? newTag('Neu ausgelost') : ''}
       <p class="eyebrow">Du beschenkst</p>
       <p class="reveal-name">${esc(nameOf(st.receiver))}</p>
       <p class="small muted">${n ? plural(n, 'Wunsch', 'Wünsche') + ' auf der Liste' : 'Noch keine Wünsche auf der Liste'}</p>
@@ -987,6 +1180,7 @@ function viewAccount() {
     ${acc ? `<h2>Anmeldung</h2>${codeCard()}` : ''}
     ${adminSection()}
     <div id="install" data-ctx="konto">${installCard('konto')}</div>
+    ${badgeCard('konto') ? (isStandalone() ? '<h2>App</h2>' : '') + badgeCard('konto') : ''}
     <h2>Datenschutz</h2>
     <div class="card prose">
       <p>Name, Benutzername, Gruppen, Wünsche und Reservierungen liegen in einer Datenbank bei Supabase in der EU. Passwort und Wiederherstellungscode werden nur verschlüsselt gespeichert.</p>
@@ -1033,6 +1227,8 @@ function render() {
   else html = viewHome();
   const y = render.lastKey === location.hash ? window.scrollY : 0;
   app.innerHTML = html;
+  applyMarks();
+  paintBadges();
   if (render.lastKey === location.hash) window.scrollTo(0, y); else window.scrollTo(0, 0);
   render.lastKey = location.hash;
 }
@@ -1195,6 +1391,16 @@ const forms = {
 
 const acts = {
   sync: () => sync(),
+  badgelater: async () => { S.badgeAsked = 1; saveState(); render(); },
+  seenall: async () => { seenAll(); flash = new Set(); render(); },
+  badgeperm: async () => {
+    S.badgeAsked = 1;
+    saveState();
+    try { await Notification.requestPermission(); } catch (e) { /* abgelehnt oder nicht möglich */ }
+    appBadge.last = null;
+    render();
+    if (badgeState() === 'ok') toast('Der Zähler erscheint jetzt am App-Symbol.');
+  },
   install: async () => {
     const e = installEvt;
     if (!e) return;
@@ -1391,6 +1597,7 @@ document.addEventListener('change', e => {
 });
 window.addEventListener('hashchange', () => {
   ui = {};
+  flash = new Set();
   if (S.share && S.session && location.hash !== '#/w/neu') { delete S.share; saveState(); }
   render();
   if (S.session && Date.now() - D.at > 20000) sync(true);
