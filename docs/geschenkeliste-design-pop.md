@@ -1,5 +1,7 @@
 # Geschenkeliste – Pop-Design mit zwei Themen (Paket 5b, Version 1.10)
 
+**Gebaut und gepusht am 17.11. (Commit `bffb352`).** Umsetzung und Abweichungen: Abschnitt „Pop-Design (Version 1.10)“ in `claude/geschenkeliste-uebergabe.md`. Abweichungen vom Plan: Schriften als WOFF statt woff2; Dunkelmodus abgeleitet; Ganzjährig-Hero zeigt „Heiligabend · 24.12.“; Weihnachten-Hero zeigt „n von m Besorgungen erledigt“ statt reservierter eigener Wünsche (die sind geheim).
+
 Wunsch des Nutzers vom 17.11.: App auf das Design „Richtung 2 · Pop“ umstellen, in zwei Themen **Ganzjährig** und **Weihnachten**, in der App umschaltbar. Vorlage: zwei Screenshots aus einem Design-Canvas (der Nutzer hängt sie im neuen Chat nochmal an). Ersetzt die alte Idee „Farbthemen“ (Paket 10) weitgehend.
 
 ## Entscheidungen (17.11.)

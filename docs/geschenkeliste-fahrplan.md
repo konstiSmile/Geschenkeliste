@@ -59,16 +59,18 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.9: Benachrichtigungen“ (A–F, Fehlertabelle)
   - Tests: 171 RLS-Prüfungen, 147 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.9“: A schema.sql ausführen, B Edge Function `push` anlegen, C Verify JWT aus, D Schlüssel erzeugen, E iPhone erlauben + Testnachricht, F zweites Gerät legt Wunsch an (ca. 15 Min.). Rückmeldung an Claude, ob Nachrichten ankommen (noch nie gegen echte Push-Dienste getestet)
-- [ ] **Paket 5b – 1.10 Pop-Design mit zwei Themen** (L) [Claude] – **als Nächstes** (Wunsch vom 17.11.)
-  - Look komplett nach Entwurf „Richtung 2 · Pop“ (Fredoka/Nunito, dicke Konturen, harte Schatten, runde Icons), Aufbau und Tabs bleiben
-  - Themen Ganzjährig (Violett, Koralle, Sonnengelb) und Weihnachten (Zuckerstange, Minze, Vanille), Standard automatisch nach Datum (1.11.–6.1. Weihnachten), unter Konto umschaltbar
-  - Alle Details: `claude/geschenkeliste-design-pop.md`. Ersetzt den Großteil von Paket 10. Spätere Versionsnummern verschieben sich um eins.
+- [x] **Paket 5b – 1.10 Pop-Design mit zwei Themen** (L) [Claude] – **gebaut und gepusht 17.11. (Commit `bffb352`)**
+  - Look komplett nach Entwurf „Richtung 2 · Pop“ (Fredoka/Nunito selbst gehostet, dicke Konturen, harte Schatten, runde Icons, Kategorie-Kacheln, Status-Pillen), Aufbau und Tabs bleiben
+  - Themen Ganzjährig (Violett, Koralle, Sonnengelb) und Weihnachten (Zuckerstange, Minze, Vanille), je hell und dunkel, Standard automatisch nach Datum (1.11. bis 6.1. Weihnachten), unter Konto → Design umschaltbar
+  - Keine schema.sql. Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.10: Pop-Design“ (A–D)
+  - Tests: 171 RLS-Prüfungen, 165 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
+- [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.10“: A neu laden, B Konto → Design ausprobieren, C Dunkelmodus ansehen, D iPhone-App: Statusleiste oben lesbar? (Rückmeldung an Claude)
 - [ ] **[Du]** Vorher klären für Paket 6: Wer kauft und streckt vor? Was, wenn zu wenige mitmachen?
-- [ ] **Paket 6 – 1.10 Gemeinsam schenken** (M) [Claude], schema.sql
+- [ ] **Paket 6 – 1.11 Gemeinsam schenken** (M) [Claude], schema.sql – **als Nächstes**
   - Anfrage an bestimmte Leute oder offen, Aufteilung fair/Budget/individuell, „bezahlt“ abhaken, Benachrichtigung (Preis am Wunsch gibt es seit 1.7, Push seit 1.9)
-- [ ] **Paket 7 – 1.11 Chats Teil 1** (M) [Claude], schema.sql
+- [ ] **Paket 7 – 1.12 Chats Teil 1** (M) [Claude], schema.sql
   - Chat pro Geschenk + Plattform-Abfrage (WhatsApp, Signal, …, ausgegraut wenn gewählt)
-- [ ] **Paket 8 – 1.12 Chats Teil 2** (S) [Claude]
+- [ ] **Paket 8 – 1.13 Chats Teil 2** (S) [Claude]
   - Gruppenchat und „ohne X“-Chats, Push bei neuer Nachricht
 
 ## Phase 3: Nach Weihnachten – Umbau zur Wunschlisten-App für alle Anlässe
@@ -76,8 +78,8 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - [ ] **Paket 9 – 2.0 Anlässe** (L) [Claude], schema.sql
   - Anlass pro Gruppe (Weihnachten, Geburtstag, Hochzeit, …), Geburtstage im Profil, Countdown allgemein, Erinnerungen (Push-Erinnerung ist bis dahin fest auf Heiligabend), neutrales App-Symbol (dann auch Kurzbefehl-Symbole und Screenshots neu)
 - [ ] **[Du]** Vorher festlegen: Wie sieht das Standarddesign aus, welche zwei Zusatzthemen (Namen, Stimmung)?
-- [ ] **Paket 10 – 2.1 Farbthemen** (M) [Claude], schema.sql
-  - Standard + Weihnachten + 2 weitere, hell/dunkel, Auswahl mit Vorschau unter Konto
+- [ ] **Paket 10 – 2.1 Farbthemen** (S) [Claude], schema.sql – größtenteils mit 1.10 erledigt
+  - Rest: weitere Themen, Wahl im Profil speichern (geräteübergreifend), Thema pro Anlass
 - [ ] **Paket 11 – 2.2 Steckbrief + „Früh dran“** (M) [Claude], schema.sql
 - [ ] **Paket 12 – 2.3 Private Ideenliste** (S) [Claude], schema.sql
 - [ ] **Paket 13 – 2.4 Öffnen für Freunde** (M) [Claude + Du]
@@ -96,4 +98,4 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - Anlässe kommen vor Farbthemen, weil dabei das fest eingebaute Weihnachten verschwindet.
 - Öffnen für Freunde erst, wenn Datenschutz und Schutz vor Spam stehen.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann bauen wir Paket 5b (Pop-Design).“ (die zwei Design-Screenshots anhängen)
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann bauen wir Paket 6 (Gemeinsam schenken).“
