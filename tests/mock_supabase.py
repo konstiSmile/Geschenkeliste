@@ -1,13 +1,10 @@
-"""Kleine Supabase-Attrappe für Playwright: Auth wird vorgetäuscht (Code 123456),
+"""Kleine Supabase-Attrappe für Playwright: Auth wird nachgebaut (anonym + Passwort gegen auth.users),
 REST-Anfragen laufen als echtes SQL mit Zugriffsregeln gegen das lokale Postgres (Datenbank gl)."""
 import json, subprocess, uuid
 from urllib.parse import urlparse, parse_qs
 
 PSQL = ['psql', '-h', '/tmp', '-p', '5544', '-U', 'postgres', '-d', 'gl', '-tAq', '-v', 'ON_ERROR_STOP=1']
-CODE = '123456'
 log = []
-pending = {}    # uid -> neue Mail (wartet auf Bestätigung)
-confirmed = {}  # uid -> bestätigte Mail
 
 
 def lit(v):
@@ -25,8 +22,8 @@ def ident(s):
     return s
 
 
-def sql_as(uid, sql):
-    pre = f"begin; set local role authenticated; set local request.jwt.claim.sub = '{uid}';\n"
+def sql_as(uid, sql, role='authenticated'):
+    pre = f"begin; set local role {role}; set local request.jwt.claim.sub = '{uid or ''}';\n"
     p = subprocess.run(PSQL, input=pre + f"with t as ({sql}) select coalesce(json_agg(t), '[]') from t;\ncommit;",
                        capture_output=True, text=True)
     if p.returncode:
@@ -34,15 +31,9 @@ def sql_as(uid, sql):
     return json.loads(p.stdout), None
 
 
-def uid_for(email):
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, email))
-
-
-def session(email):
-    u = uid_for(email)
-    subprocess.run(PSQL, input=f"insert into auth.users values ('{u}', {lit(email)}) on conflict do nothing;", capture_output=True, text=True)
-    return {'access_token': 'tok-' + u, 'refresh_token': 'ref-' + u, 'expires_in': 3600,
-            'user': {'id': u, 'email': email}}
+def tokens(uid, email, anon):
+    return {'access_token': 'tok-' + uid, 'refresh_token': 'ref-' + uid, 'expires_in': 3600,
+            'user': {'id': uid, 'email': email, 'is_anonymous': anon}}
 
 
 def where(q):
@@ -70,37 +61,34 @@ def handle(route, request):
         return route.fulfill(status=204, headers={'access-control-allow-origin': '*',
                                                   'access-control-allow-headers': '*',
                                                   'access-control-allow-methods': '*'})
-    if path == '/auth/v1/otp':
-        return reply(200, {})
-    if path == '/auth/v1/verify':
-        if body.get('token_hash') == 'hash-' + CODE:
-            return reply(200, session('clara@x.de'))
-        if body.get('token') != CODE:
-            return reply(403, {'code': 403, 'error_code': 'otp_expired', 'msg': 'Token has expired or is invalid'})
-        return reply(200, session(body['email']))
     if path == '/auth/v1/signup':
         u = str(uuid.uuid4())
-        subprocess.run(PSQL, input=f"insert into auth.users values ('{u}', null);", capture_output=True, text=True)
-        return reply(200, {'access_token': 'tok-' + u, 'refresh_token': 'ref-' + u, 'expires_in': 3600,
-                           'user': {'id': u, 'email': '', 'is_anonymous': True}})
-    if path == '/auth/v1/user':
-        a = request.headers.get('authorization', '')
-        u = a[len('Bearer tok-'):]
-        if request.method == 'PUT':
-            pending[u] = body['email']
-            return reply(200, {'id': u, 'email': '', 'new_email': body['email'], 'is_anonymous': True})
-        return reply(200, {'id': u, 'email': confirmed.get(u, ''), 'is_anonymous': u not in confirmed})
+        subprocess.run(PSQL, input=f"insert into auth.users (id, is_anonymous) values ('{u}', true);", capture_output=True, text=True)
+        return reply(200, tokens(u, '', True))
+    if path == '/auth/v1/token' and q.get('grant_type') == ['password']:
+        p = subprocess.run(PSQL, input=f"select id from auth.users where email = lower({lit(body['email'])}) "
+                           f"and email_confirmed_at is not null "
+                           f"and encrypted_password = extensions.crypt({lit(body['password'])}, encrypted_password);",
+                           capture_output=True, text=True)
+        uid = p.stdout.strip()
+        if not uid:
+            return reply(400, {'code': 400, 'error_code': 'invalid_credentials', 'msg': 'Invalid login credentials'})
+        return reply(200, tokens(uid, body['email'].lower(), False))
     if path == '/auth/v1/logout':
         return reply(204, {})
     auth = request.headers.get('authorization', '')
-    if not auth.startswith('Bearer tok-'):
+    role = 'authenticated'
+    if auth.startswith('Bearer tok-'):
+        uid = auth[len('Bearer tok-'):]
+    elif path.startswith('/rest/v1/rpc/'):
+        uid, role = None, 'anon'
+    else:
         return reply(401, {'message': 'JWT missing'})
-    uid = auth[len('Bearer tok-'):]
 
     if path.startswith('/rest/v1/rpc/'):
         fn = ident(path.rsplit('/', 1)[1])
         args = ', '.join(f'{ident(k)} => {lit(v)}' for k, v in (body or {}).items())
-        rows, err = sql_as(uid, f'select public.{fn}({args}) as r')
+        rows, err = sql_as(uid, f'select public.{fn}({args}) as r', role)
     else:
         table = ident(path.rsplit('/', 1)[1])
         w = where(q)

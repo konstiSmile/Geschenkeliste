@@ -36,7 +36,7 @@ def check(name, cond):
 
 
 A, B, C, D = (str(uuid.uuid4()) for _ in range(4))
-run('truncate auth.users cascade;')
+run('truncate auth.users, public.login_attempts cascade;')
 for u, n in ((A, 'Anna'), (B, 'Ben'), (C, 'Clara'), (D, 'Dora')):
     run(f"insert into auth.users values ('{u}', '{n.lower()}@x.de');")
     ok, _ = as_exec(u, f"insert into public.profiles (id, name) values ('{u}', '{n}')")
@@ -134,6 +134,126 @@ check('Freigabe für Freunde entfernt', r == [])
 ok, _ = as_user(D, f"select public.leave_group('{dg['id']}') as x")
 code_, out, _ = run(f"select count(*) from public.groups where id = '{dg['id']}'")
 check('Leere Gruppe wird gelöscht', out == '0')
+
+# ---------- Konto ohne Mail (1.5) ----------
+MAIL = '@nutzer.geschenkeliste.invalid'
+
+
+def rpc(uid, sql, role='authenticated'):
+    ok, r = as_user(uid, f'select {sql} as r', role=role)
+    return ok, (r[0]['r'] if ok else r)
+
+
+def pw_ok(uid, pw):
+    _, out, _ = run(f"select encrypted_password = extensions.crypt('{pw}', encrypted_password) from auth.users where id = '{uid}'")
+    return out == 't'
+
+
+def recover(user, code, pw, uid=None):
+    return rpc(uid, f"public.recover_account('{user}', '{code}', '{pw}')", role='authenticated' if uid else 'anon')[1]
+
+
+ok, code_a = rpc(A, "public.secure_account(' Anna ', 'geheim123')")
+check('Anna sichert Konto, Code 16 Zeichen ohne 0 O 1 I L', ok and len(code_a) == 16 and not set(code_a) & set('0O1IL'))
+_, out, _ = run(f"select email || '|' || (email_confirmed_at is not null) || '|' || is_anonymous from auth.users where id = '{A}'")
+check('Platzhalter-Mail bestätigt, nicht anonym', out == f'anna{MAIL}|true|false')
+check('Passwort als bcrypt gespeichert', pw_ok(A, 'geheim123'))
+_, out, _ = run(f"select count(*) from auth.identities where user_id = '{A}' and provider = 'email'")
+check('Identität für Anmeldung angelegt', out == '1')
+ok, _ = rpc(A, "public.secure_account('anna2', 'geheim123')")
+check('Zweites Sichern verboten', not ok)
+ok, err = rpc(B, "public.secure_account('ANNA', 'geheim123')")
+check('Benutzername vergeben (Groß/klein egal)', not ok and 'vergeben' in err)
+ok, err = rpc(B, "public.secure_account('b', 'geheim123')")
+check('Benutzername zu kurz', not ok and 'ungültig' in err)
+ok, err = rpc(B, "public.secure_account('ben mit leer', 'geheim123')")
+check('Benutzername mit Leerzeichen', not ok and 'ungültig' in err)
+ok, err = rpc(B, "public.secure_account('ben', 'kurz')")
+check('Passwort zu kurz', not ok and 'zu kurz' in err)
+ok, code_b = rpc(B, "public.secure_account('ben', 'bengeheim1')")
+check('Ben sichert Konto', ok)
+
+ok, r = as_user(A, 'select username from public.accounts')
+check('Anna sieht nur eigenes Konto', ok and [x['username'] for x in r] == ['anna'])
+ok, _ = as_exec(A, "update public.accounts set username = 'x' where user_id = auth.uid()")
+check('Benutzername nicht direkt änderbar', not ok)
+for t in ('recovery_codes', 'reset_codes', 'login_attempts', 'app_admins'):
+    ok, _ = as_user(A, f'select * from public.{t}')
+    check(f'{t} nicht lesbar', not ok)
+ok, _ = as_exec(A, f"insert into public.app_admins values ('{A}')")
+check('app_admins nicht beschreibbar', not ok)
+ok, _ = as_user(None, 'select * from public.accounts', role='anon')
+check('accounts ohne Anmeldung nicht lesbar', not ok)
+ok, _ = rpc(None, "public.secure_account('x1x', 'geheim123')", role='anon')
+check('Sichern ohne Anmeldung verboten', not ok)
+ok, _ = rpc(None, "public.set_password('" + A + "', 'gehackt123')", role='anon')
+ok2, _ = rpc(A, "public.set_password('" + B + "', 'gehackt123')")
+check('Interne Funktionen nicht aufrufbar', not ok and not ok2 and pw_ok(B, 'bengeheim1'))
+
+# Passwort vergessen
+r = recover('anna', 'FALSCHFALSCHFALS', 'neuespw123')
+check('Falscher Code: noch 4 Versuche', r == {'ok': False, 'error': 'falsch', 'left': 4})
+r = recover('niemand', code_a, 'neuespw123')
+check('Unbekannter Name: gleiche Antwort', r['error'] == 'falsch')
+r = recover('anna', code_a, 'kurz')
+check('Neues Passwort zu kurz', r['error'] == 'passwort')
+for _ in range(3):
+    r = recover('anna', 'FALSCHFALSCHFALS', 'neuespw123')
+check('Vierter Fehler: noch 1 Versuch', r.get('left') == 1)
+r = recover('anna', 'FALSCHFALSCHFALS', 'neuespw123')
+check('Fünfter Fehler: gesperrt', r['error'] == 'gesperrt' and r.get('until'))
+r = recover('anna', code_a, 'neuespw123')
+check('Richtiger Code während Sperre abgelehnt', r['error'] == 'gesperrt' and pw_ok(A, 'geheim123'))
+run("update public.login_attempts set locked_until = now() - interval '1 minute' where username = 'anna'")
+fmt = '-'.join(code_a[i:i + 4] for i in range(0, 16, 4)).lower()
+r = recover('Anna', fmt, 'neuespw123')
+check('Nach der Sperre: Code mit Strichen und klein klappt', r['ok'] and len(r['code']) == 16 and r['code'] != code_a)
+check('Neues Passwort gesetzt', pw_ok(A, 'neuespw123'))
+code_a2 = r['code']
+r = recover('anna', code_a, 'nochmal1234')
+check('Alter Code danach ungültig', r['error'] == 'falsch')
+ok, r = as_user(A, 'select reset_notice from public.accounts')
+check('Kein Rücksetz-Hinweis bei eigenem Code', r[0]['reset_notice'] is False)
+ok, code_a3 = rpc(A, 'public.new_recovery_code()')
+r = recover('anna', code_a2, 'nochmal1234')
+check('Neuer Code erzeugt, vorheriger ungültig', ok and r['error'] == 'falsch')
+ok, _ = rpc(C, 'public.new_recovery_code()')
+check('Neuer Code ohne gesichertes Konto verboten', not ok)
+
+# Admin
+ok, r = rpc(A, 'public.is_app_admin()')
+check('Anna ist kein Admin', ok and r is False)
+ok, _ = rpc(A, "public.admin_find_users('ben')")
+ok2, _ = rpc(A, f"public.admin_reset('{B}')")
+check('Nicht-Admin kann nicht suchen und nicht zurücksetzen', not ok and not ok2)
+run(f"insert into public.app_admins values ('{D}')")
+ok, r = rpc(D, 'public.is_app_admin()')
+check('Dora ist Admin', ok and r is True)
+ok, hits = rpc(D, "public.admin_find_users('BE')")
+check('Admin findet Ben', ok and [h['username'] for h in hits] == ['ben'] and hits[0]['name'] == 'Ben')
+ok, hits = rpc(D, "public.admin_find_users('%')")
+check('Prozentzeichen wird wörtlich gesucht', ok and hits == [])
+for _ in range(5):
+    recover('ben', 'FALSCHFALSCHFALS', 'xxxxxxxx1')
+ok, rs = rpc(D, f"public.admin_reset('{B}')")
+check('Admin erzeugt Rücksetz-Code', ok and len(rs['code']) == 16 and rs['username'] == 'ben')
+ok, hits = rpc(D, "public.admin_find_users('ben')")
+check('Suche zeigt offenen Rücksetz-Code', hits[0]['reset_open'] is True)
+ok, _ = rpc(D, f"public.admin_reset('{C}')")
+check('Konto ohne Benutzername nicht zurücksetzbar', not ok)
+r = recover('ben', rs['code'], 'benneu12345')
+check('Rücksetz-Code hebt Sperre auf und setzt Passwort', r['ok'] and pw_ok(B, 'benneu12345'))
+ok, r2 = as_user(B, 'select reset_notice, reset_at from public.accounts')
+check('Ben bekommt Rücksetz-Hinweis', r2[0]['reset_notice'] is True and r2[0]['reset_at'])
+r = recover('ben', rs['code'], 'benneu99999')
+check('Rücksetz-Code nur einmal gültig', r['error'] == 'falsch')
+ok, _ = rpc(B, 'public.dismiss_reset_notice()')
+ok, r2 = as_user(B, 'select reset_notice from public.accounts')
+check('Hinweis weggeklickt', r2[0]['reset_notice'] is False)
+ok, rs = rpc(D, f"public.admin_reset('{B}')")
+run(f"update public.reset_codes set expires_at = now() - interval '1 minute' where user_id = '{B}'")
+r = recover('ben', rs['code'], 'benneu99999')
+check('Abgelaufener Rücksetz-Code abgelehnt', r['error'] == 'falsch' and pw_ok(B, 'benneu12345'))
 
 print('\nAlle Tests grün' if not fails else f'\n{fails} Fehler')
 sys.exit(1 if fails else 0)

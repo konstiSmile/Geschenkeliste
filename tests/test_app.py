@@ -1,4 +1,4 @@
-"""Ende-zu-Ende-Test der App mit zwei Nutzern (Anna, Ben) gegen die Supabase-Attrappe.
+"""Ende-zu-Ende-Test der App mit mehreren Nutzern gegen die Supabase-Attrappe.
 
 Vorher: Postgres mit Datenbank gl (supabase_stub.sql + supabase/schema.sql) und
         python3 -m http.server 8766 im Repo-Ordner.
@@ -13,7 +13,7 @@ import mock_supabase as mock
 BASE = 'http://localhost:8766/'
 SHOTS = sys.argv[1] if len(sys.argv) > 1 else None
 fails = 0
-subprocess.run(mock.PSQL, input='truncate auth.users cascade;', capture_output=True, text=True)
+subprocess.run(mock.PSQL, input='truncate auth.users, public.login_attempts cascade;', capture_output=True, text=True)
 
 
 def check(name, cond):
@@ -38,19 +38,15 @@ def start_anon(p, name, url=BASE):
     p.click('form[data-form=start] button')
 
 
-def login(p, email, name, url=BASE):
-    p.goto(url)
-    p.fill('input[name=email]', email)
-    p.click('text=Anmelde-Link schicken')
-    p.wait_for_selector('input[name=code]')
-    p.fill('input[name=code]', '000000')
-    p.click('button:has-text("Anmelden")')
-    expect(p.locator('#toast')).to_contain_text('Code falsch')
-    p.fill('input[name=code]', '123 456')
-    p.click('button:has-text("Anmelden")')
-    p.wait_for_selector('text=Wie heißt du?')
-    p.fill('input[name=name]', name)
-    p.click('text=Weiter')
+def toast(p, text):
+    expect(p.locator('#toast')).to_contain_text(text)
+
+
+def confirm_code(p):
+    code = p.inner_text('#rcode').replace('-', '').strip()
+    p.fill('input[name=last4]', code[-4:].lower())
+    p.click('form[data-form=confirmcode] button')
+    return code
 
 
 def overflow(p):
@@ -114,7 +110,7 @@ with sync_playwright() as pw:
 
     # Ben tritt per Einladungslink bei
     b = newpage(browser, errs)
-    login(b, 'ben@x.de', 'Ben', BASE + '#/join/' + code)
+    start_anon(b, 'Ben', BASE + '#/join/' + code)
     b.wait_for_selector('h1:has-text("Familie")')
     check('Ben ist per Link beigetreten', b.locator('a.person:has-text("Anna")').count() == 1)
     b.click('a.person:has-text("Anna")')
@@ -155,14 +151,8 @@ with sync_playwright() as pw:
 
     # Dritte Person mit Code-Eingabe sieht Bens Reservierung
     c = newpage(browser, errs)
-    c.goto(BASE)
-    c.fill('input[name=email]', 'clara@x.de')
-    c.fill('form[data-form=start] input[name=name]', 'Clara')
-    c.click('text=Anmelde-Link schicken')
-    c.fill('input[name=code]', 'https://qbdpzamygonpruaafcrt.supabase.co/auth/v1/verify?token=hash-123456&type=magiclink&redirect_to=https://konstismile.github.io/Geschenkeliste/')
-    c.click('button:has-text("Anmelden")')
+    start_anon(c, 'Clara')
     c.wait_for_selector('h1:has-text("Hallo Clara")')
-    check('Anmeldung mit eingefügtem Link, Name von der Startseite übernommen', True)
     c.click('.tabs >> text=Gruppen')
     c.fill('input[name=code]', code.lower())
     c.click('button:has-text("Beitreten")')
@@ -200,21 +190,139 @@ with sync_playwright() as pw:
     a.wait_for_selector('h1:has-text("Meine Wunschliste")')
     check('Gelöscht', a.locator('text=Konzertkarte Jazz').count() == 0)
 
-    # Anna sichert ihr Konto
+    # Anna sichert ihr Konto mit Benutzername und Passwort
     a.goto(BASE + '#/')
     a.wait_for_selector('h1:has-text("Hallo Anna")')
     check('Hinweis „Konto sichern“ auf der Startseite', a.locator('.banner:has-text("Konto sichern")').count() == 1)
-    a.goto(BASE + '#/mehr')
-    a.fill('form[data-form=secure] input[name=email]', 'anna@x.de')
-    a.click('button:has-text("Sichern")')
-    a.wait_for_selector('text=Bestätigung ausstehend')
-    a.click('button:has-text("Prüfen")')
-    expect(a.locator('#toast')).to_contain_text('Noch nicht bestätigt')
-    uid = a.evaluate("JSON.parse(localStorage.getItem('geschenkeliste-v1')).session.user.id")
-    mock.confirmed[uid] = 'anna@x.de'
-    a.click('button:has-text("Prüfen")')
-    a.wait_for_selector('text=Angemeldet als anna@x.de')
-    check('Anna hat ihr Konto gesichert', a.locator('text=Konto sichern').count() == 0)
+    a.goto(BASE + '#/konto')
+    check('Schlüsselbund-Felder beim Sichern',
+          a.get_attribute('form[data-form=secure] input[name=username]', 'autocomplete') == 'username'
+          and a.get_attribute('form[data-form=secure] input[name=password]', 'autocomplete') == 'new-password')
+    a.fill('form[data-form=secure] input[name=username]', 'A')
+    a.fill('form[data-form=secure] input[name=password]', 'geheim123')
+    a.click('form[data-form=secure] button')
+    toast(a, '3 bis 24 Zeichen')
+    a.fill('form[data-form=secure] input[name=username]', ' Anna ')
+    check('Passwortfeld verlangt 8 Zeichen', a.get_attribute('form[data-form=secure] input[name=password]', 'minlength') == '8')
+    a.fill('form[data-form=secure] input[name=password]', 'geheim123')
+    a.click('form[data-form=secure] button')
+    a.wait_for_selector('#rcode')
+    code_a = a.inner_text('#rcode').replace('-', '').strip()
+    check('Wiederherstellungscode angezeigt (16 Zeichen, 4er-Gruppen)', len(code_a) == 16 and a.inner_text('#rcode').count('-') == 3)
+    shot(a, '7-code')
+    a.fill('input[name=last4]', 'XXXX')
+    a.click('form[data-form=confirmcode] button')
+    toast(a, 'stimmen nicht')
+    confirm_code(a)
+    toast(a, 'Konto gesichert')
+    a.wait_for_selector('text=Benutzername anna')
+    check('Konto zeigt Benutzername, kein Sichern mehr', a.locator('form[data-form=secure]').count() == 0)
+    check('Konto zeigt Wiederherstellungscode-Karte', a.locator('text=Neuen Code erzeugen').count() == 1)
+    uid_a = a.evaluate("JSON.parse(localStorage.getItem('geschenkeliste-v1')).session.user.id")
+    a.goto(BASE + '#/')
+    a.wait_for_selector('h1:has-text("Hallo Anna")')
+    check('Kein „Konto sichern“ mehr auf der Startseite', a.locator('.banner:has-text("Konto sichern")').count() == 0)
+
+    # Anna meldet sich auf einem zweiten Gerät an
+    e = newpage(browser, errs)
+    e.goto(BASE)
+    e.wait_for_selector('text=Mit Benutzername anmelden')
+    check('Schlüsselbund-Felder bei der Anmeldung',
+          e.get_attribute('form[data-form=signin] input[name=password]', 'autocomplete') == 'current-password')
+    e.fill('form[data-form=signin] input[name=username]', 'anna')
+    e.fill('form[data-form=signin] input[name=password]', 'falsch123')
+    e.click('form[data-form=signin] button')
+    toast(e, 'Benutzername oder Passwort falsch')
+    e.fill('form[data-form=signin] input[name=username]', '@Anna ')
+    e.fill('form[data-form=signin] input[name=password]', 'geheim123')
+    e.click('form[data-form=signin] button')
+    e.wait_for_selector('h1:has-text("Hallo Anna")')
+    uid_e = e.evaluate("JSON.parse(localStorage.getItem('geschenkeliste-v1')).session.user.id")
+    e.goto(BASE + '#/liste')
+    e.wait_for_selector('.wish:has-text("Kochbuch")')
+    check('Zweites Gerät: gleiches Konto, gleiche Liste', uid_e == uid_a)
+
+    # Passwort vergessen mit dem Wiederherstellungscode
+    f = newpage(browser, errs)
+    f.goto(BASE)
+    f.click('text=Passwort vergessen?')
+    f.wait_for_selector('h1:has-text("Passwort vergessen")')
+    shot(f, '9-vergessen')
+    f.fill('form[data-form=recover] input[name=username]', 'anna')
+    f.fill('form[data-form=recover] input[name=code]', 'AAAA-BBBB-CCCC-DDDD')
+    f.fill('form[data-form=recover] input[name=password]', 'neuespw123')
+    f.click('form[data-form=recover] button')
+    toast(f, 'Noch 4 Versuche')
+    f.fill('form[data-form=recover] input[name=code]', '-'.join(code_a[i:i + 4] for i in range(0, 16, 4)).lower())
+    f.click('form[data-form=recover] button')
+    f.wait_for_selector('h1:has-text("Neues Passwort gespeichert")')
+    code_a2 = confirm_code(f)
+    f.wait_for_selector('h1:has-text("Hallo Anna")')
+    check('Passwort vergessen: neuer Code, angemeldet', code_a2 != code_a)
+    check('Kein Rücksetz-Hinweis bei eigenem Code', f.locator('text=zurückgesetzt').count() == 0)
+    f.goto(BASE + '#/konto')
+    f.click('button:has-text("Abmelden")')
+    f.wait_for_selector('text=Mit Benutzername anmelden')
+    check('Gesichertes Konto: Abmelden ohne Warnung', f.locator('text=Trotzdem abmelden').count() == 0)
+    f.fill('form[data-form=signin] input[name=username]', 'anna')
+    f.fill('form[data-form=signin] input[name=password]', 'geheim123')
+    f.click('form[data-form=signin] button')
+    toast(f, 'Benutzername oder Passwort falsch')
+    f.fill('form[data-form=signin] input[name=password]', 'neuespw123')
+    f.click('form[data-form=signin] button')
+    f.wait_for_selector('h1:has-text("Hallo Anna")')
+    check('Altes Passwort ungültig, neues klappt', True)
+
+    # Neuer Wiederherstellungscode unter Konto
+    f.goto(BASE + '#/konto')
+    f.click('button:has-text("Neuen Code erzeugen")')
+    f.click('button:has-text("Jetzt neuen Code erzeugen")')
+    f.wait_for_selector('#rcode')
+    confirm_code(f)
+    toast(f, 'Neuer Code gespeichert')
+    f.wait_for_selector('text=Benutzername anna')
+    check('Neuer Code unter Konto', True)
+
+    # Ben sichert sein Konto, Anna wird Admin und setzt Ben zurück
+    b.goto(BASE + '#/konto')
+    b.fill('form[data-form=secure] input[name=username]', 'anna')
+    b.fill('form[data-form=secure] input[name=password]', 'bengeheim1')
+    b.click('form[data-form=secure] button')
+    toast(b, 'gibt es schon')
+    b.fill('form[data-form=secure] input[name=username]', 'ben')
+    b.click('form[data-form=secure] button')
+    b.wait_for_selector('#rcode')
+    confirm_code(b)
+    b.wait_for_selector('text=Benutzername ben')
+    check('Ben sieht keine Verwaltung', b.locator('h2:has-text("Verwaltung")').count() == 0)
+    subprocess.run(mock.PSQL, input="insert into public.app_admins select user_id from public.accounts where username = 'anna';", capture_output=True, text=True)
+    a.goto(BASE + '#/konto')
+    a.reload()
+    a.wait_for_selector('h2:has-text("Verwaltung")')
+    a.fill('form[data-form=adminsearch] input', 'BE')
+    a.click('form[data-form=adminsearch] button')
+    a.wait_for_selector('.row-item:has-text("ben")')
+    a.click('.row-item:has-text("ben") button:has-text("Zurücksetzen")')
+    a.click('.row-item:has-text("ben") button:has-text("Wirklich")')
+    a.wait_for_selector('#resetcode')
+    reset = a.inner_text('#resetcode').strip()
+    check('Admin bekommt Rücksetz-Code, Liste zeigt „Code offen“', len(reset) == 19 and a.locator('text=Code offen').count() == 1)
+    shot(a, '8-verwaltung')
+    g = newpage(browser, errs)
+    g.goto(BASE + '#/vergessen')
+    g.fill('form[data-form=recover] input[name=username]', 'ben')
+    g.fill('form[data-form=recover] input[name=code]', reset)
+    g.fill('form[data-form=recover] input[name=password]', 'benneu12345')
+    g.click('form[data-form=recover] button')
+    g.wait_for_selector('#rcode')
+    confirm_code(g)
+    g.wait_for_selector('.banner:has-text("zurückgesetzt")')
+    check('Ben sieht Hinweis „Zugang zurückgesetzt“', True)
+    shot(g, '10-hinweis')
+    g.click('[data-act=dismissreset]')
+    g.wait_for_selector('.banner:has-text("zurückgesetzt")', state='detached')
+    check('Hinweis weggeklickt', True)
+    g.close()
 
     # Name ändern, Gruppe verlassen, abmelden
     b.goto(BASE + '#/mehr')
@@ -229,7 +337,8 @@ with sync_playwright() as pw:
     c.wait_for_selector('text=Noch in keiner Gruppe')
     check('Clara hat Familie verlassen', True)
     c.goto(BASE + '#/mehr')
-    c.click('text=Abmelden')
+    c.click('button:has-text("Abmelden")')
+    c.click('text=Trotzdem abmelden')
     c.wait_for_selector('text=Wünsche teilen')
     check('Abgemeldet, kein Cache mehr', 'cache' not in c.evaluate("localStorage.getItem('geschenkeliste-v1') || ''"))
 
@@ -244,7 +353,7 @@ with sync_playwright() as pw:
     d.goto(BASE + '#/mehr')
     d.click('button:has-text("Abmelden")')
     d.wait_for_selector('text=Trotzdem abmelden')
-    check('Warnung beim Abmelden ohne Mail', True)
+    check('Warnung beim Abmelden ohne Benutzername', True)
     shot(d, '6-mehr-anon')
 
     # Start aus Cache ohne Netz: Daten bleiben sichtbar

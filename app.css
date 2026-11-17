@@ -248,12 +248,20 @@ form h2 { margin-top: 22px; }
 .features li > .ic { width: 38px; height: 38px; padding: 9px; border-radius: 11px; background: var(--gold-bg); color: var(--gold); stroke-width: 1.8; }
 .features span { display: flex; flex-direction: column; font-size: 14.5px; color: var(--text-2); line-height: 1.4; }
 .features b { color: var(--text); font-size: 15.5px; font-weight: 600; }
-.mailhead { display: flex; align-items: center; gap: 10px; }
-.mailhead .ic { color: var(--gold); }
-.mailhead b { flex: 1; font-weight: 600; }
-.badge { font-size: 12px; font-weight: 600; color: var(--green); background: var(--green-bg); padding: 3px 9px; border-radius: 99px; }
-.steps { margin: 0 0 18px; padding-left: 22px; color: var(--text-2); font-size: 15px; }
-.steps li + li { margin-top: 4px; }
+.cardhead { display: flex; align-items: center; gap: 10px; }
+.cardhead .ic { color: var(--gold); }
+.cardhead b { flex: 1; font-weight: 600; }
+.link.center { display: block; text-align: center; margin-left: auto; margin-right: auto; }
+.login .back { margin-top: 4px; }
+.login .title.xl + .lead { margin-top: -2px; }
+
+/* Wiederherstellungscode */
+.codecard { text-align: center; }
+.codecard .eyebrow { margin: 0; color: var(--text-2); font-weight: 500; }
+.code.big { font-size: 21px; letter-spacing: .04em; margin: 6px 0 14px; overflow-wrap: anywhere; user-select: all; -webkit-user-select: all; }
+.codecard .btnrow + .small { margin-top: 12px; }
+.codecard.stack > .code.big { margin-bottom: 0; }
+.banner .link { padding: 6px 4px; flex: none; }
 .version { text-align: center; color: var(--text-3); font-size: 13px; margin-top: 22px; }
 
 /* Meldung */

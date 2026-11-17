@@ -2,19 +2,22 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.4.1';
+const VERSION = '1.5';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
+const MAIL_DOMAIN = '@nutzer.geschenkeliste.invalid'; // nur intern, es wird nie eine Mail verschickt
+const USER_RE = /^[a-z0-9][a-z0-9._-]{2,23}$/;
 
 /* ---------- Speicher ---------- */
-let S = loadState();      // {session, loginEmail, loginSent, pendingJoin, cache}
+let S = loadState();      // {session, pendingJoin, pendingName, cache}
 let D = emptyData();      // Daten vom Server
 let busy = false;
 let ui = {};              // flüchtiger Zustand der Ansicht (offene Formulare, Löschbestätigung)
+let fresh = null;         // neu erzeugter Wiederherstellungscode {code, username, reason}, nur im Speicher
 
 function emptyData() {
-  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], at: 0, loaded: false };
+  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, at: 0, loaded: false };
 }
 function loadState() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; }
@@ -61,20 +64,39 @@ function inviteLink(code) {
   return location.origin + location.pathname + '#/join/' + code;
 }
 function fmtCode(c) { return c ? c.slice(0, 4) + '-' + c.slice(4) : ''; }
+function fmtRecovery(c) { return String(c || '').replace(/(.{4})(?=.)/g, '$1-'); }
+function normUser(u) { return String(u || '').trim().toLowerCase().replace(/^@/, ''); }
+function checkUser(u) {
+  if (!USER_RE.test(u)) throw new Error('Benutzername: 3 bis 24 Zeichen, nur Kleinbuchstaben, Ziffern, Punkt, Bindestrich und Unterstrich.');
+}
+function checkPw(pw) {
+  if (pw.length < 8) throw new Error('Das Passwort braucht mindestens 8 Zeichen.');
+}
+function fmtTime(ts) { return new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' }).format(new Date(ts)); }
+function fmtDay(ts) { return new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'long' }).format(new Date(ts)); }
+function needsSecure() { return D.loaded ? !D.account : !!(S.session && S.session.user.anon); }
 
 /* ---------- Supabase ---------- */
 function errText(j, status) {
   const m = j ? (j.message || j.msg || j.error_description || j.error || '') : '';
   const code = j && (j.code || j.error_code);
-  if (status === 429 || /rate limit|over_email_send_rate_limit/i.test(m + code)) return 'Zu viele Versuche. Bitte ein paar Minuten warten.';
-  if (/expired|invalid/i.test(m) && /token|otp/i.test(m)) return 'Code falsch oder abgelaufen.';
+  if (status === 429 || /rate limit/i.test(m + code)) return 'Zu viele Versuche. Bitte ein paar Minuten warten.';
+  if (code === 'invalid_credentials' || /invalid login credentials/i.test(m)) return 'Benutzername oder Passwort falsch.';
+  if (/Benutzername vergeben|accounts_username_key/.test(m)) return 'Diesen Benutzernamen gibt es schon.';
+  if (/Benutzername ungültig/.test(m)) return 'Benutzername: 3 bis 24 Zeichen, nur Kleinbuchstaben, Ziffern, Punkt, Bindestrich und Unterstrich.';
+  if (/Passwort zu kurz/.test(m)) return 'Das Passwort braucht mindestens 8 Zeichen.';
+  if (/Passwort zu lang/.test(m)) return 'Das Passwort ist zu lang.';
+  if (/Konto schon gesichert/.test(m)) return 'Dein Konto ist schon gesichert.';
+  if (/Keine Berechtigung/.test(m)) return 'Das darfst du leider nicht.';
+  if (/Kein gesichertes Konto/.test(m)) return 'Diese Person hat noch keinen Benutzernamen.';
+  if (/email logins are disabled/i.test(m)) return 'In Supabase ist der Anbieter „Email“ ausgeschaltet.';
+  if (/email not confirmed/i.test(m)) return 'Dieses Konto ist noch nicht freigeschaltet.';
+  if (/Could not find the function|PGRST202|42883/.test(m + code)) return 'Die Datenbank ist noch nicht aktualisiert (schema.sql ausführen).';
   if (code === '23505' || /duplicate key/i.test(m)) return 'Das hat gerade schon jemand anderes reserviert.';
   if (code === '42501' || /row-level security/i.test(m)) return 'Das darfst du leider nicht.';
   if (/Code nicht gefunden/.test(m)) return 'Diesen Gruppen-Code gibt es nicht.';
   if (/Zu viele Gruppen/.test(m)) return 'Du hast schon 20 Gruppen angelegt.';
   if (/anonymous/i.test(m) && /disabled/i.test(m)) return 'Start ohne Mail ist in Supabase noch nicht eingeschaltet.';
-  if (/already/i.test(m) && /regist|exist/i.test(m)) return 'Für diese Mail-Adresse gibt es schon ein Konto.';
-  if (/email/i.test(m) && /invalid/i.test(m)) return 'Diese Mail-Adresse sieht nicht richtig aus.';
   return m ? 'Fehler: ' + m : 'Fehler (' + status + ')';
 }
 
@@ -147,64 +169,40 @@ function logout(msg) {
   S = {};
   if (keep) S.pendingJoin = keep;
   D = emptyData();
+  fresh = null;
   ui = {};
   saveState();
   if (msg) toast(msg);
   go('#/');
 }
 
-/* Link aus der Mail: Tokens stehen im Adress-Hash */
-async function handleAuthHash() {
-  const h = location.hash;
-  if (h.includes('error_description=')) {
-    const p = new URLSearchParams(h.replace(/^#\/?/, ''));
-    history.replaceState(null, '', location.pathname);
-    toast(/expired|invalid/i.test(p.get('error_description')) ? 'Der Link ist abgelaufen. Fordere einen neuen Code an.' : p.get('error_description'));
-    return;
-  }
-  if (!h.includes('access_token=')) return;
-  const p = new URLSearchParams(h.replace(/^#\/?/, ''));
-  history.replaceState(null, '', location.pathname);
-  const token = p.get('access_token');
-  try {
-    const r = await fetch(SB_URL + '/auth/v1/user', { headers: { apikey: SB_KEY, Authorization: 'Bearer ' + token } });
-    if (!r.ok) throw new Error();
-    const user = await r.json();
-    setSession({ access_token: token, refresh_token: p.get('refresh_token'), expires_at: +p.get('expires_at') || 0, expires_in: +p.get('expires_in') || 3600, user });
-  } catch (e) {
-    toast('Anmeldung über den Link hat nicht geklappt. Gib den Code ein.');
-  }
+/* Alte Anmelde-Links (bis 1.4) hinterlassen Tokens im Adress-Hash: wegräumen */
+function cleanAuthHash() {
+  if (/access_token=|error_description=/.test(location.hash)) history.replaceState(null, '', location.pathname);
+}
+
+async function passwordLogin(username, password) {
+  const j = await sb('/auth/v1/token?grant_type=password', { method: 'POST', auth: false, body: { email: username + MAIL_DOMAIN, password } });
+  setSession(j);
 }
 
 /* ---------- Daten laden ---------- */
-async function refreshUser() {
-  if (!S.session || !S.session.user.anon) return false;
-  try {
-    const u = await sb('/auth/v1/user');
-    if (u && u.email) {
-      S.session.user = { id: u.id, email: u.email, anon: false };
-      delete S.secureSent;
-      saveState();
-      return true;
-    }
-  } catch (e) { /* später nochmal */ }
-  return false;
-}
-
 async function sync(quiet) {
   if (!S.session) return;
-  if (S.session.user.anon && S.secureSent) refreshUser();
   try {
-    const [profiles, groups, members, wishes, wg, res] = await Promise.all([
+    const [profiles, groups, members, wishes, wg, res, acc, admin] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
       sb('/rest/v1/groups?select=id,name,code,created_by,created_at&order=created_at'),
       sb('/rest/v1/members?select=group_id,user_id,joined_at&order=joined_at'),
       sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,created_at&order=created_at.desc'),
       sb('/rest/v1/wish_groups?select=wish_id,group_id'),
-      sb('/rest/v1/reservations?select=wish_id,user_id,status')
+      sb('/rest/v1/reservations?select=wish_id,user_id,status'),
+      // ab 1.5; vor dem Ausführen der neuen schema.sql fehlen sie, die App läuft trotzdem
+      sb('/rest/v1/accounts?select=username,reset_at,reset_notice').catch(() => null),
+      sb('/rest/v1/rpc/is_app_admin', { method: 'POST', body: {} }).catch(() => false)
     ]);
     if (!S.session) return;
-    D = { profiles, groups, members, wishes, wg, res, at: Date.now(), loaded: true };
+    D = { profiles, groups, members, wishes, wg, res, account: acc && acc[0] ? acc[0] : null, admin: admin === true, at: Date.now(), loaded: true };
     S.cache = { uid: me(), D };
     saveState();
     render();
@@ -241,7 +239,8 @@ const I = {
   lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   eyeoff: '<path d="M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c5 0 8.5 4.2 9.5 6-.4.8-1.3 2.1-2.6 3.3M6.6 7.6C4.6 8.9 3.2 10.8 2.5 12c1 1.8 4.5 6 9.5 6 1.4 0 2.7-.3 3.8-.9M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
-  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 6.5 8.5 6.5 8.5-6.5"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
+  shield: '<path d="M12 3 5 6v5c0 4.5 3 8.4 7 10 4-1.6 7-5.5 7-10V6z"/>',
   heart: '<path d="M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.4-7.5 10-7.5 10z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3M14 9l2 2"/>'
 };
@@ -336,28 +335,8 @@ function brand() {
 
 function viewLogin() {
   const invited = S.pendingJoin ? `<div class="banner">${icon('people')}<span><b>Du wurdest eingeladen</b><small>Nach der Anmeldung bist du automatisch in der Gruppe.</small></span></div>` : '';
-  if (S.loginSent && S.loginEmail) {
-    return `<main class="login">
-      ${brand()}
-      <h1 class="title xl">Schau in dein Postfach</h1>
-      <p class="lead">Wir haben einen Anmelde-Link an <b>${esc(S.loginEmail)}</b> geschickt.</p>
-      ${invited}
-      <ol class="steps">
-        <li>Öffne die Mail und drücke lang auf den Link.</li>
-        <li>Wähle „Link kopieren“.</li>
-        <li>Komm zurück und füge ihn hier ein.</li>
-      </ol>
-      <form data-form="verify" class="card stack">
-        <label>Link oder Code<input name="code" autocomplete="one-time-code" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://… oder 123456" required></label>
-        <button class="primary" type="submit">Anmelden</button>
-        <button type="button" class="secondary" data-act="pastelink">Kopierten Link einfügen</button>
-      </form>
-      <p class="muted small">Keine Mail bekommen? Sieh im Spam-Ordner nach. Der Link ist eine Stunde gültig.</p>
-      <div class="linkrow"><button class="link" data-act="resend">Erneut senden</button><button class="link" data-act="otheremail">Andere Adresse</button></div>
-    </main>`;
-  }
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone;
-  const tip = ios ? `<div class="banner">${icon('share')}<span><b>Tipp fürs iPhone</b><small>Erst über Teilen „Zum Home-Bildschirm“ hinzufügen und die App von dort öffnen. Safari und Home-Bildschirm speichern getrennt.</small></span></div>` : '';
+  const tip = ios ? `<div class="banner">${icon('share')}<span><b>Tipp fürs iPhone</b><small>Über Teilen „Zum Home-Bildschirm“ wird die Geschenkeliste zur App.</small></span></div>` : '';
   return `<main class="login">
     ${brand()}
     <h1 class="title xl">Wünsche teilen, ohne die Überraschung zu verderben.</h1>
@@ -367,17 +346,54 @@ function viewLogin() {
     </ul>
     ${invited}${tip}
     <form data-form="start" class="card stack">
-      <label>Wie heißt du?<input name="name" maxlength="40" placeholder="Vorname" required autocomplete="given-name" value="${esc(S.pendingName || '')}"></label>
+      <label>Neu hier? Wie heißt du?<input name="name" maxlength="40" placeholder="Vorname" required autocomplete="given-name" value="${esc(S.pendingName || '')}"></label>
       <button class="primary" type="submit">Weiter</button>
     </form>
-    <div class="card stack mailcard">
-      <div class="mailhead">${icon('mail')}<b>Mit E-Mail anmelden</b><span class="badge">Empfohlen</span></div>
-      <p class="small muted">Mit deiner Mail-Adresse kommst du auf jedem Gerät an deine Liste, auch nach einem Handywechsel. Ohne Mail bleibt alles auf diesem Gerät. Wir schicken nur Anmelde-Links.</p>
-      <form data-form="login" class="stack">
-        <input name="email" type="email" autocomplete="email" placeholder="name@beispiel.de" required value="${esc(S.loginEmail || '')}">
-        <button type="submit" class="secondary">Anmelde-Link schicken</button>
+    <div class="card stack">
+      <div class="cardhead">${icon('key')}<b>Mit Benutzername anmelden</b></div>
+      <form data-form="signin" class="stack">
+        <input name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="24" placeholder="Benutzername" required>
+        <input name="password" type="password" autocomplete="current-password" placeholder="Passwort" required>
+        <button type="submit" class="secondary">Anmelden</button>
       </form>
+      <a class="link center" href="#/vergessen">Passwort vergessen?</a>
     </div>
+  </main>`;
+}
+
+function viewForgot() {
+  return `<main class="login">
+    <a class="back" href="#/">${icon('back')}<span>Anmelden</span></a>
+    <h1 class="title xl">Passwort vergessen</h1>
+    <p class="lead">Mit deinem Wiederherstellungscode wählst du ein neues Passwort. Hast du den Code nicht mehr, bekommst du einen Rücksetz-Code von der Person, die die App verwaltet.</p>
+    <form data-form="recover" class="card stack">
+      <label>Benutzername<input name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="24" required></label>
+      <label>Code<input name="code" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="24" placeholder="XXXX-XXXX-XXXX-XXXX" required></label>
+      <label>Neues Passwort<input name="password" type="password" autocomplete="new-password" minlength="8" placeholder="Mindestens 8 Zeichen" required></label>
+      <button class="primary" type="submit">Passwort ändern</button>
+    </form>
+  </main>`;
+}
+
+function viewCode() {
+  const recovered = fresh.reason === 'recovered';
+  return `<main class="login">
+    ${brand()}
+    <h1 class="title xl">${recovered ? 'Neues Passwort gespeichert' : 'Dein Wiederherstellungs&shy;code'}</h1>
+    <p class="lead">${recovered ? 'Dein alter Code gilt nicht mehr. Hier ist dein neuer. ' : ''}Mit diesem Code kommst du wieder in dein Konto, falls du dein Passwort vergisst. Er wird nur jetzt angezeigt.</p>
+    <div class="card codecard">
+      <p class="eyebrow">Benutzername ${esc(fresh.username || '')}</p>
+      <p class="code big" id="rcode">${esc(fmtRecovery(fresh.code))}</p>
+      <div class="btnrow">
+        <button class="secondary withicon" data-act="copycode">${icon('copy')}Kopieren</button>
+        <button class="secondary withicon" data-act="sharecode">${icon('share')}Teilen</button>
+      </div>
+      <p class="small muted">Am besten über Teilen in den Notizen sichern.</p>
+    </div>
+    <form data-form="confirmcode" class="card stack">
+      <label>Zur Bestätigung die letzten 4 Zeichen<input name="last4" maxlength="4" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" required></label>
+      <button class="primary" type="submit">Weiter</button>
+    </form>
   </main>`;
 }
 
@@ -402,7 +418,9 @@ function viewHome() {
   const days = daysToXmas();
   const today = new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
 
-  const secure = S.session.user.anon ? `<a class="banner tap" href="#/konto">${icon('lock')}<span><b>Konto sichern</b><small>Mit E-Mail bleibt deine Liste auch beim Handywechsel erhalten.</small></span>${icon('chev', 'chev')}</a>` : '';
+  const acc = D.account;
+  const secure = needsSecure() ? `<a class="banner tap" href="#/konto">${icon('lock')}<span><b>Konto sichern</b><small>Mit Benutzername und Passwort kommst du auf jedem Gerät an deine Liste.</small></span>${icon('chev', 'chev')}</a>`
+    : (acc && acc.reset_notice ? `<div class="banner notice">${icon('shield')}<span><b>Dein Zugang wurde am ${esc(fmtDay(acc.reset_at))} zurückgesetzt</b><small>Du hast jetzt ein neues Passwort und einen neuen Wiederherstellungscode.</small></span><button class="link" data-act="dismissreset">OK</button></div>` : '');
   const hero = `<section class="hero">
       <div><p class="hero-num">${days === 0 ? 'Heute' : days}</p><p class="hero-label">${days === 0 ? 'ist Heiligabend' : (days === 1 ? 'Tag bis Heiligabend' : 'Tage bis Heiligabend')}</p></div>
       ${BAUBLE}
@@ -578,40 +596,73 @@ function viewPerson(gid, uid) {
 }
 
 function secureCard() {
-  if (S.secureSent) {
-    return `<div class="card stack mailcard">
-      <div class="mailhead">${icon('mail')}<b>Bestätigung ausstehend</b></div>
-      <p class="small muted">Wir haben eine Mail an <b>${esc(S.secureSent)}</b> geschickt. Tippe auf den Link darin. Es ist in Ordnung, wenn sich Safari öffnet. Danach hier auf „Prüfen“ tippen.</p>
-      <button class="primary" data-act="checkuser">Prüfen</button>
-      <button class="link" data-act="securecancel">Andere Adresse</button>
-    </div>`;
-  }
-  return `<div class="card stack mailcard">
-    <div class="mailhead">${icon('lock')}<b>Konto sichern</b></div>
-    <p class="small muted">Gerade hängt dein Konto an diesem Gerät. Mit deiner Mail-Adresse kannst du dich überall wieder anmelden.</p>
-    <form data-form="secure" class="inline"><input name="email" type="email" autocomplete="email" placeholder="name@beispiel.de" required><button class="primary" type="submit">Sichern</button></form>
+  return `<div class="card stack">
+    <div class="cardhead">${icon('lock')}<b>Konto sichern</b></div>
+    <p class="small muted">Gerade hängt dein Konto an diesem Gerät. Mit Benutzername und Passwort meldest du dich überall an, auch in Safari und in der App auf dem Home-Bildschirm.</p>
+    <form data-form="secure" class="stack">
+      <label>Benutzername<input name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="24" placeholder="z. B. ${esc(normUser(myName()).replace(/[^a-z0-9._-]/g, '') || 'anna')}" required></label>
+      <label>Passwort<input name="password" type="password" autocomplete="new-password" minlength="8" placeholder="Mindestens 8 Zeichen" required></label>
+      <button class="primary" type="submit">Konto sichern</button>
+    </form>
   </div>`;
 }
 
+function codeCard() {
+  return `<div class="card stack">
+    <div class="cardhead">${icon('key')}<b>Wiederherstellungscode</b></div>
+    <p class="small muted">Damit wählst du unter „Passwort vergessen“ ein neues Passwort. Ein neuer Code macht den alten ungültig.</p>
+    ${ui.confirmNewCode
+      ? `<button class="primary" data-act="newcode">Jetzt neuen Code erzeugen</button>`
+      : `<button class="secondary" data-act="asknewcode">Neuen Code erzeugen</button>`}
+  </div>`;
+}
+
+function adminSection() {
+  if (!D.admin) return '';
+  const hits = ui.adminHits;
+  const rr = ui.resetResult;
+  const result = rr ? `<div class="card stack codecard">
+      <p class="eyebrow">Rücksetz-Code für ${esc(rr.name || rr.username)}</p>
+      <p class="code big" id="resetcode">${esc(fmtRecovery(rr.code))}</p>
+      <button class="secondary withicon" data-act="copyreset">${icon('copy')}Kopieren</button>
+      <p class="small muted">Gültig bis ${esc(fmtDay(rr.expires_at))}, ${esc(fmtTime(rr.expires_at))} Uhr und nur einmal. Gib ihn persönlich weiter. Die Person tippt auf der Anmeldeseite auf „Passwort vergessen“ und wählt selbst ein neues Passwort.</p>
+    </div>` : '';
+  const list = !hits ? '' : (hits.length ? `<ul class="rows">${hits.map(h => {
+    const confirm = ui.confirmReset === h.user_id;
+    return `<li class="row-item"><span class="av c${hueIdx(h.user_id)}">${esc(initials(h.name || h.username))}</span>
+      <span class="row-main"><span class="row-title">${esc(h.name || h.username)}</span><span class="row-meta">${esc(h.username)}${h.reset_open ? ' · Code offen' : ''}</span></span>
+      <button class="${confirm ? 'primary' : 'secondary'} sm" data-act="${confirm ? 'adminreset' : 'askreset'}" data-id="${h.user_id}">${confirm ? 'Wirklich' : 'Zurücksetzen'}</button></li>`;
+  }).join('')}</ul>` : `<p class="empty-line">Niemand gefunden.</p>`);
+  return `<h2>Verwaltung</h2>
+    <div class="card stack">
+      <p class="small muted">Wer Passwort und Code verloren hat, bekommt hier einen Rücksetz-Code.</p>
+      <form data-form="adminsearch" class="inline"><input name="q" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Name oder Benutzername" value="${esc(ui.adminQuery || '')}" required><button class="secondary" type="submit">Suchen</button></form>
+    </div>
+    ${result}${list}`;
+}
+
 function viewAccount() {
-  const anon = S.session.user.anon;
+  const acc = D.account;
+  const unsafe = needsSecure();
   return shell('Konto', `
     <section class="profile">${avatar(me(), 'lg')}<div class="profile-main">
       <p class="row-title big">${esc(myName())}</p>
-      <p class="row-meta">${anon ? 'Ohne E-Mail angemeldet' : `Angemeldet als ${esc(S.session.user.email)}`}</p></div></section>
-    ${anon ? secureCard() : ''}
+      <p class="row-meta">${acc ? `Benutzername ${esc(acc.username)}` : 'Nur auf diesem Gerät angemeldet'}</p></div></section>
+    ${unsafe ? secureCard() : ''}
     <h2>Profil</h2>
     <div class="card"><form data-form="name" class="inline"><input name="name" maxlength="40" value="${esc(myName())}" required><button class="secondary" type="submit">Name ändern</button></form></div>
+    ${acc ? `<h2>Anmeldung</h2>${codeCard()}` : ''}
+    ${adminSection()}
     <h2>Datenschutz</h2>
     <div class="card prose">
-      <p>Name, Mail-Adresse, Gruppen, Wünsche und Reservierungen liegen in einer Datenbank bei Supabase in der EU.</p>
+      <p>Name, Benutzername, Gruppen, Wünsche und Reservierungen liegen in einer Datenbank bei Supabase in der EU. Passwort und Wiederherstellungscode werden nur verschlüsselt gespeichert.</p>
       <p>Andere sehen deinen Namen und die Wünsche, die du für ihre Gruppe freigibst. Reservierungen sieht der Beschenkte nie.</p>
       <p>Auf dem Gerät bleiben nur die Anmeldung und eine Kopie der Listen, damit die App schnell startet.</p>
     </div>
     <div class="card stack">
-      ${anon && ui.confirmLogout
-        ? `<p class="small">Ohne Mail-Adresse kommst du danach nicht mehr in dieses Konto zurück. Deine Liste wäre verloren.</p><button class="danger" data-act="logout">Trotzdem abmelden</button>`
-        : `<button class="ghost danger-text" data-act="${anon ? 'asklogout' : 'logout'}">Abmelden</button>`}
+      ${unsafe && ui.confirmLogout
+        ? `<p class="small">Ohne Benutzername und Passwort kommst du danach nicht mehr in dieses Konto zurück. Deine Liste wäre verloren.</p><button class="danger" data-act="logout">Trotzdem abmelden</button>`
+        : `<button class="ghost danger-text" data-act="${unsafe ? 'asklogout' : 'logout'}">Abmelden</button>`}
     </div>
     <p class="version">Geschenkeliste ${VERSION}</p>`, { tab: 'acc' });
 }
@@ -632,7 +683,8 @@ function render() {
     parts = [];
     if (S.session && D.loaded) doPendingJoin();
   }
-  if (!S.session) { app.innerHTML = viewLogin(); return; }
+  if (!S.session) { app.innerHTML = parts[0] === 'vergessen' ? viewForgot() : viewLogin(); return; }
+  if (fresh) { app.innerHTML = viewCode(); window.scrollTo(0, 0); return; }
   const prof = D.profiles.find(x => x.id === me());
   if (D.loaded && (!prof || !prof.name)) { app.innerHTML = S.pendingName ? '<p class="boot">Lädt …</p>' : viewName(); return; }
   if (!D.loaded) { app.innerHTML = '<p class="boot">Lädt …</p>'; return; }
@@ -688,52 +740,59 @@ const forms = {
     saveState();
     await afterLogin();
   },
-  async secure(f) {
-    const email = f.email.value.trim().toLowerCase();
-    await sb('/auth/v1/user?redirect_to=' + encodeURIComponent(location.origin + location.pathname), { method: 'PUT', body: { email } });
-    S.secureSent = email;
+  async signin(f) {
+    const username = normUser(f.username.value);
+    const pw = f.password.value;
+    if (!username || !pw) return;
+    await passwordLogin(username, pw);
+    delete S.pendingName;
     saveState();
-    render();
-  },
-  async login(f) {
-    const nm = $('form[data-form=start] input[name=name]');
-    if (nm && nm.value.trim()) S.pendingName = nm.value.trim();
-    const email = f.email.value.trim().toLowerCase();
-    await sb('/auth/v1/otp?redirect_to=' + encodeURIComponent(location.origin + location.pathname), { method: 'POST', auth: false, body: { email, create_user: true } });
-    S.loginEmail = email;
-    S.loginSent = Date.now();
-    saveState();
-    render();
-  },
-  async verify(f) {
-    const raw = f.code.value.trim();
-    let j;
-    const m = raw.match(/[?&#]token=([^&#\s]+)/);
-    if (m) {
-      // eingefügter Link aus der Mail: enthält einen gehashten Token
-      const tm = raw.match(/[?&#]type=([a-z_]+)/);
-      const type = tm ? tm[1] : 'magiclink';
-      const token_hash = decodeURIComponent(m[1]);
-      try {
-        j = await sb('/auth/v1/verify', { method: 'POST', auth: false, body: { type, token_hash } });
-      } catch (e) {
-        try { j = await sb('/auth/v1/verify', { method: 'POST', auth: false, body: { type: 'email', token_hash } }); } catch (e2) { throw new Error('Der Link ist abgelaufen oder schon benutzt. Fordere einen neuen an.'); }
-      }
-      setSession(j);
-      await afterLogin();
-      return;
-    }
-    if (/^https?:/i.test(raw)) throw new Error('Das ist nicht der Anmelde-Link aus der Mail.');
-    const token = raw.replace(/\D/g, '');
-    if (token.length < 6) throw new Error('Der Code hat mindestens 6 Ziffern.');
-    try {
-      j = await sb('/auth/v1/verify', { method: 'POST', auth: false, body: { type: 'email', email: S.loginEmail, token } });
-    } catch (e) {
-      // ältere Einstellung: neue Konten bekommen eine Bestätigungs-Mail
-      try { j = await sb('/auth/v1/verify', { method: 'POST', auth: false, body: { type: 'signup', email: S.loginEmail, token } }); } catch (e2) { throw e; }
-    }
-    setSession(j);
     await afterLogin();
+  },
+  async secure(f) {
+    const username = normUser(f.username.value);
+    const pw = f.password.value;
+    checkUser(username);
+    checkPw(pw);
+    const code = await sb('/rest/v1/rpc/secure_account', { method: 'POST', body: { p_username: username, p_password: pw } });
+    fresh = { code, username, reason: 'secured' };
+    try { await passwordLogin(username, pw); } catch (e) { toast(e.message); }
+    render();
+    sync(true);
+  },
+  async recover(f) {
+    const username = normUser(f.username.value);
+    const pw = f.password.value;
+    checkPw(pw);
+    const r = await sb('/rest/v1/rpc/recover_account', { method: 'POST', auth: false, body: { p_username: username, p_code: f.code.value, p_password: pw } });
+    if (!r || !r.ok) {
+      const e = r && r.error;
+      if (e === 'gesperrt') throw new Error(`Zu viele Fehlversuche. Versuch es ab ${fmtTime(r.until)} Uhr nochmal.`);
+      if (e === 'passwort') throw new Error('Das Passwort braucht mindestens 8 Zeichen.');
+      if (e === 'passwort_lang') throw new Error('Das Passwort ist zu lang.');
+      throw new Error(`Benutzername oder Code falsch. Noch ${plural(r ? r.left : 0, 'Versuch', 'Versuche')}.`);
+    }
+    await passwordLogin(username, pw);
+    fresh = { code: r.code, username, reason: 'recovered' };
+    delete S.pendingName;
+    saveState();
+    history.replaceState(null, '', location.pathname + '#/');
+    await afterLogin();
+  },
+  async confirmcode(f) {
+    const last = f.last4.value.trim().toUpperCase();
+    if (!fresh || last !== fresh.code.slice(-4)) throw new Error('Die letzten 4 Zeichen stimmen nicht.');
+    const reason = fresh.reason;
+    fresh = null;
+    toast(reason === 'secured' ? 'Konto gesichert.' : 'Neuer Code gespeichert.');
+    if (S.pendingJoin) await doPendingJoin(); else render();
+  },
+  async adminsearch(f) {
+    ui.adminQuery = f.q.value.trim();
+    ui.adminHits = await sb('/rest/v1/rpc/admin_find_users', { method: 'POST', body: { p_query: ui.adminQuery } });
+    delete ui.confirmReset;
+    delete ui.resetResult;
+    render();
   },
   async name(f) {
     const name = f.name.value.trim();
@@ -787,26 +846,36 @@ const forms = {
 
 const acts = {
   sync: () => sync(),
-  resend: async () => {
-    await sb('/auth/v1/otp?redirect_to=' + encodeURIComponent(location.origin + location.pathname), { method: 'POST', auth: false, body: { email: S.loginEmail, create_user: true } });
-    toast('Neuer Code ist unterwegs.');
-  },
-  pastelink: async () => {
-    let t = '';
-    try { t = await navigator.clipboard.readText(); } catch (e) { /* nicht erlaubt */ }
-    const inp = $('input[name=code]');
-    if (!t) { inp.focus(); toast('Ins Feld tippen und „Einsetzen“ wählen.'); return; }
-    inp.value = t.trim();
-    await forms.verify(inp.form);
-  },
   asklogout: async () => { ui.confirmLogout = 1; render(); },
-  checkuser: async () => {
-    const ok = await refreshUser();
-    toast(ok ? 'Konto gesichert.' : 'Noch nicht bestätigt. Hast du auf den Link in der Mail getippt?');
+  copycode: async () => copyText(fmtRecovery(fresh.code), 'Code kopiert.'),
+  sharecode: async () => {
+    const text = `Geschenkeliste\nBenutzername: ${fresh.username}\nWiederherstellungscode: ${fmtRecovery(fresh.code)}`;
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Geschenkeliste Wiederherstellungscode', text }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    await copyText(text, 'Code kopiert.');
+  },
+  asknewcode: async () => { ui.confirmNewCode = 1; render(); },
+  newcode: async () => {
+    const code = await sb('/rest/v1/rpc/new_recovery_code', { method: 'POST', body: {} });
+    ui = {};
+    fresh = { code, username: D.account ? D.account.username : '', reason: 'newcode' };
     render();
   },
-  securecancel: async () => { delete S.secureSent; saveState(); render(); },
-  otheremail: async () => { delete S.loginSent; saveState(); render(); },
+  dismissreset: async () => {
+    await sb('/rest/v1/rpc/dismiss_reset_notice', { method: 'POST', body: {} });
+    await sync(true);
+  },
+  askreset: async el => { ui.confirmReset = el.dataset.id; render(); },
+  adminreset: async el => {
+    const h = (ui.adminHits || []).find(x => x.user_id === el.dataset.id) || {};
+    const r = await sb('/rest/v1/rpc/admin_reset', { method: 'POST', body: { p_user: el.dataset.id } });
+    ui.resetResult = Object.assign({ name: h.name }, r);
+    delete ui.confirmReset;
+    h.reset_open = true;
+    render();
+  },
+  copyreset: async () => copyText(fmtRecovery(ui.resetResult.code), 'Code kopiert.'),
   logout: async () => {
     try { await sb('/auth/v1/logout', { method: 'POST' }); } catch (e) { /* egal */ }
     logout('Abgemeldet.');
@@ -852,6 +921,10 @@ const acts = {
     toast('Wieder frei.');
   }
 };
+
+async function copyText(t, msg) {
+  try { await navigator.clipboard.writeText(t); toast(msg); } catch (e) { toast('Kopieren ging nicht. Bitte abschreiben.'); }
+}
 
 async function afterLogin() {
   const c = S.cache;
@@ -900,7 +973,8 @@ document.addEventListener('visibilitychange', () => {
 });
 
 (async function start() {
-  await handleAuthHash();
+  cleanAuthHash();
+  ['loginEmail', 'loginSent', 'secureSent'].forEach(k => delete S[k]); // Reste der Mail-Anmeldung bis 1.4
   if (S.session && S.cache && S.cache.uid === me()) {
     D = Object.assign(emptyData(), S.cache.D, { at: 0 });
   }
