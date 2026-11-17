@@ -1,4 +1,4 @@
--- Geschenkeliste – Datenbank, Stand Version 1.6 (Wichteln)
+-- Geschenkeliste – Datenbank, Stand Version 1.7 (Mehr am Wunsch)
 -- Im Supabase SQL Editor komplett einfügen und „Run“ drücken.
 -- Das Skript darf mehrfach ausgeführt werden (bestehende Daten bleiben erhalten).
 
@@ -36,6 +36,18 @@ create table if not exists public.wishes (
   created_at timestamptz not null default now()
 );
 create index if not exists wishes_owner_idx on public.wishes(owner);
+
+-- Seit 1.7: Preis, Kategorie, Wichtigkeit, „Hab ich schon“
+alter table public.wishes add column if not exists price numeric(9,2);
+alter table public.wishes add column if not exists category text;
+alter table public.wishes add column if not exists priority smallint not null default 2;
+alter table public.wishes add column if not exists have_at timestamptz;  -- gesetzt = „Hab ich schon“
+alter table public.wishes drop constraint if exists wishes_price_ok;
+alter table public.wishes add constraint wishes_price_ok check (price is null or (price >= 0 and price <= 1000000));
+alter table public.wishes drop constraint if exists wishes_category_ok;
+alter table public.wishes add constraint wishes_category_ok check (category is null or category ~ '^[a-z]{2,20}$');
+alter table public.wishes drop constraint if exists wishes_priority_ok;
+alter table public.wishes add constraint wishes_priority_ok check (priority between 1 and 3);
 
 -- Freigabe pro Gruppe (nur genutzt, wenn all_groups = false)
 create table if not exists public.wish_groups (
@@ -85,6 +97,12 @@ language sql stable security definer set search_path = '' as $$
           and (x.all_groups or exists (
             select 1 from public.wish_groups wg
             where wg.wish_id = x.id and wg.group_id = mo.group_id)))));
+$$;
+
+-- Seit 1.7: Wunsch ist noch offen (nicht „Hab ich schon“)
+create or replace function public.wish_open(w uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.wishes where id = w and have_at is null);
 $$;
 
 create or replace function public.new_code() returns text
@@ -221,7 +239,8 @@ drop policy if exists "reservierung löschen" on public.reservations;
 create policy "reservierung lesen" on public.reservations for select to authenticated
   using (public.can_see_wish(wish_id) and not public.is_wish_owner(wish_id));
 create policy "reservierung anlegen" on public.reservations for insert to authenticated
-  with check (user_id = auth.uid() and public.can_see_wish(wish_id) and not public.is_wish_owner(wish_id));
+  with check (user_id = auth.uid() and public.can_see_wish(wish_id) and not public.is_wish_owner(wish_id)
+    and public.wish_open(wish_id));
 create policy "reservierung ändern" on public.reservations for update to authenticated
   using (user_id = auth.uid())
   with check (user_id = auth.uid() and public.can_see_wish(wish_id) and not public.is_wish_owner(wish_id));
@@ -237,10 +256,10 @@ grant select on public.groups, public.members to authenticated;
 grant select, insert, update, delete on public.wishes, public.wish_groups, public.reservations to authenticated;
 
 revoke execute on function public.is_member(uuid), public.shares_group(uuid), public.is_wish_owner(uuid),
-  public.can_see_wish(uuid), public.new_code(), public.create_group(text), public.join_group(text),
+  public.can_see_wish(uuid), public.wish_open(uuid), public.new_code(), public.create_group(text), public.join_group(text),
   public.leave_group(uuid), public.rename_group(uuid, text) from public, anon;
 grant execute on function public.is_member(uuid), public.shares_group(uuid), public.is_wish_owner(uuid),
-  public.can_see_wish(uuid), public.create_group(text), public.join_group(text),
+  public.can_see_wish(uuid), public.wish_open(uuid), public.create_group(text), public.join_group(text),
   public.leave_group(uuid), public.rename_group(uuid, text) to authenticated;
 
 -- =====================================================================

@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.6';
+const VERSION = '1.7';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -56,6 +56,7 @@ function domain(url) {
 function normUrl(u) {
   u = (u || '').trim();
   if (!u) return null;
+  if (/\s/.test(u)) { const f = findUrl(u); if (f) u = f; }
   if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
   try { const x = new URL(u); if (!/^https?:$/.test(x.protocol) || !x.hostname.includes('.')) return false; } catch (e) { return false; }
   return u;
@@ -74,6 +75,67 @@ function checkPw(pw) {
 }
 function fmtTime(ts) { return new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' }).format(new Date(ts)); }
 function fmtDay(ts) { return new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'long' }).format(new Date(ts)); }
+/* Mehr am Wunsch (1.7) */
+const CATS = [['buch', 'Bücher'], ['kleidung', 'Kleidung'], ['technik', 'Technik'], ['spiel', 'Spiele und Spielzeug'],
+  ['haushalt', 'Haushalt und Küche'], ['wohnen', 'Wohnen und Deko'], ['sport', 'Sport und Freizeit'], ['pflege', 'Pflege und Schönheit'],
+  ['schmuck', 'Schmuck und Accessoires'], ['medien', 'Musik und Filme'], ['erlebnis', 'Erlebnisse'], ['gutschein', 'Gutscheine'], ['sonstiges', 'Sonstiges']];
+function catName(k) { const c = CATS.find(x => x[0] === k); return c ? c[1] : 'Sonstiges'; }
+const PRIOS = [[3, 'Sehr gern'], [2, 'Normal'], [1, 'Nur eine Idee']];
+const PRICES = [['p1', 'bis 25 €', 0, 25], ['p2', '25 bis 50 €', 25, 50], ['p3', '50 bis 100 €', 50, 100], ['p4', 'über 100 €', 100, Infinity]];
+function priceBucket(p) {
+  if (p == null) return null;
+  const b = PRICES.find(x => Number(p) <= x[3] && (x[2] === 0 || Number(p) > x[2]));
+  return b ? b[0] : null;
+}
+function fmtPrice(p) {
+  if (p == null || p === '') return '';
+  const n = Number(p);
+  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 }).format(n);
+}
+function priceInput(p) { return p == null ? '' : String(Number(p)).replace('.', ','); }
+function parsePrice(t) {
+  t = String(t || '').replace(/€|eur|euro/ig, '').replace(/\s/g, '');
+  if (!t) return null;
+  if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+  else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
+  if (!/^\d+(\.\d{1,2})?$/.test(t)) return false;
+  const n = Number(t);
+  return n > 1000000 ? false : n;
+}
+const prio = w => w.priority || 2;
+const byPrio = (a, b) => prio(b) - prio(a);
+/* Ersten Link aus geteiltem oder kopiertem Text holen */
+function findUrl(text) {
+  const m = String(text || '').match(/https?:\/\/[^\s<>"'„“]+/i);
+  if (m) return m[0].replace(/[).,;:!?]+$/, '');
+  const t = String(text || '').trim();
+  if (t && !/\s/.test(t) && /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(t)) return 'https://' + t;
+  return null;
+}
+/* Titelvorschlag: geteilter Titel, sonst Text ohne Link, sonst aus dem Link-Pfad */
+function guessTitle(text, url, title) {
+  const clean = x => String(x || '').replace(/https?:\/\/\S+/gi, '').replace(/\s+/g, ' ').trim();
+  const d = url ? domain(url) : '';
+  const t = clean(title);
+  if (t.length >= 3 && t.toLowerCase() !== d) return t.slice(0, 120);
+  const r = clean(text).split(/[\n|]/)[0].trim();
+  if (r.length >= 3 && r.toLowerCase() !== d) return r.slice(0, 120);
+  try {
+    const segs = new URL(url).pathname.split('/').map(x => { try { return decodeURIComponent(x); } catch (e) { return x; } })
+      .map(x => x.replace(/\.(html?|php|aspx?)$/i, ''))
+      .filter(x => /[-_+]/.test(x) && (x.match(/[a-zäöüß]{3,}/gi) || []).length >= 2);
+    if (!segs.length) return '';
+    const best = segs.sort((a, b) => b.length - a.length)[0].replace(/[-_+]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return (best[0].toUpperCase() + best.slice(1)).slice(0, 120);
+  } catch (e) { return ''; }
+}
+const SHARE_MAX_AGE = 3600e3;
+function sharedPrefill() {
+  const x = S.share;
+  if (!x || Date.now() - x.at > SHARE_MAX_AGE) return null;
+  const url = findUrl(x.url) || findUrl(x.text) || '';
+  return { url, title: guessTitle(x.text, url, x.title) };
+}
 function needsSecure() { return D.loaded ? !D.account : !!(S.session && S.session.user.anon); }
 
 /* ---------- Supabase ---------- */
@@ -91,7 +153,7 @@ function errText(j, status) {
   if (/Kein gesichertes Konto/.test(m)) return 'Diese Person hat noch keinen Benutzernamen.';
   if (/email logins are disabled/i.test(m)) return 'In Supabase ist der Anbieter „Email“ ausgeschaltet.';
   if (/email not confirmed/i.test(m)) return 'Dieses Konto ist noch nicht freigeschaltet.';
-  if (/Could not find the function|PGRST202|42883/.test(m + code)) return 'Die Datenbank ist noch nicht aktualisiert (schema.sql ausführen).';
+  if (/Could not find the function|PGRST202|PGRST204|42883|42703|Could not find the '.*' column/.test(m + code)) return 'Die Datenbank ist noch nicht aktualisiert (schema.sql ausführen).';
   if (code === '23505' || /duplicate key/i.test(m)) return 'Das hat gerade schon jemand anderes reserviert.';
   if (code === '42501' || /row-level security/i.test(m)) return 'Das darfst du leider nicht.';
   if (/Nur der Gründer/.test(m)) return 'Das darf nur, wer die Gruppe gegründet hat.';
@@ -201,7 +263,9 @@ async function sync(quiet) {
       sb('/rest/v1/profiles?select=id,name'),
       sb('/rest/v1/groups?select=id,name,code,created_by,created_at&order=created_at'),
       sb('/rest/v1/members?select=group_id,user_id,joined_at&order=joined_at'),
-      sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,created_at&order=created_at.desc'),
+      // Preis, Kategorie, Wichtigkeit, „Hab ich schon“ ab 1.7; vorher ohne diese Spalten
+      sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,created_at,price,category,priority,have_at&order=created_at.desc')
+        .catch(() => sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,created_at&order=created_at.desc')),
       sb('/rest/v1/wish_groups?select=wish_id,group_id'),
       sb('/rest/v1/reservations?select=wish_id,user_id,status'),
       // ab 1.5; vor dem Ausführen der neuen schema.sql fehlen sie, die App läuft trotzdem
@@ -234,6 +298,10 @@ function visibleIn(w, gid) {
 }
 function wishesOf(uid, gid) {
   return D.wishes.filter(w => w.owner === uid && (gid ? visibleIn(w, gid) : true));
+}
+/* nur Wünsche, die noch offen sind (nicht „Hab ich schon“) */
+function openWishes(uid, gid) {
+  return wishesOf(uid, gid).filter(w => !w.have_at);
 }
 
 /* Wichteln */
@@ -273,6 +341,7 @@ const I = {
   shield: '<path d="M12 3 5 6v5c0 4.5 3 8.4 7 10 4-1.6 7-5.5 7-10V6z"/>',
   heart: '<path d="M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.4-7.5 10-7.5 10z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3M14 9l2 2"/>',
+  paste: '<rect x="6" y="4.5" width="12" height="16" rx="2"/><path d="M9.5 4.5V3.5h5v1M9 11h6M9 15h4"/>',
   shuffle: '<path d="M4 7h3.2c1.9 0 3 .9 4.2 2.8l1.2 2c1.2 1.9 2.4 3.2 4.3 3.2H20M4 17h3.2c1.3 0 2.2-.5 3-1.4M13.6 8.4c.8-.9 1.8-1.4 3.1-1.4H20M17.5 4.5 20 7l-2.5 2.5M17.5 12.5 20 15l-2.5 2.5"/>'
 };
 const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
@@ -442,7 +511,7 @@ function viewName() {
 
 function viewHome() {
   const gs = myGroups();
-  const mine = wishesOf(me());
+  const mine = openWishes(me());
   const errands = D.res.filter(r => r.user_id === me())
     .map(r => ({ r, w: D.wishes.find(w => w.id === r.wish_id) })).filter(x => x.w);
   const bought = errands.filter(x => x.r.status === 'gekauft').length;
@@ -476,24 +545,27 @@ function viewHome() {
       return `<li><a class="row-item" href="#/g/${g.id}/wichteln"><span class="tile plain">${icon('shuffle')}</span>
         <span class="row-main"><span class="row-title">Wichteln in ${esc(g.name)}</span><span class="row-meta">Deine Zuteilung fehlt, es muss neu ausgelost werden</span></span>${icon('chev', 'chev')}</a></li>`;
     }
-    const n = wishesOf(st.receiver, g.id).length;
+    const n = openWishes(st.receiver, g.id).length;
     return `<li><a class="row-item" href="#/g/${g.id}/p/${st.receiver}">${avatar(st.receiver)}
       <span class="row-main"><span class="row-title">Du beschenkst ${esc(nameOf(st.receiver))}</span><span class="row-meta">${esc(g.name)} · ${n ? plural(n, 'Wunsch', 'Wünsche') : 'noch keine Wünsche'}</span></span>${icon('chev', 'chev')}</a></li>`;
   }).join('');
   const wichtelHtml = wRows ? `<h2>Wichteln</h2><ul class="rows">${wRows}</ul>` : '';
 
-  const errHtml = errands.length ? `<ul class="rows">${errands.map(({ r, w }) => {
+  // „Hab ich schon“: Hinweis an alle, die das noch nicht gekauft haben
+  const haveWarn = errands.filter(x => x.w.have_at && x.r.status !== 'gekauft').map(({ w }) =>
+    `<div class="banner warn">${icon('gift')}<span><b>${esc(nameOf(w.owner))} hat „${esc(w.title)}“ schon</b><small>Gib die Reservierung frei, falls du es noch nicht gekauft hast.</small></span><button class="link" data-act="unreserve" data-id="${w.id}">Freigeben</button></div>`).join('');
+  const errHtml = errands.length ? `${haveWarn}<ul class="rows">${errands.map(({ r, w }) => {
     const g = groupFor(w);
     const done = r.status === 'gekauft';
     return `<li class="row-item ${done ? 'done' : ''}">
         <button class="tick ${done ? 'on' : ''}" data-act="resstatus" data-id="${w.id}" data-s="${done ? 'reserviert' : 'gekauft'}" aria-label="${done ? 'Doch nicht gekauft' : 'Als gekauft markieren'}">${icon('check')}</button>
-        <a class="row-main" href="${g ? `#/g/${g}/p/${w.owner}` : '#/'}"><span class="row-title">${esc(w.title)}</span><span class="row-meta">für ${esc(nameOf(w.owner))} · ${done ? 'gekauft' : 'reserviert'}</span></a>
+        <a class="row-main" href="${g ? `#/g/${g}/p/${w.owner}` : '#/'}"><span class="row-title">${esc(w.title)}</span><span class="row-meta ${w.have_at ? 'warn' : ''}">für ${esc(nameOf(w.owner))} · ${w.have_at ? `hat ${esc(nameOf(w.owner))} schon` : (done ? 'gekauft' : 'reserviert')}</span></a>
         ${avatar(w.owner, 'sm')}
       </li>`;
   }).join('')}</ul>`
     : `<p class="empty-line">Noch nichts reserviert. Öffne eine Liste in deinen Gruppen und tippe auf „Reservieren“.</p>`;
 
-  const feed = D.wishes.filter(w => w.owner !== me()).slice(0, 6);
+  const feed = D.wishes.filter(w => w.owner !== me() && !w.have_at).slice(0, 6);
   const feedHtml = feed.length ? `<ul class="rows">${feed.map(w => {
     const g = groupFor(w);
     const r = resOf(w.id);
@@ -507,20 +579,30 @@ function viewHome() {
     <h2>Neu in deinen Gruppen</h2>${feedHtml}`, { tab: 'home', eyebrow: today });
 }
 
+function wishMeta(w, extra = []) {
+  return [w.price != null ? fmtPrice(w.price) : '', w.category ? catName(w.category) : '', ...extra].filter(Boolean).join(' · ');
+}
+function prioMark(w) {
+  return prio(w) === 3 && !w.have_at ? `<span class="prio" title="Sehr gern">${icon('heart')}</span>` : '';
+}
 function viewList() {
-  const list = wishesOf(me());
-  const rows = list.map(w => `<li><a class="row-item wish" href="#/w/${w.id}">${tile(w)}
-      <span class="row-main"><span class="row-title">${esc(w.title)}</span>
-      <span class="row-meta">${esc([w.url ? domain(w.url) : '', visLabel(w)].filter(Boolean).join(' · '))}</span></span>${icon('chev', 'chev')}</a></li>`).join('');
+  const all = wishesOf(me());
+  const list = all.filter(w => !w.have_at).sort(byPrio);
+  const have = all.filter(w => w.have_at);
+  const row = w => `<li><a class="row-item wish ${w.have_at ? 'had' : ''}" href="#/w/${w.id}">${tile(w)}
+      <span class="row-main"><span class="row-title">${prioMark(w)}${esc(w.title)}</span>
+      <span class="row-meta">${esc(w.have_at ? 'seit ' + fmtDay(w.have_at) : wishMeta(w, [prio(w) === 1 ? 'Idee' : '', w.url ? domain(w.url) : '', visLabel(w)]))}</span></span>${icon('chev', 'chev')}</a></li>`;
   const add = `<a class="primary withicon" href="#/w/neu">${icon('plus')}Wunsch hinzufügen</a>`;
-  const body = list.length
-    ? `${add}<ul class="rows">${rows}</ul><p class="foot">${icon('eyeoff')}<span>Ob etwas reserviert ist, siehst du nicht. So bleibt es eine Überraschung.</span></p>`
+  const haveHtml = have.length ? `<h2>Hab ich schon</h2><ul class="rows">${have.map(row).join('')}</ul>` : '';
+  const body = all.length
+    ? `${add}${list.length ? `<ul class="rows">${list.map(row).join('')}</ul>` : '<p class="empty-line">Alles auf deiner Liste hast du schon.</p>'}${haveHtml}<p class="foot">${icon('eyeoff')}<span>Ob etwas reserviert ist, siehst du nicht. So bleibt es eine Überraschung.</span></p>`
     : emptyState('gift', 'Deine Liste ist noch leer', 'Trag ein, worüber du dich freuen würdest. Ein Link hilft den anderen, genau das Richtige zu finden.', add);
   return shell('Meine Wunschliste', body, { tab: 'list', sub: plural(list.length, 'Wunsch', 'Wünsche') });
 }
 
 function viewWishForm(id) {
-  const w = id === 'neu' ? { title: '', url: '', note: '', all_groups: true } : D.wishes.find(x => x.id === id && x.owner === me());
+  const pre = id === 'neu' ? sharedPrefill() : null;
+  const w = id === 'neu' ? { title: pre ? pre.title : '', url: pre ? pre.url : '', note: '', all_groups: true, priority: 2 } : D.wishes.find(x => x.id === id && x.owner === me());
   if (!w) return shell('Wunsch', emptyState('gift', 'Nicht gefunden', 'Diesen Wunsch gibt es nicht mehr.'), { tab: 'list', back: ['#/liste', 'Wunschliste'] });
   const gs = myGroups();
   const sel = id === 'neu' ? [] : groupIdsOf(id);
@@ -532,18 +614,32 @@ function viewWishForm(id) {
       <label class="check"><input type="radio" name="vis" value="some" ${w.all_groups ? '' : 'checked'}><span>Nur ausgewählte Gruppen</span></label>
       <div class="sub ${w.all_groups ? 'hide' : ''}" id="gsel">${boxes}</div>
     </div>` : `<p class="foot">${icon('people')}<span>Sichtbar für alle Gruppen, denen du später beitrittst.</span></p>`;
+  const cats = '<option value="">Keine</option>' + CATS.map(([k, n]) => `<option value="${k}" ${w.category === k ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  const prios = PRIOS.map(([v, n]) => `<label><input type="radio" name="prio" value="${v}" ${prio(w) === v ? 'checked' : ''}><span>${n}</span></label>`).join('');
+  const have = id === 'neu' ? '' : (w.have_at
+    ? `<button type="button" class="secondary" data-act="unhave" data-id="${id}">Doch wieder wünschen</button>`
+    : `<button type="button" class="secondary withicon" data-act="have" data-id="${id}">${icon('check')}Hab ich schon</button>`);
+  const haveNote = w.have_at ? `<div class="banner">${icon('check')}<span><b>Hast du schon seit ${esc(fmtDay(w.have_at))}</b><small>Die anderen sehen das und können es nicht mehr reservieren.</small></span></div>` : '';
   const del = id === 'neu' ? '' : (ui.confirmDel === id
     ? `<button type="button" class="danger" data-act="delwish" data-id="${id}">Wirklich löschen</button>`
     : `<button type="button" class="ghost danger-text" data-act="askdel" data-id="${id}">Wunsch löschen</button>`);
   return shell(id === 'neu' ? 'Neuer Wunsch' : 'Wunsch bearbeiten', `
+    ${haveNote}
     <form data-form="wish" data-id="${id}" class="stack">
       <div class="card fields">
         <label>Was wünschst du dir?<input name="title" maxlength="120" required value="${esc(w.title)}" placeholder="z. B. Kochbuch „Simple“"></label>
-        <label>Link<input name="url" inputmode="url" autocomplete="off" value="${esc(w.url || '')}" placeholder="https://"></label>
+        <div class="field"><div class="fieldhead"><label for="f-url">Link</label><button type="button" class="link withicon" data-act="pasteurl">${icon('paste')}Einfügen</button></div>
+          <input id="f-url" name="url" inputmode="url" autocomplete="off" value="${esc(w.url || '')}" placeholder="https://"></div>
+        <div class="two">
+          <label>Preis<span class="money"><input name="price" inputmode="decimal" autocomplete="off" maxlength="12" value="${esc(priceInput(w.price))}" placeholder="ca."><span>€</span></span></label>
+          <label>Kategorie<select name="category">${cats}</select></label>
+        </div>
+        <div class="field"><span class="flabel">Wie sehr wünschst du es dir?</span><div class="seg">${prios}</div></div>
         <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Größe, Farbe, Alternativen">${esc(w.note || '')}</textarea></label>
       </div>
       ${vis}
       <button class="primary" type="submit">Speichern</button>
+      ${have}
       ${del}
     </form>`, { tab: 'list', back: ['#/liste', 'Wunschliste'] });
 }
@@ -552,7 +648,7 @@ function viewGroups() {
   const gs = myGroups();
   const rows = gs.map(g => {
     const ms = membersOf(g.id).map(m => m.user_id);
-    const n = D.wishes.filter(w => ms.includes(w.owner) && w.owner !== me() && visibleIn(w, g.id)).length;
+    const n = D.wishes.filter(w => ms.includes(w.owner) && w.owner !== me() && !w.have_at && visibleIn(w, g.id)).length;
     return `<li><a class="row-item group" href="#/g/${g.id}"><span class="tile c${hueIdx(g.id)}">${esc(initials(g.name))}</span>
       <span class="row-main"><span class="row-title">${esc(g.name)}</span><span class="row-meta">${plural(ms.length, 'Mitglied', 'Mitglieder')} · ${plural(n, 'Wunsch', 'Wünsche')}</span></span>
       ${avStack(ms)}${icon('chev', 'chev')}</a></li>`;
@@ -573,7 +669,7 @@ function viewGroup(gid) {
   if (!g) return shell('Gruppe', emptyState('people', 'Nicht gefunden', 'Diese Gruppe gibt es nicht mehr.'), { tab: 'groups', back: ['#/gruppen', 'Gruppen'] });
   const ms = membersOf(gid).slice().sort((a, b) => (a.user_id === me()) - (b.user_id === me()) || nameOf(a.user_id).localeCompare(nameOf(b.user_id), 'de'));
   const rows = ms.map(m => {
-    const ws = wishesOf(m.user_id, gid);
+    const ws = openWishes(m.user_id, gid);
     if (m.user_id === me()) {
       return `<li><a class="row-item person self" href="#/liste">${avatar(m.user_id)}
         <span class="row-main"><span class="row-title">Du</span><span class="row-meta">${plural(ws.length, 'Wunsch', 'Wünsche')} für diese Gruppe sichtbar</span></span>${icon('chev', 'chev')}</a></li>`;
@@ -616,12 +712,20 @@ function viewPerson(gid, uid) {
     return shell('Liste', emptyState('gift', 'Nicht verfügbar', 'Diese Liste kannst du nicht sehen.'), { tab: 'groups', back: ['#/g/' + gid, 'Gruppe'] });
   }
   const name = nameOf(uid);
-  const ws = wishesOf(uid, gid);
+  const all = wishesOf(uid, gid);
+  const ws = all.filter(w => !w.have_at).sort(byPrio);
+  const had = all.filter(w => w.have_at);
   const taken = ws.filter(w => resOf(w.id)).length;
-  const items = ws.map(w => {
+  const card = w => {
     const r = resOf(w.id);
-    let pill = '', acts = '';
-    if (!r) {
+    let pill = '', acts = '', warn = '';
+    if (w.have_at) {
+      pill = `<span class="pill">Hat ${esc(name)} schon</span>`;
+      if (r && r.user_id === me()) {
+        warn = `<p class="wwarn">${r.status === 'gekauft' ? 'Du hast es schon gekauft. Vielleicht lässt es sich umtauschen.' : 'Du hattest es reserviert. Gib es frei, falls du es noch nicht gekauft hast.'}</p>`;
+        acts = `<button class="${r.status === 'gekauft' ? 'ghost' : 'primary'} sm" data-act="unreserve" data-id="${w.id}">Freigeben</button>`;
+      }
+    } else if (!r) {
       acts = `<button class="primary sm" data-act="reserve" data-id="${w.id}">Reservieren</button>`;
     } else if (r.user_id === me()) {
       pill = `<span class="pill green">${r.status === 'gekauft' ? 'Von dir gekauft' : 'Von dir reserviert'}</span>`;
@@ -633,18 +737,37 @@ function viewPerson(gid, uid) {
       pill = `<span class="pill gold">${r.status === 'gekauft' ? 'Gekauft' : 'Reserviert'} von ${esc(nameOf(r.user_id))}</span>`;
     }
     const link = w.url ? `<a class="link-out" href="${esc(w.url)}" target="_blank" rel="noopener noreferrer">${icon('link')}${esc(domain(w.url) || 'Link')}</a>` : '';
-    return `<li class="card wish ${r ? 'taken' : ''}">
-      <div class="wish-head">${tile(w)}<div class="row-main"><h3>${esc(w.title)}</h3>${link}</div></div>
+    const meta = wishMeta(w);
+    const tag = w.have_at ? '' : (prio(w) === 3 ? `<span class="tag hi">${icon('heart')}Sehr gern</span>` : (prio(w) === 1 ? '<span class="tag">Nur eine Idee</span>' : ''));
+    return `<li class="card wish ${r || w.have_at ? 'taken' : ''} ${w.have_at ? 'had' : ''}">
+      <div class="wish-head">${tile(w)}<div class="row-main"><h3>${esc(w.title)}</h3>
+        ${meta || tag ? `<p class="wmeta">${tag}${meta ? `<span>${esc(meta)}</span>` : ''}</p>` : ''}${link}</div></div>
       ${w.note ? `<p class="wnote">${esc(w.note)}</p>` : ''}
+      ${warn}
       ${pill || acts ? `<div class="wish-foot">${pill}${acts ? `<div class="acts">${acts}</div>` : ''}</div>` : ''}
     </li>`;
-  }).join('');
+  };
+
+  // Filter: nur frei, Preisspanne, Kategorie (nur was in der Liste vorkommt)
+  const f = ui.filter || {};
+  const shown = ws.filter(w => (!f.free || !resOf(w.id)) && (!f.price || priceBucket(w.price) === f.price) && (!f.cat || (w.category || 'sonstiges') === f.cat));
+  const buckets = PRICES.filter(b => ws.some(w => priceBucket(w.price) === b[0]));
+  const cats = CATS.filter(c => ws.some(w => w.category && w.category === c[0]));
+  const chip = (k, v, label, on) => `<button class="chip ${on ? 'on' : ''}" data-act="filt" data-k="${k}" data-v="${v}" aria-pressed="${on}">${esc(label)}</button>`;
+  const filterBar = ws.length >= 3 ? `<div class="chips" role="group" aria-label="Filter">
+      ${chip('free', '1', 'Noch frei', !!f.free)}${buckets.map(b => chip('price', b[0], b[1], f.price === b[0])).join('')}</div>
+      ${cats.length >= 2 ? `<div class="chips">${cats.map(c => chip('cat', c[0], c[1], f.cat === c[0])).join('')}</div>` : ''}` : '';
+  const filtered = f.free || f.price || f.cat;
+  const list = shown.length ? `<ul class="cards">${shown.map(card).join('')}</ul>`
+    : (ws.length ? `<p class="empty-line">Nichts passt zum Filter. <button class="link" data-act="filtreset">Filter aufheben</button></p>` : '');
+  const hadHtml = had.length && !filtered ? `<h2>Hat ${esc(name)} schon</h2><ul class="cards">${had.map(card).join('')}</ul>` : '';
+
   const head = `<section class="profile">${avatar(uid, 'lg')}<div class="profile-main">
       <p class="row-meta">${ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${ws.length - taken} noch frei` : 'Noch keine Wünsche'}</p>
       ${ws.length ? `<progress max="${ws.length}" value="${taken}"></progress>` : ''}</div></section>
     <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert oder gekauft ist.</span></p>`;
-  return shell(name, head + (ws.length ? `<ul class="cards">${items}</ul>` : emptyState('gift', 'Noch leer', `${esc(name)} hat für diese Gruppe noch nichts eingetragen.`)),
-    { tab: 'groups', back: ['#/g/' + gid, g.name] });
+  const body = ws.length || had.length ? filterBar + list + hadHtml : emptyState('gift', 'Noch leer', `${esc(name)} hat für diese Gruppe noch nichts eingetragen.`);
+  return shell(name, head + body, { tab: 'groups', back: ['#/g/' + gid, g.name] });
 }
 
 function viewWichteln(gid) {
@@ -655,7 +778,7 @@ function viewWichteln(gid) {
   const opt = { tab: 'groups', back: ['#/g/' + gid, g.name], sub: esc(g.name) };
   let top = '';
   if (st.receiver) {
-    const n = wishesOf(st.receiver, gid).length;
+    const n = openWishes(st.receiver, gid).length;
     top = `<div class="card reveal">
       ${avatar(st.receiver, 'lg')}
       <p class="eyebrow">Du beschenkst</p>
@@ -941,11 +1064,16 @@ const forms = {
     const url = normUrl(f.url.value);
     if (url === false) throw new Error('Der Link sieht nicht richtig aus.');
     const note = f.note.value.trim() || null;
+    const price = parsePrice(f.price.value);
+    if (price === false) throw new Error('Der Preis sieht nicht richtig aus, z. B. 24,99.');
+    const category = f.category.value || null;
+    const pr = f.querySelector('input[name=prio]:checked');
+    const priority = pr ? Number(pr.value) : 2;
     const visEl = f.querySelector('input[name=vis]:checked');
     const all = !visEl || visEl.value === 'all';
     const sel = [...f.querySelectorAll('input[name=g]:checked')].map(x => x.value);
     if (!all && !sel.length) throw new Error('Wähle mindestens eine Gruppe aus.');
-    const row = { title, url, note, all_groups: all };
+    const row = { title, url, note, all_groups: all, price, category, priority };
     let wid = id;
     if (id === 'neu') {
       const r = await sb('/rest/v1/wishes', { method: 'POST', prefer: 'return=representation', body: row });
@@ -955,6 +1083,7 @@ const forms = {
       await sb('/rest/v1/wish_groups?wish_id=eq.' + id, { method: 'DELETE' });
     }
     if (!all) await sb('/rest/v1/wish_groups', { method: 'POST', prefer: 'return=minimal', body: sel.map(g => ({ wish_id: wid, group_id: g })) });
+    if (id === 'neu' && S.share) { delete S.share; saveState(); }
     await sync(true);
     toast('Gespeichert.');
     go('#/liste');
@@ -1071,6 +1200,34 @@ const acts = {
     await sync(true);
     toast('Auslosung aufgehoben.');
   },
+  filt: async el => {
+    const f = ui.filter = ui.filter || {};
+    const k = el.dataset.k, v = el.dataset.v;
+    f[k] = f[k] === v ? null : v;
+    render();
+  },
+  filtreset: async () => { ui.filter = {}; render(); },
+  pasteurl: async el => {
+    const f = el.closest('form');
+    let t = '';
+    try { t = await navigator.clipboard.readText(); } catch (e) {
+      throw new Error('Kein Zugriff auf die Zwischenablage. Halte im Feld Link gedrückt und wähle Einfügen.');
+    }
+    if (!fillLink(f, t)) throw new Error('In der Zwischenablage ist kein Link.');
+    toast('Link eingefügt.');
+  },
+  have: async el => {
+    await sb('/rest/v1/wishes?id=eq.' + el.dataset.id, { method: 'PATCH', prefer: 'return=minimal', body: { have_at: new Date().toISOString() } });
+    await sync(true);
+    toast('Markiert. Wer es reserviert hat, sieht einen Hinweis.');
+    go('#/liste');
+  },
+  unhave: async el => {
+    await sb('/rest/v1/wishes?id=eq.' + el.dataset.id, { method: 'PATCH', prefer: 'return=minimal', body: { have_at: null } });
+    await sync(true);
+    toast('Wieder auf deiner Liste.');
+    go('#/liste');
+  },
   reserve: async el => {
     await sb('/rest/v1/reservations', { method: 'POST', prefer: 'return=minimal', body: { wish_id: el.dataset.id } });
     await sync(true);
@@ -1086,6 +1243,15 @@ const acts = {
     toast('Wieder frei.');
   }
 };
+
+/* Link (und wenn leer: Titel) aus Text übernehmen */
+function fillLink(f, text) {
+  const url = findUrl(text);
+  if (!url || !f) return false;
+  f.url.value = url;
+  if (!f.title.value.trim()) f.title.value = guessTitle(text, url, '');
+  return true;
+}
 
 async function copyText(t, msg) {
   try { await navigator.clipboard.writeText(t); toast(msg); } catch (e) { toast('Kopieren ging nicht. Bitte abschreiben.'); }
@@ -1122,6 +1288,12 @@ document.addEventListener('click', e => {
   const fn = acts[el.dataset.act];
   if (fn) { e.preventDefault(); run(() => fn(el)); }
 });
+document.addEventListener('paste', e => {
+  const el = e.target;
+  if (!el || el.name !== 'url' || !el.form || el.form.dataset.form !== 'wish') return;
+  const t = (e.clipboardData || window.clipboardData).getData('text');
+  if (/\s/.test(t.trim()) && findUrl(t)) { e.preventDefault(); fillLink(el.form, t); }
+});
 document.addEventListener('change', e => {
   if (e.target.name === 'vis') {
     const sub = $('#gsel');
@@ -1130,6 +1302,7 @@ document.addEventListener('change', e => {
 });
 window.addEventListener('hashchange', () => {
   ui = {};
+  if (S.share && S.session && location.hash !== '#/w/neu') { delete S.share; saveState(); }
   render();
   if (S.session && Date.now() - D.at > 20000) sync(true);
 });
@@ -1137,8 +1310,18 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.session && Date.now() - D.at > 20000) sync(true);
 });
 
+/* Android: Teilen aus einer anderen App öffnet ./?title=…&text=…&url=… (share_target im Manifest) */
+function takeShare() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has('url') && !q.has('text') && !q.has('title')) return;
+  S.share = { title: q.get('title') || '', text: q.get('text') || '', url: q.get('url') || '', at: Date.now() };
+  saveState();
+  history.replaceState(null, '', location.pathname + '#/w/neu');
+}
+
 (async function start() {
   cleanAuthHash();
+  takeShare();
   ['loginEmail', 'loginSent', 'secureSent'].forEach(k => delete S[k]); // Reste der Mail-Anmeldung bis 1.4
   if (S.session && S.cache && S.cache.uid === me()) {
     D = Object.assign(emptyData(), S.cache.D, { at: 0 });
