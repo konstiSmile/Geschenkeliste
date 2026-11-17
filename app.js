@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.9';
+const VERSION = '1.10';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -498,22 +498,28 @@ const I = {
   more: '<circle cx="12" cy="5.5" r="1.1"/><circle cx="12" cy="12" r="1.1"/><circle cx="12" cy="18.5" r="1.1"/>',
   download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
   bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"/>',
-  shuffle: '<path d="M4 7h3.2c1.9 0 3 .9 4.2 2.8l1.2 2c1.2 1.9 2.4 3.2 4.3 3.2H20M4 17h3.2c1.3 0 2.2-.5 3-1.4M13.6 8.4c.8-.9 1.8-1.4 3.1-1.4H20M17.5 4.5 20 7l-2.5 2.5M17.5 12.5 20 15l-2.5 2.5"/>'
+  shuffle: '<path d="M4 7h3.2c1.9 0 3 .9 4.2 2.8l1.2 2c1.2 1.9 2.4 3.2 4.3 3.2H20M4 17h3.2c1.3 0 2.2-.5 3-1.4M13.6 8.4c.8-.9 1.8-1.4 3.1-1.4H20M17.5 4.5 20 7l-2.5 2.5M17.5 12.5 20 15l-2.5 2.5"/>',
+  // Pop-Design (1.10)
+  star: '<path d="m12 3.5 2.6 5.3 5.9.8-4.3 4.1 1 5.8L12 16.8l-5.2 2.7 1-5.8-4.3-4.1 5.9-.8z"/>',
+  snow: '<path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9.5 4.5 12 7l2.5-2.5M9.5 19.5 12 17l2.5 2.5"/>',
+  calendar: '<rect x="4" y="5.5" width="16" height="15" rx="2.5"/><path d="M4 10.5h16M8.5 3.5v4M15.5 3.5v4"/>',
+  sparkle: '<path d="M12 4c.8 4.2 3.8 7.2 8 8-4.2.8-7.2 3.8-8 8-.8-4.2-3.8-7.2-8-8 4.2-.8 7.2-3.8 8-8z"/>',
+  palette: '<path d="M12 3.5a8.5 8.5 0 0 0 0 17c1.4 0 2-.9 2-1.8 0-1.3-1.2-1.6-1.2-2.8 0-1 .8-1.6 1.8-1.6h2.1c2.2 0 3.8-1.6 3.8-3.8 0-3.9-3.8-7-8.5-7z"/><circle cx="7.8" cy="11.5" r="1"/><circle cx="10" cy="7.6" r="1"/><circle cx="14.5" cy="7.6" r="1"/>',
+  book: '<path d="M5 17V6.5a3 3 0 0 1 3-3h10.5V17"/><path d="M5 17.5a3 3 0 0 0 3 3h10.5V14H8a3 3 0 0 0-3 3.5z"/>',
+  shirt: '<path d="M8.5 3.5 4 6l1.8 4.2L8 9.4v11.1h8V9.4l2.2.8L20 6l-4.5-2.5a3.5 3.5 0 0 1-7 0z"/>',
+  headphones: '<path d="M4 15.5V12a8 8 0 0 1 16 0v3.5"/><rect x="3.5" y="14" width="4.5" height="6.5" rx="2"/><rect x="16" y="14" width="4.5" height="6.5" rx="2"/>',
+  gamepad: '<path d="M7 7.5h10a4.5 4.5 0 0 1 4.4 5.5l-.9 4a2.6 2.6 0 0 1-4.5 1.2L14.3 16H9.7L8 18.2a2.6 2.6 0 0 1-4.5-1.2l-.9-4A4.5 4.5 0 0 1 7 7.5z"/><path d="M8 10.5v3M6.5 12h3M15.5 11h.01M17 13h.01"/>',
+  cup: '<path d="M4.5 9.5h11.5v5a5 5 0 0 1-5 5h-1.5a5 5 0 0 1-5-5z"/><path d="M16 11h1.5a2.5 2.5 0 0 1 0 5H16M8 3.5v2.5M11 3.5v2.5M14 3.5v2.5"/>',
+  leaf: '<path d="M5 19.5C5 11 10 5 20 4.5c0 10-5.5 15-13.5 15z"/><path d="M5 19.5c3-4.3 6-7 9.5-8.8"/>',
+  ball: '<circle cx="12" cy="12" r="8.5"/><path d="M3.8 9.6c3.2 1.4 5.4 4.6 5.9 10.4M14.4 3.8c-.7 3.6 1.5 7.4 6 8.6"/>',
+  drop: '<path d="M12 3.5c3 3.8 6 7.2 6 10.5a6 6 0 0 1-12 0c0-3.3 3-6.7 6-10.5z"/><path d="M9 14.5a3 3 0 0 0 2.5 2.8"/>',
+  gem: '<path d="M7 4.5h10l4 4.8-9 10.7-9-10.7z"/><path d="M3 9.3h18M9.5 4.5 8 9.3l4 10.7 4-10.7-1.5-4.8"/>',
+  note: '<path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>',
+  ticket: '<path d="M3.5 8a1 1 0 0 1 1-1h15a1 1 0 0 1 1 1v2a2 2 0 0 0 0 4v2a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-2a2 2 0 0 0 0-4z"/><path d="M14.5 7.5v1.5M14.5 11.2v1.6M14.5 15v1.5"/>',
+  label: '<path d="M3.5 12.3V4.5a1 1 0 0 1 1-1h7.8l8.2 8.2a1.5 1.5 0 0 1 0 2.1l-6.7 6.7a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.4"/>'
 };
 const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
 
-const BAUBLE = `<svg class="art" viewBox="0 0 140 160" aria-hidden="true">
-  <path d="M6 14 Q40 2 70 10 Q100 2 134 14" stroke="#3E5647" stroke-width="7" fill="none" stroke-linecap="round"/>
-  <path d="M22 9 l-6 -8 M40 6 l-2 -9 M100 6 l2 -9 M118 9 l6 -8 M30 12 l-5 9 M110 12 l5 9" stroke="#28604C" stroke-width="3" stroke-linecap="round"/>
-  <g class="swing">
-    <line x1="70" y1="12" x2="70" y2="44" stroke="#B27F49" stroke-width="2"/>
-    <rect x="61" y="42" width="18" height="11" rx="2.5" fill="#B27F49"/>
-    <circle cx="70" cy="94" r="40" fill="#A0061B"/>
-    <path d="M32 86 Q70 104 108 86" stroke="#B27F49" stroke-width="3.5" fill="none"/>
-    <path d="M33 104 Q70 122 107 104" stroke="#B27F49" stroke-width="2" fill="none" stroke-dasharray="2 6" stroke-linecap="round"/>
-    <ellipse cx="54" cy="76" rx="8" ry="13" fill="#FFFFFF" opacity=".22" transform="rotate(35 54 76)"/>
-  </g>
-</svg>`;
 
 function hueIdx(id) {
   let h = 0;
@@ -534,9 +540,12 @@ function avStack(uids, max = 4) {
   const more = uids.length > max ? `<span class="av xs more">+${uids.length - max}</span>` : '';
   return `<span class="avs">${shown}${more}</span>`;
 }
+// Kachel am Wunsch: Kategorie-Icon in Pastell (Pop-Design 1.10)
+const CAT_ICONS = { buch: 'book', kleidung: 'shirt', technik: 'headphones', spiel: 'gamepad', haushalt: 'cup', wohnen: 'leaf',
+  sport: 'ball', pflege: 'drop', schmuck: 'gem', medien: 'note', erlebnis: 'ticket', gutschein: 'label', sonstiges: 'gift' };
 function tile(w) {
-  const d = w.url ? domain(w.url) : '';
-  return d ? `<span class="tile c${hueIdx(d)}">${esc(d[0].toUpperCase())}</span>` : `<span class="tile plain">${icon('gift')}</span>`;
+  const i = Math.max(0, CATS.findIndex(c => c[0] === w.category));
+  return `<span class="tile t${w.category ? i % 3 : 0}">${icon(CAT_ICONS[w.category] || 'gift')}</span>`;
 }
 function plural(n, one, many) { return `${n} ${n === 1 ? one : many}`; }
 function ago(ts) {
@@ -576,9 +585,9 @@ function shell(title, body, opt = {}) {
   const T = (h, t, n, label) => `<a href="${h}" class="${tab === t ? 'on' : ''}">${icon(n)}<span>${label}</span></a>`;
   return `
   <header class="top">
-    <div class="topbar">${back}<button class="iconbtn" data-act="sync" aria-label="Aktualisieren">${icon('sync')}</button></div>
-    ${opt.eyebrow ? `<p class="eyebrow">${esc(opt.eyebrow)}</p>` : ''}
-    <h1 class="title">${esc(title)}</h1>
+    ${opt.back ? `<div class="topbar">${back}</div>` : ''}
+    <div class="titlerow"><div class="titletext">${opt.eyebrow ? `<p class="eyebrow">${esc(opt.eyebrow)}</p>` : ''}
+    <h1 class="title">${esc(title)}</h1></div><button class="iconbtn" data-act="sync" aria-label="Aktualisieren">${icon('sync')}</button></div>
     ${opt.sub ? `<p class="subtitle">${opt.sub}</p>` : ''}
   </header>
   <main>${body}</main>
@@ -957,10 +966,7 @@ function viewHome() {
   const acc = D.account;
   const secure = needsSecure() ? `<a class="banner tap" href="#/konto">${icon('lock')}<span><b>Konto sichern</b><small>Mit Benutzername und Passwort kommst du auf jedem Gerät an deine Liste.</small></span>${icon('chev', 'chev')}</a>`
     : (acc && acc.reset_notice ? `<div class="banner notice">${icon('shield')}<span><b>Dein Zugang wurde am ${esc(fmtDay(acc.reset_at))} zurückgesetzt</b><small>Du hast jetzt ein neues Passwort und einen neuen Wiederherstellungscode.</small></span><button class="link" data-act="dismissreset">OK</button></div>` : '');
-  const hero = `<section class="hero">
-      <div><p class="hero-num">${days === 0 ? 'Heute' : days}</p><p class="hero-label">${days === 0 ? 'ist Heiligabend' : (days === 1 ? 'Tag bis Heiligabend' : 'Tage bis Heiligabend')}</p></div>
-      ${BAUBLE}
-    </section>`;
+  const hero = heroCard(days, errands.length, bought);
   const stats = `<div class="stats">
       <a href="#/liste"><b>${mine.length}</b><span>${mine.length === 1 ? 'Wunsch' : 'Wünsche'}</span></a>
       <div><b>${errands.length ? `${bought}<small>/${errands.length}</small>` : '0'}</b><span>besorgt</span></div>
@@ -1040,6 +1046,31 @@ function viewHome() {
     ${feedHead}${feedHtml}`, { tab: 'home', eyebrow: today });
 }
 
+/* ---------- Design (1.10) ---------- */
+function theme() { return window.GLTheme ? GLTheme.resolve() : 'jahr'; }
+function xmasYear() { const d = new Date(); return d.getMonth() === 0 ? d.getFullYear() - 1 : d.getFullYear(); }
+function heroCard(days, nErr, nDone) {
+  const when = days === 0 ? 'heute' : (days === 1 ? 'morgen' : `in ${days} Tagen`);
+  if (theme() !== 'weihnachten') {
+    return `<section class="hero hero-jahr"><span class="hero-ic">${icon('calendar')}</span>
+      <div class="hero-main"><p class="hero-label">Nächster Anlass · ${when}</p><p class="hero-title">Heiligabend · 24.12.</p></div></section>`;
+  }
+  const sub = nErr ? `${nDone} von ${plural(nErr, 'Besorgung', 'Besorgungen')} erledigt` : 'Noch nichts reserviert';
+  return `<section class="hero hero-xmas"><p class="hero-num">${days === 0 ? 'Heute' : days}</p>
+      <div class="hero-main"><p class="hero-title">${days === 0 ? 'ist Heiligabend' : (days === 1 ? 'Tag bis Heiligabend' : 'Tage bis Heiligabend')}</p><p class="hero-label">${sub}</p></div>
+      <span class="hero-deco">${icon('star')}${icon('snow')}</span></section>`;
+}
+const THEMES = [
+  ['auto', 'Automatisch', 'Weihnachten vom 1. November bis 6. Januar, sonst Ganzjährig'],
+  ['jahr', 'Ganzjährig', 'Violett, Koralle und Sonnengelb'],
+  ['weihnachten', 'Weihnachten', 'Zuckerstange, Minze und Vanille']];
+function themeSection() {
+  const p = window.GLTheme ? GLTheme.pref() : 'auto';
+  const opts = THEMES.map(([k, n, d]) => `<button class="themeopt ${p === k ? 'on' : ''}" role="radio" aria-checked="${p === k}" data-act="theme" data-v="${k}">
+      <span class="swatches sw-${k}"><i></i><i></i><i></i></span><span class="themetext"><b>${n}</b><small>${d}</small></span>${icon('check', 'themecheck')}</button>`).join('');
+  return `<h2>Design</h2><div class="themes" role="radiogroup" aria-label="Design">${opts}</div>`;
+}
+
 function wishMeta(w, extra = []) {
   return [w.price != null ? fmtPrice(w.price) : '', w.category ? catName(w.category) : '', ...extra].filter(Boolean).join(' · ');
 }
@@ -1050,15 +1081,15 @@ function viewList() {
   const all = wishesOf(me());
   const list = all.filter(w => !w.have_at).sort(byPrio);
   const have = all.filter(w => w.have_at);
-  const row = w => `<li><a class="row-item wish ${w.have_at ? 'had' : ''}" href="#/w/${w.id}">${tile(w)}
+  const row = w => `<li><a class="card row-item wish ${w.have_at ? 'had' : ''}" href="#/w/${w.id}">${tile(w)}
       <span class="row-main"><span class="row-title">${prioMark(w)}${esc(w.title)}</span>
       <span class="row-meta">${esc(w.have_at ? 'seit ' + fmtDay(w.have_at) : wishMeta(w, [prio(w) === 1 ? 'Idee' : '', w.url ? domain(w.url) : '', visLabel(w)]))}</span></span>${icon('chev', 'chev')}</a></li>`;
   const add = `<a class="primary withicon" href="#/w/neu">${icon('plus')}Wunsch hinzufügen</a>`;
-  const haveHtml = have.length ? `<h2>Hab ich schon</h2><ul class="rows">${have.map(row).join('')}</ul>` : '';
+  const haveHtml = have.length ? `<h2>Hab ich schon</h2><ul class="cards">${have.map(row).join('')}</ul>` : '';
   const body = all.length
-    ? `${add}${list.length ? `<ul class="rows">${list.map(row).join('')}</ul>` : '<p class="empty-line">Alles auf deiner Liste hast du schon.</p>'}${haveHtml}<p class="foot">${icon('eyeoff')}<span>Ob etwas reserviert ist, siehst du nicht. So bleibt es eine Überraschung.</span></p>`
+    ? `${add}${list.length ? `<ul class="cards">${list.map(row).join('')}</ul>` : '<p class="empty-line">Alles auf deiner Liste hast du schon.</p>'}${haveHtml}<p class="foot">${icon('eyeoff')}<span>Ob etwas reserviert ist, siehst du nicht. So bleibt es eine Überraschung.</span></p>`
     : emptyState('gift', 'Deine Liste ist noch leer', 'Trag ein, worüber du dich freuen würdest. Ein Link hilft den anderen, genau das Richtige zu finden.', add);
-  return shell('Meine Wunschliste', body, { tab: 'list', sub: plural(list.length, 'Wunsch', 'Wünsche') });
+  return shell('Meine Wunschliste', body, { tab: 'list', eyebrow: theme() === 'weihnachten' ? 'Weihnachten ' + xmasYear() : 'Alle Anlässe', sub: plural(list.length, 'Wunsch', 'Wünsche') });
 }
 
 function viewWishForm(id) {
@@ -1195,15 +1226,16 @@ function viewPerson(gid, uid) {
         acts = `<button class="${r.status === 'gekauft' ? 'ghost' : 'primary'} sm" data-act="unreserve" data-id="${w.id}">Freigeben</button>`;
       }
     } else if (!r) {
+      pill = '<span class="pill open">Offen</span>';
       acts = `<button class="primary sm" data-act="reserve" data-id="${w.id}">Reservieren</button>`;
     } else if (r.user_id === me()) {
-      pill = `<span class="pill green">${r.status === 'gekauft' ? 'Von dir gekauft' : 'Von dir reserviert'}</span>`;
+      pill = `<span class="pill green">${icon(r.status === 'gekauft' ? 'check' : 'lock')}${r.status === 'gekauft' ? 'Von dir gekauft' : 'Von dir reserviert'}</span>`;
       acts = (r.status === 'gekauft'
         ? `<button class="secondary sm" data-act="resstatus" data-id="${w.id}" data-s="reserviert">Doch nicht gekauft</button>`
         : `<button class="primary sm" data-act="resstatus" data-id="${w.id}" data-s="gekauft">Als gekauft markieren</button>`)
         + `<button class="ghost sm" data-act="unreserve" data-id="${w.id}">Freigeben</button>`;
     } else {
-      pill = `<span class="pill gold">${r.status === 'gekauft' ? 'Gekauft' : 'Reserviert'} von ${esc(nameOf(r.user_id))}</span>`;
+      pill = `<span class="pill gold">${icon(r.status === 'gekauft' ? 'check' : 'lock')}${r.status === 'gekauft' ? 'Gekauft' : 'Reserviert'} von ${esc(nameOf(r.user_id))}</span>`;
     }
     const link = w.url ? `<a class="link-out" href="${esc(w.url)}" target="_blank" rel="noopener noreferrer">${icon('link')}${esc(domain(w.url) || 'Link')}</a>` : '';
     const meta = wishMeta(w);
@@ -1378,6 +1410,7 @@ function viewAccount() {
     ${unsafe ? secureCard() : ''}
     <h2>Profil</h2>
     <div class="card"><form data-form="name" class="inline"><input name="name" maxlength="40" value="${esc(myName())}" required><button class="secondary" type="submit">Name ändern</button></form></div>
+    ${themeSection()}
     ${acc ? `<h2>Anmeldung</h2>${codeCard()}` : ''}
     ${adminSection()}
     <div id="install" data-ctx="konto">${installCard('konto')}</div>
@@ -1593,6 +1626,7 @@ const forms = {
 
 const acts = {
   sync: () => sync(),
+  theme: async el => { if (window.GLTheme) GLTheme.set(el.dataset.v); render(); },
   badgelater: async () => { S.badgeAsked = 1; saveState(); render(); },
   pushlater: async () => { S.pushAsked = 1; saveState(); render(); },
   pushnotice: async () => { S.pushNotice = 1; saveState(); render(); },
@@ -1849,7 +1883,9 @@ window.addEventListener('hashchange', () => {
   if (S.session && Date.now() - D.at > 20000) sync(true);
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible' || !S.session) return;
+  if (document.visibilityState !== 'visible') return;
+  if (window.GLTheme && GLTheme.apply()) render();   // Automatisch: Wechsel am 1.11. und 7.1.
+  if (!S.session) return;
   if (Date.now() - D.at > 20000) sync(true);
   pushInit();   // Erlaubnis kann sich in den Einstellungen geändert haben
 });

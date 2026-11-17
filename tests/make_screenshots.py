@@ -82,6 +82,7 @@ with sync_playwright() as pw:
                               color_scheme='light', locale='de-DE', reduced_motion='reduce')
     ctx.route('https://qbdpzamygonpruaafcrt.supabase.co/**', handle)
     ctx.add_init_script('localStorage.setItem("geschenkeliste-v1", ' + json.dumps(json.dumps(session)) + ')')
+    ctx.add_init_script("localStorage.setItem('geschenkeliste-theme', 'jahr')")   # neutral, nicht nur Weihnachten
     p = ctx.new_page()
     for name, h, sel in [('start', '#/', 'h1:has-text("Hallo Lena")'),
                          ('person', f'#/g/{G}/p/{PAUL}', '.chips'),

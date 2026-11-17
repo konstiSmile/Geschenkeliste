@@ -30,6 +30,8 @@ ANDROID = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, l
 
 def newpage(browser, errors, ua=None, init=None):
     ctx = browser.new_context(viewport={'width': 390, 'height': 780}, service_workers='block', **({'user_agent': ua} if ua else {}))
+    if os.environ.get('GL_THEME'):   # Bilder in einem bestimmten Design: GL_THEME=jahr|weihnachten
+        ctx.add_init_script(f"localStorage.setItem('geschenkeliste-theme', '{os.environ['GL_THEME']}')")
     if init:
         ctx.add_init_script(init)
     ctx.route('https://qbdpzamygonpruaafcrt.supabase.co/**', mock.handle)
@@ -218,7 +220,7 @@ with sync_playwright() as pw:
     a.wait_for_selector('.wish:has-text("LEGO")')
     meta = a.inner_text('.wish:has-text("LEGO") .row-meta').replace('\xa0', ' ')
     check('1.7: Liste zeigt Preis und Kategorie', '89,90 €' in meta and 'Spiele und Spielzeug' in meta)
-    check('1.7: „Sehr gern“ steht oben mit Herz', a.locator('.rows .wish .row-title').first.inner_text().strip().startswith('LEGO') and a.locator('.wish:has-text("LEGO") .prio').count() == 1)
+    check('1.7: „Sehr gern“ steht oben mit Herz', a.locator('.cards .wish .row-title').first.inner_text().strip().startswith('LEGO') and a.locator('.wish:has-text("LEGO") .prio').count() == 1)
     for title, price, cat, pr in (('Socken', '12', 'kleidung', 'Nur eine Idee'), ('Buchgutschein', '30 €', 'gutschein', 'Normal')):
         a.click('text=Wunsch hinzufügen')
         a.fill('input[name=title]', title)
@@ -570,7 +572,7 @@ with sync_playwright() as pw:
     check('Manifest: id, maskierbares Symbol, Kurzbefehle, Bilder schmal',
           man.get('id') and any(i.get('purpose') == 'maskable' for i in man['icons'])
           and len(man['shortcuts']) == 3 and all(x['form_factor'] == 'narrow' for x in man['screenshots']))
-    check('Manifest: Farben passend zur Seite', man['background_color'] == '#f5f2ec' and man['theme_color'] == '#f5f2ec')
+    check('Manifest: Farben passend zur Seite', man['background_color'] == '#FFF9EC' and man['theme_color'] == '#FFF9EC')
 
     # Rechner: beide Anleitungen zugeklappt
     e = newpage(browser, errs)
@@ -924,6 +926,57 @@ with sync_playwright() as pw:
     check('1.9: iPhone in Safari: Hinweis auf die App', 'nur in der App vom Home-Bildschirm' in p.inner_text('main'))
     p.context.close()
     m.context.close()
+
+    # ---------- 1.10 Pop-Design ----------
+    def theme_at(day):
+        q = newpage(browser, errs)
+        q.clock.set_fixed_time(day)
+        q.goto(BASE)
+        q.wait_for_selector('form[data-form=start]')
+        t = q.evaluate('document.documentElement.dataset.theme')
+        q.context.close()
+        return t
+    if not os.environ.get('GL_THEME'):
+        check('1.10: Automatisch am 31. Oktober Ganzjährig', theme_at('2026-10-31T12:00:00') == 'jahr')
+        check('1.10: Automatisch ab 1. November Weihnachten', theme_at('2026-11-01T08:00:00') == 'weihnachten')
+        check('1.10: Automatisch am 6. Januar noch Weihnachten', theme_at('2027-01-06T20:00:00') == 'weihnachten')
+        check('1.10: Automatisch ab 7. Januar Ganzjährig', theme_at('2027-01-07T08:00:00') == 'jahr')
+        check('1.10: Automatisch im Sommer Ganzjährig', theme_at('2027-07-15T12:00:00') == 'jahr')
+    a.goto(BASE + '#/konto')
+    a.wait_for_selector('.themes')
+    check('1.10: Konto zeigt drei Designs, eins gewählt', a.locator('.themeopt').count() == 3 and a.locator('.themeopt[aria-checked=true]').count() == 1)
+    a.click('.themeopt[data-v=jahr]')
+    a.wait_for_selector('.themeopt.on[data-v=jahr]')
+    check('1.10: Ganzjährig gewählt und gespeichert', a.evaluate("document.documentElement.dataset.theme") == 'jahr'
+          and a.evaluate("localStorage.getItem('geschenkeliste-theme')") == 'jahr')
+    check('1.10: Statusleisten-Farbe passt zu Ganzjährig', a.evaluate("document.querySelector('meta[name=theme-color]').content") == '#FFF9EC')
+    shot(a, '29-konto-design')
+    a.evaluate('document.fonts.ready')
+    check('1.10: Schriften Fredoka und Nunito geladen', a.evaluate("document.fonts.check('600 20px Fredoka') && document.fonts.check('800 16px Nunito') && [...document.fonts].filter(f => f.status === 'loaded').length >= 2"))
+    a.goto(BASE + '#/')
+    a.wait_for_selector('.hero')
+    check('1.10: Start Ganzjährig mit Karte „Nächster Anlass“', a.locator('.hero-jahr:has-text("Nächster Anlass")').count() == 1 and a.locator('.hero-xmas').count() == 0)
+    check('1.10: Kein Überlauf', overflow(a))
+    shot(a, '27-start-jahr')
+    a.reload()
+    a.wait_for_selector('.hero')
+    check('1.10: Wahl bleibt nach Neuladen', a.locator('.hero-jahr').count() == 1 and a.evaluate("document.documentElement.dataset.theme") == 'jahr')
+    a.emulate_media(color_scheme='dark')
+    shot(a, '30-dunkel-jahr')
+    check('1.10: Dunkel Ganzjährig: Grund Tinte', a.evaluate("getComputedStyle(document.body).backgroundColor") == 'rgb(30, 27, 46)')
+    a.goto(BASE + '#/konto')
+    a.click('.themeopt[data-v=weihnachten]')
+    a.wait_for_selector('.themeopt.on[data-v=weihnachten]')
+    a.goto(BASE + '#/')
+    a.wait_for_selector('.hero')
+    check('1.10: Weihnachten: Countdown mit Zuckerstange', a.locator('.hero-xmas:has-text("Heiligabend")').count() == 1)
+    check('1.10: Dunkel Weihnachten: Grund Lakritz', a.evaluate("getComputedStyle(document.body).backgroundColor") == 'rgb(43, 23, 32)')
+    shot(a, '31-dunkel-weihnachten')
+    a.emulate_media(color_scheme='light')
+    a.goto(BASE + '#/konto')
+    a.click('.themeopt[data-v=auto]')
+    a.wait_for_selector('.themeopt.on[data-v=auto]')
+    check('1.10: Automatisch löscht die feste Wahl', a.evaluate("localStorage.getItem('geschenkeliste-theme')") is None)
 
     # Start aus Cache ohne Netz: Daten bleiben sichtbar
     a.context.unroute('https://qbdpzamygonpruaafcrt.supabase.co/**')

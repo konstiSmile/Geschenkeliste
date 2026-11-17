@@ -9,8 +9,8 @@
   "scope": "./",
   "display": "standalone",
   "display_override": ["standalone"],
-  "background_color": "#f5f2ec",
-  "theme_color": "#f5f2ec",
+  "background_color": "#FFF9EC",
+  "theme_color": "#FFF9EC",
   "categories": ["lifestyle", "shopping"],
   "launch_handler": { "client_mode": "navigate-existing" },
   "icons": [
