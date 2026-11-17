@@ -1,4 +1,4 @@
--- Geschenkeliste – Datenbank, Stand Version 1.5 (Konto ohne Mail)
+-- Geschenkeliste – Datenbank, Stand Version 1.6 (Wichteln)
 -- Im Supabase SQL Editor komplett einfügen und „Run“ drücken.
 -- Das Skript darf mehrfach ausgeführt werden (bestehende Daten bleiben erhalten).
 
@@ -147,6 +147,11 @@ begin
   delete from public.members where group_id = p_group and user_id = auth.uid();
   if not exists (select 1 from public.members where group_id = p_group) then
     delete from public.groups where id = p_group;
+  else
+    -- Verlässt der Gründer die Gruppe, übernimmt das am längsten dabei gebliebene Mitglied (ab 1.6)
+    update public.groups set created_by = (
+        select user_id from public.members where group_id = p_group order by joined_at, user_id limit 1)
+      where id = p_group and created_by = auth.uid();
   end if;
 end $$;
 
@@ -498,3 +503,198 @@ grant execute on function public.secure_account(text, text), public.new_recovery
   public.dismiss_reset_notice(), public.is_app_admin(), public.admin_find_users(text),
   public.admin_reset(uuid) to authenticated;
 grant execute on function public.recover_account(text, text, text) to anon, authenticated;
+
+-- =====================================================================
+-- Wichteln (Version 1.6)
+-- Nur wer die Gruppe gegründet hat, legt fest, wer mitmacht und wer wen nicht ziehen darf,
+-- und startet die Auslosung. Jeder sieht nur, wen er selbst gezogen hat, auch der Gründer.
+-- =====================================================================
+
+-- Wer nicht mitmacht (Standard: alle Mitglieder machen mit)
+create table if not exists public.wichtel_out (
+  group_id uuid not null,
+  user_id uuid not null,
+  primary key (group_id, user_id),
+  foreign key (group_id, user_id) references public.members(group_id, user_id) on delete cascade
+);
+
+-- Paare, die sich nicht gegenseitig ziehen dürfen (gilt in beide Richtungen, a < b)
+create table if not exists public.wichtel_exclusions (
+  group_id uuid not null,
+  a uuid not null,
+  b uuid not null,
+  created_at timestamptz not null default now(),
+  primary key (group_id, a, b),
+  check (a < b),
+  foreign key (group_id, a) references public.members(group_id, user_id) on delete cascade,
+  foreign key (group_id, b) references public.members(group_id, user_id) on delete cascade
+);
+
+-- Letzte Auslosung pro Gruppe (für alle Mitglieder sichtbar, ohne Zuteilungen)
+create table if not exists public.wichtel_draws (
+  group_id uuid primary key references public.groups(id) on delete cascade,
+  drawn_at timestamptz not null default now(),
+  participants uuid[] not null
+);
+
+-- Zuteilungen: jeder sieht nur die eigene Zeile
+create table if not exists public.wichtel_pairs (
+  group_id uuid not null,
+  giver uuid not null,
+  receiver uuid not null,
+  primary key (group_id, giver),
+  unique (group_id, receiver),
+  check (giver <> receiver),
+  foreign key (group_id, giver) references public.members(group_id, user_id) on delete cascade,
+  foreign key (group_id, receiver) references public.members(group_id, user_id) on delete cascade
+);
+
+-- ---------- Hilfen ----------
+
+create or replace function public.is_group_owner(g uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.groups where id = g and created_by = auth.uid())
+     and public.is_member(g);
+$$;
+
+-- Sucht eine Zuteilung. Nimmt immer zuerst die Person mit den wenigsten Möglichkeiten,
+-- probiert deren Möglichkeiten in zufälliger Reihenfolge und geht bei einer Sackgasse zurück.
+-- Liefert [geber1, empfänger1, geber2, empfänger2, …] oder null, wenn es keine Zuteilung gibt.
+create or replace function public.wichtel_solve(p_givers uuid[], p_avail uuid[], p_excl text[]) returns uuid[]
+language plpgsql volatile set search_path = '' as $$
+declare
+  g uuid;
+  best uuid;
+  best_n int := 2147483647;
+  n int;
+  r uuid;
+  sub uuid[];
+  steps int := coalesce(nullif(current_setting('wichtel.steps', true), '')::int, 0) + 1;
+begin
+  if coalesce(cardinality(p_givers), 0) = 0 then return '{}'::uuid[]; end if;
+  perform set_config('wichtel.steps', steps::text, true);
+  if steps > 50000 then raise exception 'Keine Auslosung möglich'; end if;
+  foreach g in array p_givers loop
+    select count(*) into n from unnest(p_avail) x where x <> g and not ((g::text || x::text) = any(p_excl));
+    if n < best_n then best := g; best_n := n; end if;
+    exit when n = 0;
+  end loop;
+  if best_n = 0 then return null; end if;
+  for r in select x from unnest(p_avail) x
+           where x <> best and not ((best::text || x::text) = any(p_excl)) order by random() loop
+    sub := public.wichtel_solve(array_remove(p_givers, best), array_remove(p_avail, r), p_excl);
+    if sub is not null then return array[best, r] || sub; end if;
+  end loop;
+  return null;
+end $$;
+
+-- ---------- Aktionen der App (nur Gründer) ----------
+
+create or replace function public.wichtel_set_participant(p_group uuid, p_user uuid, p_on boolean) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not public.is_group_owner(p_group) then raise exception 'Nur der Gründer'; end if;
+  if not exists (select 1 from public.members where group_id = p_group and user_id = p_user) then
+    raise exception 'Kein Mitglied';
+  end if;
+  if p_on then
+    delete from public.wichtel_out where group_id = p_group and user_id = p_user;
+  else
+    insert into public.wichtel_out (group_id, user_id) values (p_group, p_user) on conflict do nothing;
+  end if;
+end $$;
+
+create or replace function public.wichtel_set_exclusion(p_group uuid, p_a uuid, p_b uuid, p_on boolean) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not public.is_group_owner(p_group) then raise exception 'Nur der Gründer'; end if;
+  if p_a is null or p_b is null or p_a = p_b then raise exception 'Zwei verschiedene Personen wählen'; end if;
+  if p_on then
+    if (select count(*) from public.members where group_id = p_group and user_id in (p_a, p_b)) <> 2 then
+      raise exception 'Kein Mitglied';
+    end if;
+    if (select count(*) from public.wichtel_exclusions where group_id = p_group) >= 200 then
+      raise exception 'Zu viele Ausschlüsse';
+    end if;
+    insert into public.wichtel_exclusions (group_id, a, b)
+      values (p_group, least(p_a, p_b), greatest(p_a, p_b)) on conflict do nothing;
+  else
+    delete from public.wichtel_exclusions
+      where group_id = p_group and a = least(p_a, p_b) and b = greatest(p_a, p_b);
+  end if;
+end $$;
+
+-- Lost aus (auch erneut: alle bisherigen Zuteilungen werden ersetzt).
+create or replace function public.wichtel_draw(p_group uuid) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  parts uuid[];
+  excl text[];
+  res uuid[];
+  n int;
+  ts timestamptz := now();
+begin
+  if not public.is_group_owner(p_group) then raise exception 'Nur der Gründer'; end if;
+  perform 1 from public.groups where id = p_group for update;  -- gleichzeitiges Auslosen verhindern
+  select array_agg(m.user_id order by random()) into parts
+    from public.members m
+    where m.group_id = p_group
+      and not exists (select 1 from public.wichtel_out o where o.group_id = p_group and o.user_id = m.user_id);
+  n := coalesce(cardinality(parts), 0);
+  if n < 3 then raise exception 'Zu wenige Teilnehmer'; end if;
+  if n > 60 then raise exception 'Zu viele Teilnehmer'; end if;
+  excl := array(
+    select e.a::text || e.b::text from public.wichtel_exclusions e where e.group_id = p_group
+    union all
+    select e.b::text || e.a::text from public.wichtel_exclusions e where e.group_id = p_group);
+  perform set_config('wichtel.steps', '0', true);
+  res := public.wichtel_solve(parts, parts, excl);
+  if res is null then raise exception 'Keine Auslosung möglich'; end if;
+  delete from public.wichtel_pairs where group_id = p_group;
+  insert into public.wichtel_pairs (group_id, giver, receiver)
+    select p_group, res[i], res[i + 1] from generate_series(1, cardinality(res), 2) as i;
+  insert into public.wichtel_draws (group_id, drawn_at, participants) values (p_group, ts, parts)
+    on conflict (group_id) do update set drawn_at = excluded.drawn_at, participants = excluded.participants;
+  return jsonb_build_object('drawn_at', ts, 'count', n);
+end $$;
+
+-- Auslosung aufheben
+create or replace function public.wichtel_cancel(p_group uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not public.is_group_owner(p_group) then raise exception 'Nur der Gründer'; end if;
+  delete from public.wichtel_pairs where group_id = p_group;
+  delete from public.wichtel_draws where group_id = p_group;
+end $$;
+
+-- ---------- Zugriffsregeln ----------
+
+alter table public.wichtel_out enable row level security;
+alter table public.wichtel_exclusions enable row level security;
+alter table public.wichtel_draws enable row level security;
+alter table public.wichtel_pairs enable row level security;
+
+drop policy if exists "wichteln teilnahme lesen" on public.wichtel_out;
+create policy "wichteln teilnahme lesen" on public.wichtel_out for select to authenticated
+  using (public.is_member(group_id));
+drop policy if exists "wichteln ausschlüsse lesen" on public.wichtel_exclusions;
+create policy "wichteln ausschlüsse lesen" on public.wichtel_exclusions for select to authenticated
+  using (public.is_group_owner(group_id));
+drop policy if exists "wichteln auslosung lesen" on public.wichtel_draws;
+create policy "wichteln auslosung lesen" on public.wichtel_draws for select to authenticated
+  using (public.is_member(group_id));
+drop policy if exists "wichteln eigene zuteilung lesen" on public.wichtel_pairs;
+create policy "wichteln eigene zuteilung lesen" on public.wichtel_pairs for select to authenticated
+  using (giver = auth.uid());
+
+revoke all on public.wichtel_out, public.wichtel_exclusions, public.wichtel_draws, public.wichtel_pairs
+  from anon, authenticated;
+grant select on public.wichtel_out, public.wichtel_exclusions, public.wichtel_draws, public.wichtel_pairs
+  to authenticated;
+
+revoke execute on function public.is_group_owner(uuid), public.wichtel_solve(uuid[], uuid[], text[]),
+  public.wichtel_set_participant(uuid, uuid, boolean), public.wichtel_set_exclusion(uuid, uuid, uuid, boolean),
+  public.wichtel_draw(uuid), public.wichtel_cancel(uuid) from public, anon, authenticated;
+grant execute on function public.is_group_owner(uuid), public.wichtel_set_participant(uuid, uuid, boolean),
+  public.wichtel_set_exclusion(uuid, uuid, uuid, boolean), public.wichtel_draw(uuid),
+  public.wichtel_cancel(uuid) to authenticated;

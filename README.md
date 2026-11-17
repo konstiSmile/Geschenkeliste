@@ -4,6 +4,8 @@ Wunschlisten für Familie und Freunde als Web-App (PWA). Konten ohne Mail (Benut
 Wiederherstellungscode, Rücksetzen durch Admin). Gruppen mit Einladungs-Code,
 eine Wunschliste pro Person mit Freigabe pro Gruppe, Reservieren und „gekauft“ –
 unsichtbar für den Wünschenden (abgesichert in der Datenbank per Row Level Security).
+Wichteln pro Gruppe: Gründer legt Teilnehmer und Ausschlüsse fest und lost in der Datenbank aus,
+jeder sieht nur die eigene Zuteilung.
 
 - App: `index.html`, `app.js`, `app.css`, `sw.js`, `manifest.webmanifest`, `icons/`
 - Datenbank: `supabase/schema.sql` (im Supabase SQL Editor ausführen, mehrfach ausführbar)

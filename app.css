@@ -114,7 +114,7 @@ a.row-item:active, .row-item a.row-main:active { background: var(--bg); }
 /* Avatare und Kacheln */
 .av, .tile { flex: none; display: inline-grid; place-items: center; color: #fff; font-weight: 600; }
 .av { width: 40px; height: 40px; border-radius: 50%; font-size: 15px; letter-spacing: .02em; }
-.av.sm { width: 30px; height: 30px; font-size: 12px; }
+.av.sm { width: 30px; height: 30px; font-size: 12px; min-height: 0; padding: 0; border-radius: 50%; }
 .av.xs { width: 26px; height: 26px; font-size: 10.5px; border: 2px solid var(--card); }
 .av.lg { width: 64px; height: 64px; font-size: 24px; }
 .av.more { background: var(--line); color: var(--text-2); }
@@ -217,13 +217,17 @@ button { cursor: pointer; color: var(--text); }
 main > .primary.withicon { margin-bottom: 16px; }
 
 /* Formulare */
-input, textarea {
+input, textarea, select {
   font: inherit; font-size: 16px; color: var(--text); width: 100%;
   background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
 }
 textarea { resize: vertical; line-height: 1.45; }
 input::placeholder, textarea::placeholder { color: var(--text-3); }
-input:focus, textarea:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 20%, transparent); }
+select {
+  -webkit-appearance: none; appearance: none; min-width: 0; padding-right: 34px;
+  background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238d978f' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center / 16px;
+}
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 20%, transparent); }
 .stack > * + * { margin-top: 12px; }
 .stack label, .fields label { display: block; font-size: 13px; font-weight: 600; color: var(--text-2); }
 .stack label input, .stack label textarea { margin-top: 6px; font-weight: 400; }
@@ -237,6 +241,16 @@ label.check { display: flex; align-items: center; gap: 12px; padding: 12px 0; fo
 input[type=checkbox], input[type=radio] { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--red); }
 .sub { padding-left: 32px; }
 form h2 { margin-top: 22px; }
+
+/* Wichteln */
+.reveal { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 24px 16px 16px; }
+.reveal .eyebrow { margin-top: 10px; color: var(--text-2); font-weight: 500; }
+.reveal-name { font: 700 28px/1.15 var(--font-display); letter-spacing: -.02em; overflow-wrap: anywhere; }
+.reveal .primary { margin-top: 14px; }
+.pair { display: flex; align-items: center; gap: 8px; }
+.pair select { flex: 1; }
+.rows + .card { margin-top: 12px; }
+.row-item .avs .av + .av { margin-left: -8px; }
 
 /* Anmeldung */
 .login { padding-top: calc(env(safe-area-inset-top) + 24px); padding-bottom: 48px; }

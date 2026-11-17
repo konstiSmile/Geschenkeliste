@@ -255,5 +255,118 @@ run(f"update public.reset_codes set expires_at = now() - interval '1 minute' whe
 r = recover('ben', rs['code'], 'benneu99999')
 check('Abgelaufener Rücksetz-Code abgelehnt', r['error'] == 'falsch' and pw_ok(B, 'benneu12345'))
 
+# ---------- Wichteln (1.6) ----------
+E, F, G = (str(uuid.uuid4()) for _ in range(3))
+for u, n in ((E, 'Emil'), (F, 'Finn'), (G, 'Gina')):
+    run(f"insert into auth.users (id, email) values ('{u}', '{n.lower()}@x.de');")
+    as_exec(u, f"insert into public.profiles (id, name) values ('{u}', '{n}')")
+ok, r = as_user(A, "select * from public.create_group('Wichtel')")
+wg = r[0]['id']
+for u in (B, C, D, E):
+    as_user(u, f"select public.join_group('{r[0]['code']}') as g")
+
+
+def pairs_of(u):
+    ok, r = as_user(u, f"select giver, receiver from public.wichtel_pairs where group_id = '{wg}'")
+    return r
+
+
+def all_pairs():
+    _, out, _ = run(f"select giver || '>' || receiver from public.wichtel_pairs where group_id = '{wg}'")
+    return dict(x.split('>') for x in out.splitlines())
+
+
+ok, _ = rpc(B, f"public.wichtel_draw('{wg}')")
+check('Wichteln: nur der Gründer lost aus', not ok)
+ok, _ = rpc(B, f"public.wichtel_set_exclusion('{wg}', '{A}', '{C}', true)")
+check('Wichteln: nur der Gründer trägt Ausschlüsse ein', not ok)
+ok, _ = rpc(B, f"public.wichtel_set_participant('{wg}', '{C}', false)")
+check('Wichteln: nur der Gründer ändert Teilnahme', not ok)
+ok, _ = as_exec(A, f"insert into public.wichtel_pairs values ('{wg}', '{A}', '{B}')")
+ok2, _ = as_exec(A, f"insert into public.wichtel_exclusions (group_id, a, b) values ('{wg}', '{min(A, B)}', '{max(A, B)}')")
+ok3, _ = as_exec(A, f"insert into public.wichtel_draws (group_id, participants) values ('{wg}', '{{}}')")
+check('Wichteln: Tabellen nicht direkt beschreibbar', not ok and not ok2 and not ok3)
+ok, _ = rpc(A, f"public.wichtel_set_exclusion('{wg}', '{A}', '{A}', true)")
+check('Wichteln: Ausschluss mit sich selbst abgelehnt', not ok)
+ok, _ = rpc(A, f"public.wichtel_set_exclusion('{wg}', '{A}', '{F}', true)")
+check('Wichteln: Ausschluss mit Nicht-Mitglied abgelehnt', not ok)
+ok, _ = rpc(A, f"public.wichtel_set_exclusion('{wg}', '{C}', '{B}', true)")
+ok2, _ = rpc(A, f"public.wichtel_set_exclusion('{wg}', '{B}', '{C}', true)")
+ok3, _ = rpc(A, f"public.wichtel_set_exclusion('{wg}', '{D}', '{E}', true)")
+ok4, r = as_user(A, f"select a, b from public.wichtel_exclusions where group_id = '{wg}'")
+check('Wichteln: Ausschlüsse gespeichert, doppelt zählt einmal', ok and ok2 and ok3 and len(r) == 2)
+ok, r = as_user(B, f"select * from public.wichtel_exclusions where group_id = '{wg}'")
+check('Wichteln: Mitglieder sehen Ausschlüsse nicht', ok and r == [])
+
+for i in range(25):
+    ok, res = rpc(A, f"public.wichtel_draw('{wg}')")
+    if not ok:
+        break
+    m = all_pairs()
+    good = (set(m) == {A, B, C, D, E} and set(m.values()) == {A, B, C, D, E}
+            and all(g != r for g, r in m.items())
+            and m[B] != C and m[C] != B and m[D] != E and m[E] != D)
+    if not good:
+        break
+check('Wichteln: 25 Auslosungen, alle ziehen genau einmal, nie sich selbst, Ausschlüsse beachtet', ok and good and res['count'] == 5)
+m = all_pairs()
+for u, n in ((A, 'Anna'), (B, 'Ben'), (E, 'Emil')):
+    r = pairs_of(u)
+    check(f'Wichteln: {n} sieht nur die eigene Zuteilung', len(r) == 1 and r[0]['giver'] == u and r[0]['receiver'] == m[u])
+ok, r = as_user(F, f"select * from public.wichtel_pairs where group_id = '{wg}'")
+check('Wichteln: Fremde sehen nichts', ok and r == [])
+ok, r = as_user(B, f"select participants from public.wichtel_draws where group_id = '{wg}'")
+check('Wichteln: Mitglieder sehen, dass ausgelost wurde', len(r) == 1 and len(r[0]['participants']) == 5)
+ok, r = as_user(F, f"select * from public.wichtel_draws where group_id = '{wg}'")
+check('Wichteln: Fremde sehen keine Auslosung', r == [])
+
+seen_pairs = set()
+for i in range(15):
+    rpc(A, f"public.wichtel_draw('{wg}')")
+    seen_pairs.add(tuple(sorted(all_pairs().items())))
+check('Wichteln: neu auslosen ergibt verschiedene Zuteilungen', len(seen_pairs) > 3)
+
+ok, _ = rpc(A, f"public.wichtel_set_participant('{wg}', '{E}', false)")
+ok2, r = as_user(B, f"select user_id from public.wichtel_out where group_id = '{wg}'")
+check('Wichteln: Emil macht nicht mit (für Mitglieder sichtbar)', ok and [x['user_id'] for x in r] == [E])
+ok, res = rpc(A, f"public.wichtel_draw('{wg}')")
+m = all_pairs()
+check('Wichteln: ohne Emil ausgelost', ok and res['count'] == 4 and E not in m and E not in m.values())
+check('Wichteln: Emil sieht keine Zuteilung', pairs_of(E) == [])
+
+ok, _ = rpc(A, f"public.wichtel_set_exclusion('{wg}', '{A}', '{D}', true)")
+ok, _ = rpc(A, f"public.wichtel_set_exclusion('{wg}', '{A}', '{B}', true)")
+ok, _ = rpc(A, f"public.wichtel_set_exclusion('{wg}', '{A}', '{C}', true)")
+before = all_pairs()
+ok, err = rpc(A, f"public.wichtel_draw('{wg}')")
+check('Wichteln: unmögliche Auslosung meldet Fehler', not ok and 'Keine Auslosung möglich' in err)
+check('Wichteln: alte Zuteilung bleibt bei Fehler', all_pairs() == before)
+rpc(A, f"public.wichtel_set_exclusion('{wg}', '{A}', '{B}', false)")
+rpc(A, f"public.wichtel_set_exclusion('{wg}', '{A}', '{C}', false)")
+rpc(A, f"public.wichtel_set_participant('{wg}', '{B}', false)")
+rpc(A, f"public.wichtel_set_participant('{wg}', '{C}', false)")
+ok, err = rpc(A, f"public.wichtel_draw('{wg}')")
+check('Wichteln: weniger als 3 Teilnehmer abgelehnt', not ok and 'Zu wenige' in err)
+for u in (B, C, E):
+    rpc(A, f"public.wichtel_set_participant('{wg}', '{u}', true)")
+rpc(A, f"public.wichtel_set_exclusion('{wg}', '{A}', '{D}', false)")
+ok, _ = rpc(A, f"public.wichtel_draw('{wg}')")
+m = all_pairs()
+giver_of_c = next(g for g, r in m.items() if r == C)
+ok, _ = as_user(C, f"select public.leave_group('{wg}') as x")
+m2 = all_pairs()
+check('Wichteln: wer austritt, verschwindet aus den Zuteilungen', C not in m2 and C not in m2.values() and giver_of_c not in m2)
+_, out, _ = run(f"select count(*) from public.wichtel_exclusions where group_id = '{wg}' and '{C}' in (a, b)")
+check('Wichteln: Ausschlüsse der Person entfernt', out == '0')
+ok, _ = rpc(A, f"public.wichtel_cancel('{wg}')")
+ok2, r = as_user(B, f"select * from public.wichtel_draws where group_id = '{wg}'")
+check('Wichteln: Auslosung aufheben', ok and r == [] and all_pairs() == {})
+ok, _ = as_user(A, f"select public.leave_group('{wg}') as x")
+_, out, _ = run(f"select created_by from public.groups where id = '{wg}'")
+check('Gründer tritt aus: am längsten dabei gebliebenes Mitglied übernimmt', out == B)
+ok, _ = rpc(B, f"public.wichtel_set_participant('{wg}', '{D}', false)")
+ok2, _ = rpc(A, f"public.wichtel_draw('{wg}')")
+check('Neuer Gründer darf verwalten, alter nicht mehr', ok and not ok2)
+
 print('\nAlle Tests grün' if not fails else f'\n{fails} Fehler')
 sys.exit(1 if fails else 0)

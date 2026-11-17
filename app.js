@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.5';
+const VERSION = '1.6';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -17,7 +17,7 @@ let ui = {};              // flüchtiger Zustand der Ansicht (offene Formulare, 
 let fresh = null;         // neu erzeugter Wiederherstellungscode {code, username, reason}, nur im Speicher
 
 function emptyData() {
-  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, at: 0, loaded: false };
+  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], at: 0, loaded: false };
 }
 function loadState() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; }
@@ -94,6 +94,13 @@ function errText(j, status) {
   if (/Could not find the function|PGRST202|42883/.test(m + code)) return 'Die Datenbank ist noch nicht aktualisiert (schema.sql ausführen).';
   if (code === '23505' || /duplicate key/i.test(m)) return 'Das hat gerade schon jemand anderes reserviert.';
   if (code === '42501' || /row-level security/i.test(m)) return 'Das darfst du leider nicht.';
+  if (/Nur der Gründer/.test(m)) return 'Das darf nur, wer die Gruppe gegründet hat.';
+  if (/Keine Auslosung möglich/.test(m)) return 'Mit diesen Ausschlüssen geht die Auslosung nicht auf. Entferne einen Ausschluss und versuch es nochmal.';
+  if (/Zu wenige Teilnehmer/.test(m)) return 'Zum Auslosen braucht es mindestens 3 Personen.';
+  if (/Zu viele Teilnehmer/.test(m)) return 'Mehr als 60 Personen gehen nicht.';
+  if (/Zu viele Ausschlüsse/.test(m)) return 'Mehr als 200 Ausschlüsse gehen nicht.';
+  if (/Zwei verschiedene Personen/.test(m)) return 'Wähle zwei verschiedene Personen.';
+  if (/Kein Mitglied/.test(m)) return 'Diese Person ist nicht mehr in der Gruppe.';
   if (/Code nicht gefunden/.test(m)) return 'Diesen Gruppen-Code gibt es nicht.';
   if (/Zu viele Gruppen/.test(m)) return 'Du hast schon 20 Gruppen angelegt.';
   if (/anonymous/i.test(m) && /disabled/i.test(m)) return 'Start ohne Mail ist in Supabase noch nicht eingeschaltet.';
@@ -190,7 +197,7 @@ async function passwordLogin(username, password) {
 async function sync(quiet) {
   if (!S.session) return;
   try {
-    const [profiles, groups, members, wishes, wg, res, acc, admin] = await Promise.all([
+    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
       sb('/rest/v1/groups?select=id,name,code,created_by,created_at&order=created_at'),
       sb('/rest/v1/members?select=group_id,user_id,joined_at&order=joined_at'),
@@ -199,10 +206,16 @@ async function sync(quiet) {
       sb('/rest/v1/reservations?select=wish_id,user_id,status'),
       // ab 1.5; vor dem Ausführen der neuen schema.sql fehlen sie, die App läuft trotzdem
       sb('/rest/v1/accounts?select=username,reset_at,reset_notice').catch(() => null),
-      sb('/rest/v1/rpc/is_app_admin', { method: 'POST', body: {} }).catch(() => false)
+      sb('/rest/v1/rpc/is_app_admin', { method: 'POST', body: {} }).catch(() => false),
+      // Wichteln ab 1.6, ebenfalls tolerant
+      sb('/rest/v1/wichtel_draws?select=group_id,drawn_at,participants').catch(() => []),
+      sb('/rest/v1/wichtel_pairs?select=group_id,receiver').catch(() => []),
+      sb('/rest/v1/wichtel_exclusions?select=group_id,a,b,created_at&order=created_at').catch(() => []),
+      sb('/rest/v1/wichtel_out?select=group_id,user_id').catch(() => [])
     ]);
     if (!S.session) return;
-    D = { profiles, groups, members, wishes, wg, res, account: acc && acc[0] ? acc[0] : null, admin: admin === true, at: Date.now(), loaded: true };
+    D = { profiles, groups, members, wishes, wg, res, account: acc && acc[0] ? acc[0] : null, admin: admin === true,
+      wd: wd || [], wp: wp || [], wx: wx || [], wo: wo || [], at: Date.now(), loaded: true };
     S.cache = { uid: me(), D };
     saveState();
     render();
@@ -221,6 +234,23 @@ function visibleIn(w, gid) {
 }
 function wishesOf(uid, gid) {
   return D.wishes.filter(w => w.owner === uid && (gid ? visibleIn(w, gid) : true));
+}
+
+/* Wichteln */
+const isFounder = g => g && g.created_by === me();
+const drawOf = gid => (D.wd || []).find(x => x.group_id === gid);
+const pairOf = gid => (D.wp || []).find(x => x.group_id === gid);
+const takesPart = (gid, uid) => !(D.wo || []).some(x => x.group_id === gid && x.user_id === uid);
+const exclOf = gid => (D.wx || []).filter(x => x.group_id === gid);
+function wichtelState(gid) {
+  const d = drawOf(gid);
+  if (!d) return { drawn: false };
+  const now = membersOf(gid).map(m => m.user_id).filter(u => takesPart(gid, u));
+  const was = d.participants || [];
+  const stale = now.length !== was.length || now.some(u => !was.includes(u));
+  const inDraw = was.includes(me());
+  const pair = pairOf(gid);
+  return { drawn: true, at: d.drawn_at, stale, inDraw, receiver: pair ? pair.receiver : null, missing: inDraw && !pair };
 }
 
 
@@ -242,7 +272,8 @@ const I = {
   copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
   shield: '<path d="M12 3 5 6v5c0 4.5 3 8.4 7 10 4-1.6 7-5.5 7-10V6z"/>',
   heart: '<path d="M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.4-7.5 10-7.5 10z"/>',
-  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3M14 9l2 2"/>'
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3M14 9l2 2"/>',
+  shuffle: '<path d="M4 7h3.2c1.9 0 3 .9 4.2 2.8l1.2 2c1.2 1.9 2.4 3.2 4.3 3.2H20M4 17h3.2c1.3 0 2.2-.5 3-1.4M13.6 8.4c.8-.9 1.8-1.4 3.1-1.4H20M17.5 4.5 20 7l-2.5 2.5M17.5 12.5 20 15l-2.5 2.5"/>'
 };
 const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
 
@@ -440,6 +471,17 @@ function viewHome() {
       </div>`, { tab: 'home', eyebrow: today });
   }
 
+  const wRows = gs.map(g => ({ g, st: wichtelState(g.id) })).filter(x => x.st.receiver || x.st.missing).map(({ g, st }) => {
+    if (!st.receiver) {
+      return `<li><a class="row-item" href="#/g/${g.id}/wichteln"><span class="tile plain">${icon('shuffle')}</span>
+        <span class="row-main"><span class="row-title">Wichteln in ${esc(g.name)}</span><span class="row-meta">Deine Zuteilung fehlt, es muss neu ausgelost werden</span></span>${icon('chev', 'chev')}</a></li>`;
+    }
+    const n = wishesOf(st.receiver, g.id).length;
+    return `<li><a class="row-item" href="#/g/${g.id}/p/${st.receiver}">${avatar(st.receiver)}
+      <span class="row-main"><span class="row-title">Du beschenkst ${esc(nameOf(st.receiver))}</span><span class="row-meta">${esc(g.name)} · ${n ? plural(n, 'Wunsch', 'Wünsche') : 'noch keine Wünsche'}</span></span>${icon('chev', 'chev')}</a></li>`;
+  }).join('');
+  const wichtelHtml = wRows ? `<h2>Wichteln</h2><ul class="rows">${wRows}</ul>` : '';
+
   const errHtml = errands.length ? `<ul class="rows">${errands.map(({ r, w }) => {
     const g = groupFor(w);
     const done = r.status === 'gekauft';
@@ -460,7 +502,7 @@ function viewHome() {
   }).join('')}</ul>`
     : `<p class="empty-line">Sobald jemand aus deinen Gruppen etwas einträgt, erscheint es hier.</p>`;
 
-  return shell('Hallo ' + myName(), `${secure}${hero}${stats}
+  return shell('Hallo ' + myName(), `${secure}${hero}${stats}${wichtelHtml}
     <h2>Deine Besorgungen</h2>${errHtml}
     <h2>Neu in deinen Gruppen</h2>${feedHtml}`, { tab: 'home', eyebrow: today });
 }
@@ -544,6 +586,15 @@ function viewGroup(gid) {
   const leave = ui.confirmLeave === gid
     ? `<button class="danger" data-act="leave" data-id="${gid}">Wirklich verlassen</button>`
     : `<button class="ghost danger-text" data-act="askleave" data-id="${gid}">Gruppe verlassen</button>`;
+  const st = wichtelState(gid);
+  let wMeta = '';
+  if (st.drawn) {
+    if (st.receiver) wMeta = `Du beschenkst ${esc(nameOf(st.receiver))}`;
+    else if (st.missing) wMeta = 'Deine Zuteilung fehlt, neu auslosen';
+    else wMeta = `Ausgelost am ${esc(fmtDay(st.at))}`;
+  } else if (isFounder(g)) wMeta = 'Noch nicht ausgelost';
+  const wichtel = wMeta ? `<h2>Wichteln</h2><ul class="rows"><li><a class="row-item" href="#/g/${gid}/wichteln"><span class="tile plain">${icon('shuffle')}</span>
+      <span class="row-main"><span class="row-title">Wichteln</span><span class="row-meta">${wMeta}</span></span>${icon('chev', 'chev')}</a></li></ul>` : '';
   return shell(g.name, `
     <div class="card invite">
       <div><p class="eyebrow">Einladungscode</p><p class="code" id="gcode">${esc(fmtCode(g.code))}</p></div>
@@ -551,6 +602,7 @@ function viewGroup(gid) {
     </div>
     <h2>Mitglieder</h2>
     <ul class="rows">${rows}</ul>
+    ${wichtel}
     <h2>Verwalten</h2>
     <div class="card stack">
       <form data-form="rename" data-id="${gid}" class="inline"><input name="name" maxlength="40" value="${esc(g.name)}" required><button class="secondary" type="submit">Umbenennen</button></form>
@@ -593,6 +645,85 @@ function viewPerson(gid, uid) {
     <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert oder gekauft ist.</span></p>`;
   return shell(name, head + (ws.length ? `<ul class="cards">${items}</ul>` : emptyState('gift', 'Noch leer', `${esc(name)} hat für diese Gruppe noch nichts eingetragen.`)),
     { tab: 'groups', back: ['#/g/' + gid, g.name] });
+}
+
+function viewWichteln(gid) {
+  const g = myGroups().find(x => x.id === gid);
+  if (!g) return shell('Wichteln', emptyState('people', 'Nicht gefunden', 'Diese Gruppe gibt es nicht mehr.'), { tab: 'groups', back: ['#/gruppen', 'Gruppen'] });
+  const st = wichtelState(gid);
+  const founder = isFounder(g);
+  const opt = { tab: 'groups', back: ['#/g/' + gid, g.name], sub: esc(g.name) };
+  let top = '';
+  if (st.receiver) {
+    const n = wishesOf(st.receiver, gid).length;
+    top = `<div class="card reveal">
+      ${avatar(st.receiver, 'lg')}
+      <p class="eyebrow">Du beschenkst</p>
+      <p class="reveal-name">${esc(nameOf(st.receiver))}</p>
+      <p class="small muted">${n ? plural(n, 'Wunsch', 'Wünsche') + ' auf der Liste' : 'Noch keine Wünsche auf der Liste'}</p>
+      <a class="primary" href="#/g/${gid}/p/${st.receiver}">Wunschliste ansehen</a>
+    </div>
+    <p class="foot">${icon('eyeoff')}<span>Ausgelost am ${esc(fmtDay(st.at))}. Nur du siehst, wen du gezogen hast.</span></p>`;
+  } else if (st.missing) {
+    top = `<div class="banner">${icon('shuffle')}<span><b>Deine Zuteilung gibt es nicht mehr</b><small>Jemand hat die Gruppe verlassen. ${founder ? 'Lose neu aus, damit alle wieder jemanden haben.' : esc(nameOf(g.created_by)) + ' muss neu auslosen.'}</small></span></div>`;
+  } else if (st.drawn) {
+    top = `<div class="banner">${icon('shuffle')}<span><b>Du machst nicht mit</b><small>Ausgelost am ${esc(fmtDay(st.at))} ohne dich.</small></span></div>`;
+  } else {
+    top = emptyState('shuffle', 'Noch nicht ausgelost', founder
+      ? 'Leg fest, wer mitmacht und wer wen nicht ziehen darf. Danach sieht jeder nur, wen er beschenkt.'
+      : `${esc(nameOf(g.created_by))} startet die Auslosung. Danach siehst du hier, wen du beschenkst.`);
+  }
+  if (!founder) return shell('Wichteln', top, opt);
+
+  const ms = membersOf(gid).map(m => m.user_id)
+    .sort((a, b) => (a !== me()) - (b !== me()) || nameOf(a).localeCompare(nameOf(b), 'de'));
+  const who = u => u === me() ? myName() || 'Du' : nameOf(u);
+  const count = ms.filter(u => takesPart(gid, u)).length;
+  const partRows = ms.map(u => {
+    const on = takesPart(gid, u);
+    return `<li class="row-item">
+      <button class="tick ${on ? 'on' : ''}" data-act="wpart" data-id="${gid}" data-u="${u}" data-on="${on ? '0' : '1'}" aria-label="${on ? 'Macht nicht mit' : 'Macht mit'}">${icon('check')}</button>
+      ${avatar(u, 'sm')}<span class="row-main"><span class="row-title">${esc(who(u))}</span></span></li>`;
+  }).join('');
+  const ex = exclOf(gid);
+  const exRows = ex.map(x => {
+    const [p, q] = who(x.a).localeCompare(who(x.b), 'de') <= 0 ? [x.a, x.b] : [x.b, x.a];
+    return `<li class="row-item"><span class="avs">${avatar(p, 'xs')}${avatar(q, 'xs')}</span>
+      <span class="row-main"><span class="row-title">${esc(who(p))} und ${esc(who(q))}</span></span>
+      <button class="ghost sm danger-text" data-act="wexdel" data-id="${gid}" data-u="${x.a}" data-v="${x.b}">Entfernen</button></li>`;
+  }).join('');
+  const opts = '<option value="">Person</option>' + ms.map(u => `<option value="${u}">${esc(who(u))}</option>`).join('');
+  const exForm = ms.length >= 2 ? `<form data-form="wex" data-id="${gid}" class="card stack">
+      <div class="pair"><select name="a" aria-label="Erste Person" required>${opts}</select><span class="muted">und</span><select name="b" aria-label="Zweite Person" required>${opts}</select></div>
+      <button class="secondary" type="submit">Ausschluss hinzufügen</button>
+    </form>` : '';
+  let action;
+  if (!st.drawn) {
+    action = `<button class="primary withicon" data-act="wdraw" data-id="${gid}">${icon('shuffle')}Jetzt auslosen</button>`;
+  } else if (ui.confirmRedraw === gid) {
+    action = `<div class="card stack"><p class="small">Alle Zuteilungen ändern sich. Jeder sieht danach eine neue Person, auch wer schon etwas besorgt hat.</p>
+      <button class="danger" data-act="wdraw" data-id="${gid}">Wirklich neu auslosen</button>
+      <button class="ghost" data-act="wnoconfirm">Abbrechen</button></div>`;
+  } else if (ui.confirmCancel === gid) {
+    action = `<div class="card stack"><p class="small">Die Auslosung wird gelöscht. Niemand sieht danach mehr, wen er gezogen hatte.</p>
+      <button class="danger" data-act="wcancel" data-id="${gid}">Wirklich aufheben</button>
+      <button class="ghost" data-act="wnoconfirm">Abbrechen</button></div>`;
+  } else {
+    action = `<button class="secondary withicon" data-act="askredraw" data-id="${gid}">${icon('shuffle')}Neu auslosen</button>
+      <button class="ghost danger-text" data-act="askwcancel" data-id="${gid}">Auslosung aufheben</button>`;
+  }
+  const stale = st.drawn && st.stale ? `<div class="banner">${icon('people')}<span><b>Die Gruppe hat sich geändert</b><small>Seit der Auslosung ist jemand dazugekommen, gegangen oder macht nicht mehr mit. Lose neu aus, damit es wieder passt.</small></span></div>` : '';
+  return shell('Wichteln', `${top}
+    <h2>Wer macht mit</h2>
+    <ul class="rows">${partRows}</ul>
+    <p class="foot">${icon('people')}<span>${plural(count, 'Person macht', 'Personen machen')} mit.${st.drawn ? ' Änderungen gelten ab der nächsten Auslosung.' : ''}</span></p>
+    <h2>Dürfen sich nicht ziehen</h2>
+    ${ex.length ? `<ul class="rows">${exRows}</ul>` : `<p class="empty-line">Zum Beispiel Paare oder Geschwister, die sich sowieso beschenken.</p>`}
+    ${exForm}
+    <h2>Auslosung</h2>
+    ${stale}
+    <div class="stack">${action}</div>
+    <p class="foot">${icon('eyeoff')}<span>Auch du siehst nur, wen du selbst gezogen hast.</span></p>`, opt);
 }
 
 function secureCard() {
@@ -692,6 +823,7 @@ function render() {
   if (parts[0] === 'w' && parts[1]) html = viewWishForm(parts[1]);
   else if (parts[0] === 'gruppen') html = viewGroups();
   else if (parts[0] === 'g' && parts[1] && parts[2] === 'p' && parts[3]) html = viewPerson(parts[1], parts[3]);
+  else if (parts[0] === 'g' && parts[1] && parts[2] === 'wichteln') html = viewWichteln(parts[1]);
   else if (parts[0] === 'g' && parts[1]) html = viewGroup(parts[1]);
   else if (parts[0] === 'liste') html = viewList();
   else if (parts[0] === 'konto' || parts[0] === 'mehr') html = viewAccount();
@@ -836,6 +968,14 @@ const forms = {
     S.pendingJoin = f.code.value.trim();
     await doPendingJoin();
   },
+  async wex(f) {
+    const a = f.a.value, b = f.b.value;
+    if (!a || !b) throw new Error('Wähle zwei Personen aus.');
+    if (a === b) throw new Error('Wähle zwei verschiedene Personen.');
+    await sb('/rest/v1/rpc/wichtel_set_exclusion', { method: 'POST', body: { p_group: f.dataset.id, p_a: a, p_b: b, p_on: true } });
+    await sync(true);
+    toast('Ausschluss gespeichert.');
+  },
   async rename(f) {
     await sb('/rest/v1/rpc/rename_group', { method: 'POST', body: { p_group: f.dataset.id, p_name: f.name.value.trim() } });
     ui = {};
@@ -905,6 +1045,31 @@ const acts = {
       try { await navigator.share({ title: 'Geschenkeliste', text, url: link }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
     }
     try { await navigator.clipboard.writeText(text + '\n' + link); toast('Einladung kopiert.'); } catch (e) { toast('Code: ' + fmtCode(g.code)); }
+  },
+  wpart: async el => {
+    await sb('/rest/v1/rpc/wichtel_set_participant', { method: 'POST', body: { p_group: el.dataset.id, p_user: el.dataset.u, p_on: el.dataset.on === '1' } });
+    await sync(true);
+  },
+  wexdel: async el => {
+    await sb('/rest/v1/rpc/wichtel_set_exclusion', { method: 'POST', body: { p_group: el.dataset.id, p_a: el.dataset.u, p_b: el.dataset.v, p_on: false } });
+    await sync(true);
+  },
+  wdraw: async el => {
+    const again = !!drawOf(el.dataset.id);
+    await sb('/rest/v1/rpc/wichtel_draw', { method: 'POST', body: { p_group: el.dataset.id } });
+    ui = {};
+    await sync(true);
+    toast(again ? 'Neu ausgelost.' : 'Ausgelost. Jeder sieht jetzt, wen er beschenkt.');
+    window.scrollTo(0, 0);
+  },
+  askredraw: async el => { ui.confirmRedraw = el.dataset.id; render(); },
+  askwcancel: async el => { ui.confirmCancel = el.dataset.id; render(); },
+  wnoconfirm: async () => { delete ui.confirmRedraw; delete ui.confirmCancel; render(); },
+  wcancel: async el => {
+    await sb('/rest/v1/rpc/wichtel_cancel', { method: 'POST', body: { p_group: el.dataset.id } });
+    ui = {};
+    await sync(true);
+    toast('Auslosung aufgehoben.');
   },
   reserve: async el => {
     await sb('/rest/v1/reservations', { method: 'POST', prefer: 'return=minimal', body: { wish_id: el.dataset.id } });
