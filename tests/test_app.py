@@ -23,8 +23,15 @@ def check(name, cond):
         fails += 1
 
 
-def newpage(browser, errors):
-    ctx = browser.new_context(viewport={'width': 390, 'height': 780}, service_workers='block')
+IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1'
+IPHONE_CHROME = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/131.0.6778.73 Mobile/15E148 Safari/604.1'
+ANDROID = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36'
+
+
+def newpage(browser, errors, ua=None, init=None):
+    ctx = browser.new_context(viewport={'width': 390, 'height': 780}, service_workers='block', **({'user_agent': ua} if ua else {}))
+    if init:
+        ctx.add_init_script(init)
     ctx.route('https://qbdpzamygonpruaafcrt.supabase.co/**', mock.handle)
     p = ctx.new_page()
     p.on('pageerror', lambda e: errors.append(str(e)))
@@ -549,6 +556,107 @@ with sync_playwright() as pw:
     d.wait_for_selector('text=Trotzdem abmelden')
     check('Warnung beim Abmelden ohne Benutzername', True)
     shot(d, '6-mehr-anon')
+
+    # 1.7.1 Als App installieren
+    import json as _json
+    from PIL import Image
+    root = os.path.join(os.path.dirname(__file__), '..')
+    man = _json.load(open(os.path.join(root, 'manifest.webmanifest'), encoding='utf-8'))
+    files = [(i['src'], i['sizes']) for i in man['icons'] + man['screenshots']]
+    files += [(i['src'], i['sizes']) for sc in man['shortcuts'] for i in sc['icons']]
+    bad = [f for f, sz in files if not os.path.exists(os.path.join(root, f))
+           or '%dx%d' % Image.open(os.path.join(root, f)).size != sz]
+    check('Manifest: alle Bilder vorhanden, Größen stimmen ' + ' '.join(bad), not bad)
+    check('Manifest: id, maskierbares Symbol, Kurzbefehle, Bilder schmal',
+          man.get('id') and any(i.get('purpose') == 'maskable' for i in man['icons'])
+          and len(man['shortcuts']) == 3 and all(x['form_factor'] == 'narrow' for x in man['screenshots']))
+    check('Manifest: Farben passend zur Seite', man['background_color'] == '#f5f2ec' and man['theme_color'] == '#f5f2ec')
+
+    # Rechner: beide Anleitungen zugeklappt
+    e = newpage(browser, errs)
+    e.goto(BASE)
+    e.wait_for_selector('#install .install')
+    check('Rechner: „Auf dem Handy als App“', 'Auf dem Handy als App' in e.inner_text('#install'))
+    check('Rechner: zwei zugeklappte Anleitungen', e.locator('#install details').count() == 2 and e.locator('#install details[open]').count() == 0
+          and not e.locator('#install .steps').first.is_visible())
+    e.click('summary:has-text("Anleitung für iPhone")')
+    check('Rechner: iPhone-Anleitung aufklappbar', e.locator('#install details[open] .steps li').count() == 3)
+    e.context.close()
+
+    # iPhone in Safari, mit Einladung
+    f = newpage(browser, errs, IPHONE)
+    f.goto(BASE + '#/join/' + code)
+    f.wait_for_selector('#install .install')
+    t = f.inner_text('#install')
+    check('iPhone: Anleitung mit drei Schritten sichtbar', f.locator('#install > section > .steps li').count() == 3 and 'Zum Home-Bildschirm' in t and 'Hinzufügen' in t)
+    check('iPhone: alter Tipp ist weg', f.locator('text=Tipp fürs iPhone').count() == 0)
+    check('iPhone: kein Safari-Hinweis in Safari', 'zuverlässigsten in Safari' not in t)
+    check('iPhone: Einladungscode für die App', code.upper() in f.inner_text('.invcode'))
+    check('iPhone: Android-Anleitung zugeklappt', f.locator('#install details').count() == 1 and 'Android' in f.inner_text('#install summary'))
+    check('iPhone: Anleitung vor dem Start-Formular',
+          f.evaluate("document.querySelector('#install').compareDocumentPosition(document.querySelector('form[data-form=start]')) & 4") > 0)
+    f.click('summary:has-text("Anleitung für Android")')
+    check('iPhone: kein Überlauf', overflow(f))
+    f.locator('details').evaluate('d => d.open = false')
+    f.locator('#install').scroll_into_view_if_needed()
+    shot(f, '18-installieren-iphone')
+    f.context.close()
+    f = newpage(browser, errs, IPHONE_CHROME)
+    f.goto(BASE)
+    f.wait_for_selector('#install .install')
+    check('iPhone in Chrome: Hinweis auf Safari', 'zuverlässigsten in Safari' in f.inner_text('#install'))
+    f.context.close()
+
+    # iPhone als Home-Bildschirm-App: keine Anleitung, auch nicht unter Konto
+    f = newpage(browser, errs, IPHONE, "Object.defineProperty(navigator, 'standalone', { get: () => true })")
+    start_anon(f, 'Ida')
+    f.wait_for_selector('h1:has-text("Hallo Ida")')
+    f.goto(BASE + '#/konto')
+    f.wait_for_selector('h2:has-text("Datenschutz")')
+    check('Installiert: keine Anleitung unter Konto', f.locator('.install').count() == 0 and f.locator('h2:has-text("App")').count() == 0)
+    f.context.close()
+
+    # Android: erst Menü-Anleitung, dann Installieren-Knopf
+    g = newpage(browser, errs, ANDROID)
+    g.goto(BASE)
+    g.wait_for_selector('#install .install')
+    check('Android: Menü-Anleitung ohne Installieren-Ereignis', g.locator('#install > section > .steps li').count() == 3
+          and 'App installieren' in g.inner_text('#install') and g.locator('[data-act=install]').count() == 0)
+    check('Android: iPhone-Anleitung zugeklappt', 'Anleitung für iPhone' in g.inner_text('#install summary'))
+    g.fill('form[data-form=start] input[name=name]', 'Gustav')
+    g.evaluate("""() => { const e = new Event('beforeinstallprompt', { cancelable: true });
+      e.prompt = () => { window.__prompted = (window.__prompted || 0) + 1; };
+      e.userChoice = Promise.resolve({ outcome: 'accepted', platform: 'web' });
+      window.dispatchEvent(e); window.__prevented = e.defaultPrevented; }""")
+    g.wait_for_selector('[data-act=install]')
+    check('Android: Installieren-Knopf, Browser-Leiste unterdrückt', g.evaluate('window.__prevented') is True
+          and g.locator('#install > section > .steps').count() == 0)
+    check('Android: Eingabe bleibt beim Einblenden erhalten', g.input_value('form[data-form=start] input[name=name]') == 'Gustav')
+    shot(g, '19-installieren-android')
+    g.click('[data-act=install]')
+    g.wait_for_selector('#install .cardhead:has-text("Installiert")')
+    check('Android: Dialog geöffnet, danach „Installiert“', g.evaluate('window.__prompted') == 1)
+    g.evaluate("window.dispatchEvent(new Event('appinstalled'))")
+    check('Android: appinstalled ohne Fehler', g.locator('#install .cardhead:has-text("Installiert")').count() == 1)
+    g.reload()
+    g.wait_for_selector('#install .install')
+    g.evaluate("""() => { const e = new Event('beforeinstallprompt', { cancelable: true });
+      e.prompt = () => {}; e.userChoice = Promise.resolve({ outcome: 'dismissed' }); window.dispatchEvent(e); }""")
+    g.click('[data-act=install]')
+    g.wait_for_selector('[data-act=install]', state='detached')
+    check('Android: abgelehnt, zurück zur Menü-Anleitung', g.locator('#install > section > .steps li').count() == 3)
+    g.context.close()
+
+    # Konto: Anleitung unter „App“
+    h = newpage(browser, errs, IPHONE)
+    start_anon(h, 'Hanna')
+    h.wait_for_selector('h1:has-text("Hallo Hanna")')
+    h.goto(BASE + '#/konto')
+    h.wait_for_selector('h2:has-text("App")')
+    check('Konto: Anleitung, Hinweis aufs Sichern ohne Benutzername', 'Sichere vorher dein Konto' in h.inner_text('#install'))
+    h.locator('#install').scroll_into_view_if_needed()
+    shot(h, '20-konto-app')
+    h.context.close()
 
     # Start aus Cache ohne Netz: Daten bleiben sichtbar
     a.context.unroute('https://qbdpzamygonpruaafcrt.supabase.co/**')

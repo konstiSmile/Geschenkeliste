@@ -322,3 +322,29 @@ form h2 { margin-top: 22px; }
   opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 20; max-width: calc(100vw - 40px); text-align: center;
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* Als App installieren (1.7.1) */
+#install:empty { display: none; }
+.login #install { margin-bottom: 12px; }
+.install .cardhead { margin-bottom: 14px; }
+.install > .small + .primary { margin-top: 12px; }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.steps li { display: flex; gap: 12px; align-items: flex-start; font-size: 15px; line-height: 1.4; }
+.steps li > span:last-child { flex: 1; min-width: 0; }
+.steps b { font-weight: 600; }
+.steps small { display: block; font-size: 13.5px; color: var(--text-2); margin-top: 1px; }
+.stepnum { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--gold-bg); color: var(--gold); font-size: 13px; font-weight: 700; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.ic.inl { display: inline-block; width: 17px; height: 17px; vertical-align: -3px; margin-right: 3px; color: var(--red); stroke-width: 2; }
+.install .note { margin-top: 14px; }
+.install .hint { color: var(--red); font-weight: 500; margin-bottom: 12px; }
+.invcode { margin-top: 12px; background: var(--bg); border-radius: 12px; padding: 10px 12px; font-size: 14px; font-weight: 500; }
+.invcode .code { display: block; font-size: 20px; margin: 2px 0; user-select: all; -webkit-user-select: all; }
+.invcode small { display: block; font-size: 13px; color: var(--text-2); font-weight: 400; }
+.install details { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 4px; }
+.install summary { display: flex; align-items: center; gap: 6px; padding: 8px 0 4px; font-size: 15px; font-weight: 600; color: var(--red); cursor: pointer; list-style: none; }
+.install summary::-webkit-details-marker { display: none; }
+.install summary .ic { width: 16px; height: 16px; stroke-width: 2.4; transition: transform .2s; }
+.install details[open] summary .ic { transform: rotate(90deg); }
+.install details .steps { margin: 10px 0 4px; }
+.install details + details { margin-top: 0; }
+@media (prefers-reduced-motion: reduce) { .install summary .ic { transition: none; } }

@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.7';
+const VERSION = '1.7.1';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -342,6 +342,10 @@ const I = {
   heart: '<path d="M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.4-7.5 10-7.5 10z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3M14 9l2 2"/>',
   paste: '<rect x="6" y="4.5" width="12" height="16" rx="2"/><path d="M9.5 4.5V3.5h5v1M9 11h6M9 15h4"/>',
+  phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/>',
+  addsq: '<rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M12 8.5v7M8.5 12h7"/>',
+  more: '<circle cx="12" cy="5.5" r="1.1"/><circle cx="12" cy="12" r="1.1"/><circle cx="12" cy="18.5" r="1.1"/>',
+  download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
   shuffle: '<path d="M4 7h3.2c1.9 0 3 .9 4.2 2.8l1.2 2c1.2 1.9 2.4 3.2 4.3 3.2H20M4 17h3.2c1.3 0 2.2-.5 3-1.4M13.6 8.4c.8-.9 1.8-1.4 3.1-1.4H20M17.5 4.5 20 7l-2.5 2.5M17.5 12.5 20 15l-2.5 2.5"/>'
 };
 const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
@@ -433,10 +437,84 @@ function brand() {
   return `<div class="brand"><img class="brandmark" src="icons/icon-192.png" alt=""><span>Geschenkeliste</span></div>`;
 }
 
+/* ---------- Als App installieren (1.7.1) ---------- */
+let installEvt = null;    // aufgehobenes beforeinstallprompt (Chrome, Edge, Samsung Internet)
+let justInstalled = false;
+function platform() {
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'ios';
+  if (/Android/.test(ua)) return 'android';
+  return 'other';
+}
+function isStandalone() {
+  if (navigator.standalone === true) return true;
+  return !!(window.matchMedia && matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches);
+}
+const step = (n, html) => `<li><span class="stepnum">${n}</span><span>${html}</span></li>`;
+function iosSteps() {
+  return `<ol class="steps">
+    ${step(1, `In Safari auf ${icon('share', 'inl')}<b>Teilen</b> tippen<small>Nicht zu sehen? Erst auf „…“ tippen.</small>`)}
+    ${step(2, `${icon('addsq', 'inl')}<b>Zum Home-Bildschirm</b> wählen<small>Steht eventuell weiter unten in der Liste.</small>`)}
+    ${step(3, 'Oben rechts auf <b>Hinzufügen</b> tippen')}
+  </ol>`;
+}
+function androidSteps() {
+  return `<ol class="steps">
+    ${step(1, `In Chrome oben rechts auf ${icon('more', 'inl')}<b>Menü</b> tippen`)}
+    ${step(2, '<b>App installieren</b> oder <b>Zum Startbildschirm hinzufügen</b> wählen')}
+    ${step(3, 'Mit <b>Installieren</b> bestätigen')}
+  </ol>`;
+}
+const otherSteps = (label, html) => `<details><summary>${icon('chev')}${label}</summary>${html}</details>`;
+function installCard(ctx) {
+  if (isStandalone()) return '';
+  const head = (n, t) => `${ctx === 'konto' ? '<h2>App</h2>' : ''}<section class="card install"><div class="cardhead">${icon(n)}<b>${t}</b></div>`;
+  if (justInstalled) {
+    return `${head('check', 'Installiert')}<p class="small muted">Die Geschenkeliste liegt jetzt auf deinem Startbildschirm. Öffne sie am besten von dort.</p></section>`;
+  }
+  const p = platform();
+  const ua = navigator.userAgent;
+  const button = `<p class="small muted">Öffnet sich wie jede andere App, ohne Adressleiste.</p>
+    <button class="primary withicon" data-act="install">${icon('download')}Installieren</button>`;
+  if (p === 'ios') {
+    const notSafari = /CriOS|FxiOS|EdgiOS|OPiOS|GSA\/|FBAN|FBAV|Instagram|Line\//.test(ua);
+    const note = ctx === 'konto'
+      ? (D.account ? 'Melde dich in der App mit deinem Benutzernamen an. Safari und App speichern getrennt.' : 'Sichere vorher dein Konto. Safari und App speichern getrennt, in der App meldest du dich mit Benutzername an.')
+      : 'Danach die Geschenkeliste vom Home-Bildschirm aus öffnen und dort starten.';
+    const code = ctx === 'login' && S.pendingJoin
+      ? `<div class="invcode">Dein Einladungscode für die App<b class="code">${esc(String(S.pendingJoin).toUpperCase())}</b><small>In der App unter Gruppen eingeben.</small></div>` : '';
+    return `${head('phone', 'Als App auf den Home-Bildschirm')}
+      ${notSafari ? '<p class="small hint">Das geht am zuverlässigsten in Safari. Öffne diese Seite dort.</p>' : ''}
+      ${iosSteps()}<p class="small muted note">${note}</p>${code}
+      ${otherSteps('Anleitung für Android', androidSteps())}</section>`;
+  }
+  if (p === 'android') {
+    const webview = /; wv\)/.test(ua);
+    return `${head('phone', 'Als App installieren')}
+      ${installEvt ? button : `${webview ? '<p class="small hint">Öffne diese Seite zuerst in Chrome.</p>' : ''}${androidSteps()}`}
+      ${otherSteps('Anleitung für iPhone', iosSteps())}</section>`;
+  }
+  return `${head('phone', installEvt ? 'Als App installieren' : 'Auf dem Handy als App')}
+    ${installEvt ? button : ''}
+    ${otherSteps('Anleitung für iPhone', iosSteps())}${otherSteps('Anleitung für Android', androidSteps())}</section>`;
+}
+function paintInstall() {
+  const el = $('#install');
+  if (el) el.innerHTML = installCard(el.dataset.ctx);
+}
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  installEvt = e;
+  paintInstall();
+});
+window.addEventListener('appinstalled', () => {
+  installEvt = null;
+  justInstalled = true;
+  paintInstall();
+});
+
 function viewLogin() {
   const invited = S.pendingJoin ? `<div class="banner">${icon('people')}<span><b>Du wurdest eingeladen</b><small>Nach der Anmeldung bist du automatisch in der Gruppe.</small></span></div>` : '';
-  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) && !navigator.standalone;
-  const tip = ios ? `<div class="banner">${icon('share')}<span><b>Tipp fürs iPhone</b><small>Über Teilen „Zum Home-Bildschirm“ wird die Geschenkeliste zur App.</small></span></div>` : '';
   return `<main class="login">
     ${brand()}
     <h1 class="title xl">Wünsche teilen, ohne die Überraschung zu verderben.</h1>
@@ -444,7 +522,8 @@ function viewLogin() {
       <li>${icon('people')}<span><b>Für Familie und Freunde</b>Eine Wunschliste, beliebig viele Gruppen.</span></li>
       <li>${icon('eyeoff')}<span><b>Reservierungen bleiben geheim</b>Wer sich etwas wünscht, sieht nicht, was schon vergeben ist.</span></li>
     </ul>
-    ${invited}${tip}
+    ${invited}
+    <div id="install" data-ctx="login">${installCard('login')}</div>
     <form data-form="start" class="card stack">
       <label>Neu hier? Wie heißt du?<input name="name" maxlength="40" placeholder="Vorname" required autocomplete="given-name" value="${esc(S.pendingName || '')}"></label>
       <button class="primary" type="submit">Weiter</button>
@@ -907,6 +986,7 @@ function viewAccount() {
     <div class="card"><form data-form="name" class="inline"><input name="name" maxlength="40" value="${esc(myName())}" required><button class="secondary" type="submit">Name ändern</button></form></div>
     ${acc ? `<h2>Anmeldung</h2>${codeCard()}` : ''}
     ${adminSection()}
+    <div id="install" data-ctx="konto">${installCard('konto')}</div>
     <h2>Datenschutz</h2>
     <div class="card prose">
       <p>Name, Benutzername, Gruppen, Wünsche und Reservierungen liegen in einer Datenbank bei Supabase in der EU. Passwort und Wiederherstellungscode werden nur verschlüsselt gespeichert.</p>
@@ -1115,6 +1195,15 @@ const forms = {
 
 const acts = {
   sync: () => sync(),
+  install: async () => {
+    const e = installEvt;
+    if (!e) return;
+    installEvt = null;
+    e.prompt();
+    const c = await e.userChoice.catch(() => null);
+    if (c && c.outcome === 'accepted') justInstalled = true;
+    paintInstall();
+  },
   asklogout: async () => { ui.confirmLogout = 1; render(); },
   copycode: async () => copyText(fmtRecovery(fresh.code), 'Code kopiert.'),
   sharecode: async () => {
