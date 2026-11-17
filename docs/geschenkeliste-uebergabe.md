@@ -9,6 +9,7 @@ Maßgeblich für die Geschenkeliste (Abschnitt D der großen Übergabe verweist 
 - 1.5 in echtem Supabase eingerichtet und geprüft (17.11.): Konto `konsti` gesichert, Admin eingetragen, Anmeldung mit Benutzername in Safari klappt.
 - Anleitung für den Nutzer: Claude Doc „Geschenkeliste – Einrichtung Schritt für Schritt“ https://claude.ai/artifact/Bhh97XiHYAaoNw7nyQjuRm (Doc-ID `56a9dfdd-971a-494a-ac08-f7b19209c32c`, Body-Node `40688e2e-6868`, zuletzt rev 34). Am 17.11. ergänzt: Abschnitt „Neu mit Version 1.9: Benachrichtigungen“ (A–F, „Gut zu wissen“, Fehlertabelle mit 7 Zeilen) nach dem 1.8-Abschnitt, Testzahlen auf 1.9.
 - Supabase-Einstellungen erledigt: Schritt 1, 3 (Site URL/Redirect URL), 4 GitHub Pages, 5 „Allow anonymous sign-ins“ an.
+- **Kopien dieser Unterlagen liegen im Repo unter `docs/`** (Übergabe, Fahrplan, Pop-Design), weil Chats außerhalb des Projekts die Projekt-Dokumente nicht sehen. Nach jedem Paket beide Stellen aktualisieren.
 - **Push-Hinweis:** In einer neuen Sitzung erst `add_repo` (owner `konstiSmile`, repo `Geschenkeliste`, access `push`) aufrufen, sonst lehnt der Git-Proxy den Push mit 403 ab. Klonen geht auch ohne.
 
 ## Benachrichtigungen (Version 1.9, gebaut 17.11.)
