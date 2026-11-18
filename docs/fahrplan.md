@@ -34,6 +34,8 @@ Gestrichen: Pakete 7 und 8 (Chats), Absprachen laufen über WhatsApp und Co.
   - Nach dem Geburtstag entscheidet die Gründerin/der Gründer: archivieren oder löschen. Archivierte Gruppen im nächsten Jahr wiederverwendbar (Mitglieder bleiben, Vorjahr als Rückblick „Letztes Jahr geschenkt“)
   - Betrifft `wish_visible_to`, `card_list`, `pool_audience`, Push
 - Offene Ideen aus früheren Paketen, die hier passen: Ideen pro Anlass, Geburtstage für Personen ohne App
+- **Neu vom Nutzer (18.11.): eigene Schenkliste.** Man legt selbst eine Liste mit Leuten an, denen man etwas schenken will, und hakt sie ab. Passt zu Anlässen (z. B. „Weihnachten 2026: Mama, Papa, Lena“). Mit dem Nutzer klären, wie das zur Ideenliste (Personen, Ideen, besorgt) passt
+- **Kleiner Fix:** Ohne aktuelle schema.sql blendet die Freunde-Seite „Freund hinzufügen“ einfach aus (`D.friendsOk` false). Stattdessen einen Hinweis „Datenbank aktualisieren“ zeigen
 
 ## Danach
 - **Paket 10 – Farbthemen** (S): weitere Themen, Wahl im Profil speichern, Thema pro Anlass. Vorher klären: Standarddesign und zwei Zusatzthemen (Namen, Stimmung)
