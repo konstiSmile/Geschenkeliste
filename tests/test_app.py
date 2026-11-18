@@ -614,7 +614,7 @@ with sync_playwright() as pw:
     start_anon(f, 'Ida')
     f.wait_for_selector('h1:has-text("Hallo Ida")')
     f.goto(BASE + '#/konto')
-    f.wait_for_selector('h2:has-text("Datenschutz")')
+    f.wait_for_selector('#privacy')
     check('Installiert: keine Anleitung unter Konto', f.locator('#install .install').count() == 0 and 'Als App' not in f.inner_text('main'))
     # 1.8: installierte iPhone-App fragt nach dem Zähler am App-Symbol
     check('1.8: iPhone-App: Karte „Zähler am App-Symbol“ unter Konto', f.locator('h2:has-text("App")').count() == 1
@@ -628,7 +628,7 @@ with sync_playwright() as pw:
     f.context.grant_permissions(['notifications'])
     f.goto(BASE + '#/konto')
     f.reload()
-    f.wait_for_selector('h2:has-text("Datenschutz")')
+    f.wait_for_selector('#privacy')
     check('1.8: mit erlaubten Mitteilungen keine Zähler-Karte mehr', f.locator('text=Zähler am App-Symbol').count() == 0)
     f.context.close()
 
@@ -943,10 +943,21 @@ with sync_playwright() as pw:
         check('1.10: Automatisch ab 7. Januar Ganzjährig', theme_at('2027-01-07T08:00:00') == 'jahr')
         check('1.10: Automatisch im Sommer Ganzjährig', theme_at('2027-07-15T12:00:00') == 'jahr')
     a.goto(BASE + '#/konto')
+    a.wait_for_selector('#design')
+    check('1.10.4: Datenschutz ist zugeklappt', a.evaluate("document.getElementById('privacy').open") is False
+          and not a.locator('#privacy .prose').is_visible())
+    a.click('#privacy summary')
+    check('1.10.4: Datenschutz klappt auf', a.locator('#privacy .prose:has-text("Supabase in der EU")').is_visible())
+    a.click('#privacy summary')
+    check('1.10.4: Design ist zugeklappt', a.evaluate("document.getElementById('design').open") is False and not a.locator('.themes').is_visible()
+          and a.locator('#design summary:has-text("Automatisch")').count() == 1)
+    a.click('#design summary')
     a.wait_for_selector('.themes')
     check('1.10: Konto zeigt drei Designs, eins gewählt', a.locator('.themeopt').count() == 3 and a.locator('.themeopt[aria-checked=true]').count() == 1)
     a.click('.themeopt[data-v=jahr]')
     a.wait_for_selector('.themeopt.on[data-v=jahr]')
+    check('1.10.4: Design bleibt nach Auswahl aufgeklappt', a.evaluate("document.getElementById('design').open") is True
+          and a.locator('#design summary:has-text("Ganzjährig")').count() == 1)
     check('1.10: Ganzjährig gewählt und gespeichert', a.evaluate("document.documentElement.dataset.theme") == 'jahr'
           and a.evaluate("localStorage.getItem('geschenkeliste-theme')") == 'jahr')
     check('1.10: Statusleisten-Farbe passt zu Ganzjährig', a.evaluate("document.querySelector('meta[name=theme-color]').content") == '#FFF9EC')
@@ -968,15 +979,21 @@ with sync_playwright() as pw:
     shot(a, '30-dunkel-jahr')
     check('1.10: Dunkel Ganzjährig: Grund Tinte', a.evaluate("getComputedStyle(document.body).backgroundColor") == 'rgb(30, 27, 46)')
     a.goto(BASE + '#/konto')
+    a.wait_for_selector('#design')
+    if not a.evaluate("document.getElementById('design').open"): a.click('#design summary')
     a.click('.themeopt[data-v=weihnachten]')
     a.wait_for_selector('.themeopt.on[data-v=weihnachten]')
     a.goto(BASE + '#/')
     a.wait_for_selector('.hero')
     check('1.10: Weihnachten: Countdown mit Zuckerstange', a.locator('.hero-xmas:has-text("Heiligabend")').count() == 1)
-    check('1.10: Dunkel Weihnachten: Grund Lakritz', a.evaluate("getComputedStyle(document.body).backgroundColor") == 'rgb(43, 23, 32)')
+    check('1.10.4: Dunkel Weihnachten: Grund Tannennacht, Akzent Cranberry', a.evaluate("getComputedStyle(document.body).backgroundColor") == 'rgb(13, 31, 23)'
+          and a.evaluate("getComputedStyle(document.querySelector('.hero')).backgroundColor") == 'rgb(196, 43, 58)')
+    check('1.10.4: Dunkel Weihnachten: Statusleiste Tannennacht', a.evaluate("document.querySelector('meta[name=theme-color]').content") == '#0D1F17')
     shot(a, '31-dunkel-weihnachten')
     a.emulate_media(color_scheme='light')
     a.goto(BASE + '#/konto')
+    a.wait_for_selector('#design')
+    if not a.evaluate("document.getElementById('design').open"): a.click('#design summary')
     a.click('.themeopt[data-v=auto]')
     a.wait_for_selector('.themeopt.on[data-v=auto]')
     check('1.10: Automatisch löscht die feste Wahl', a.evaluate("localStorage.getItem('geschenkeliste-theme')") is None)
@@ -987,11 +1004,13 @@ with sync_playwright() as pw:
     a.wait_for_selector('.modeseg input[value=dark]:checked')
     check('1.10.1: Dunkel gewählt: dunkler Grund trotz hellem Gerät', a.evaluate("document.documentElement.dataset.mode") == 'dark'
           and a.evaluate("localStorage.getItem('geschenkeliste-mode')") == 'dark'
-          and a.evaluate("getComputedStyle(document.body).backgroundColor") in ('rgb(30, 27, 46)', 'rgb(43, 23, 32)'))
+          and a.evaluate("getComputedStyle(document.body).backgroundColor") in ('rgb(30, 27, 46)', 'rgb(13, 31, 23)'))
     check('1.10.1: Statusleiste dunkel', a.evaluate("document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]').content") == 'black-translucent'
-          and a.evaluate("document.querySelector('meta[name=theme-color]').content") in ('#1E1B2E', '#2B1720'))
+          and a.evaluate("document.querySelector('meta[name=theme-color]').content") in ('#1E1B2E', '#0D1F17'))
     shot(a, '32-konto-dunkel')
     a.reload()
+    a.wait_for_selector('#design')
+    a.click('#design summary')
     a.wait_for_selector('.modeseg')
     check('1.10.1: Dunkel bleibt nach Neuladen', a.evaluate("document.documentElement.dataset.mode") == 'dark')
     a.emulate_media(color_scheme='dark')

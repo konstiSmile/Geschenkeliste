@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.10.3';
+const VERSION = '1.10.4';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -1065,16 +1065,28 @@ function heroCard(days, nErr, nDone) {
 const THEMES = [
   ['auto', 'Automatisch', 'Weihnachten vom 1. November bis 6. Januar, sonst Ganzjährig'],
   ['jahr', 'Ganzjährig', 'Violett, Koralle und Sonnengelb'],
-  ['weihnachten', 'Weihnachten', 'Zuckerstange, Minze und Vanille']];
+  ['weihnachten', 'Weihnachten', 'Zuckerstange, Minze und Vanille', 'Tannengrün, Cranberry und Gold']];
+const MODES = [['light', 'Hell', 'sun'], ['auto', 'Automatisch', ''], ['dark', 'Dunkel', 'moon']];
+// Klappbereiche unter Konto (Design, Datenschutz): anfangs zu, Zustand bleibt beim Neuzeichnen erhalten (1.10.4)
+const folds = {};
+document.addEventListener('toggle', e => { if (e.target.classList && e.target.classList.contains('fold')) folds[e.target.id] = e.target.open; }, true);
+function fold(id, ic, tint, title, sub, inner) {
+  return `<details class="fold" id="${id}" ${folds[id] ? 'open' : ''}><summary><span class="tile ${tint}">${icon(ic)}</span>
+      <span class="foldsum"><b>${title}</b><small>${sub}</small></span>${icon('chev', 'chev')}</summary>${inner}</details>`;
+}
 function themeSection() {
   const p = window.GLTheme ? GLTheme.pref() : 'auto';
-  const opts = THEMES.map(([k, n, d]) => `<button class="themeopt ${p === k ? 'on' : ''}" role="radio" aria-checked="${p === k}" data-act="theme" data-v="${k}">
-      <span class="swatches sw-${k}"><i></i><i></i><i></i></span><span class="themetext"><b>${n}</b><small>${d}</small></span>${icon('check', 'themecheck')}</button>`).join('');
+  const dark = window.GLTheme ? GLTheme.mode() === 'dark' : false;
+  const opts = THEMES.map(([k, n, d, dd]) => `<button class="themeopt ${p === k ? 'on' : ''}" role="radio" aria-checked="${p === k}" data-act="theme" data-v="${k}">
+      <span class="swatches sw-${k}"><i></i><i></i><i></i></span><span class="themetext"><b>${n}</b><small>${dark && dd ? dd : d}</small></span>${icon('check', 'themecheck')}</button>`).join('');
   const m = window.GLTheme ? GLTheme.modePref() : 'auto';
-  const modes = [['light', 'Hell', 'sun'], ['auto', 'Automatisch', ''], ['dark', 'Dunkel', 'moon']].map(([k, n, ic]) =>
+  const modes = MODES.map(([k, n, ic]) =>
     `<label><input type="radio" name="mode" value="${k}" data-act="mode" data-v="${k}" ${m === k ? 'checked' : ''}><span>${ic ? icon(ic) : ''}${n}</span></label>`).join('');
-  return `<h2>Design</h2><div class="themes" role="radiogroup" aria-label="Design">${opts}</div>
-    <div class="seg modeseg" role="radiogroup" aria-label="Hell oder dunkel">${modes}</div>`;
+  const tName = THEMES.find(t => t[0] === p)[1];
+  const mName = MODES.find(t => t[0] === m)[1];
+  const sum = p === 'auto' && m === 'auto' ? 'Automatisch' : `${tName} · ${m === 'auto' ? 'Hell/Dunkel wie Gerät' : mName}`;
+  return fold('design', 'palette', 't0', 'Design', sum, `<div class="themes" role="radiogroup" aria-label="Design">${opts}</div>
+    <div class="seg modeseg" role="radiogroup" aria-label="Hell oder dunkel">${modes}</div>`);
 }
 
 function wishMeta(w, extra = []) {
@@ -1421,13 +1433,12 @@ function viewAccount() {
     ${adminSection()}
     <div id="install" data-ctx="konto">${installCard('konto')}</div>
     ${notifySection()}
-    <h2>Datenschutz</h2>
-    <div class="card prose">
+    ${fold('privacy', 'lock', 't1', 'Datenschutz', 'Was gespeichert wird und wer was sieht', `    <div class="card prose">
       <p>Name, Benutzername, Gruppen, Wünsche und Reservierungen liegen in einer Datenbank bei Supabase in der EU. Passwort und Wiederherstellungscode werden nur verschlüsselt gespeichert.</p>
       <p>Andere sehen deinen Namen und die Wünsche, die du für ihre Gruppe freigibst. Reservierungen sieht der Beschenkte nie.</p>
       <p>Für Benachrichtigungen wird eine Adresse des Push-Dienstes deines Geräts gespeichert (Apple, Google oder Mozilla). Die Nachrichten sind verschlüsselt.</p>
       <p>Auf dem Gerät bleiben nur die Anmeldung und eine Kopie der Listen, damit die App schnell startet.</p>
-    </div>
+    </div>`)}
     <div class="card stack">
       ${unsafe && ui.confirmLogout
         ? `<p class="small">Ohne Benutzername und Passwort kommst du danach nicht mehr in dieses Konto zurück. Deine Liste wäre verloren.</p><button class="danger" data-act="logout">Trotzdem abmelden</button>`

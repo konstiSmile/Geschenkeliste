@@ -9,7 +9,7 @@
   var MKEY = 'geschenkeliste-mode';
   var BAR = {
     jahr: { light: '#FFF9EC', dark: '#1E1B2E' },
-    weihnachten: { light: '#FFF4EC', dark: '#2B1720' }
+    weihnachten: { light: '#FFF4EC', dark: '#0D1F17' }
   };
   var mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }

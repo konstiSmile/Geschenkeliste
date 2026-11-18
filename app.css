@@ -95,27 +95,39 @@
   --a3: #7255ff;
   color-scheme: dark;
 }
+/* Weihnachten dunkel (1.10.4, „Weihnachten · Dark“): Tannennacht #0D1F17 als Grund,
+   Cranberry #C42B3A für Aktionen, Gold #E0B85C nur für Icons und Akzente, Salbei #A9BDB0, Creme #F6F1E4.
+   Konturen in gedämpftem Creme, Schatten dunkel und zurückhaltend. */
 [data-mode="dark"][data-theme="weihnachten"] {
-  --bg: #2b1720;
-  --card: #3a2230;
-  --ink: #f1d7cc;
-  --text: #fff4ec;
-  --text-2: #dcc5cc;
-  --text-3: #a68e97;
-  --line: #4d3040;
-  --accent: #dc1f3c;
-  --accent-press: #ec3550;
-  --accent-soft: #5a2533;
-  --danger: #ff6b7d;
-  --open: #ffe9b3;  --open-bg: #4d3a22;
-  --res: #74dbb2;   --res-bg: #1f4337;
-  --ok: #2fa37c;
-  --hero: #c8102e;
-  --t0: #5a2533; --t0-fg: #ff9aa8;
-  --t1: #1f4337; --t1-fg: #74dbb2;
-  --t2: #4d3a22; --t2-fg: #ffe9b3;
-  --a3: #dc1f3c;
+  --bg: #0d1f17;
+  --card: #14281e;
+  --ink: #cdc6b2;
+  --shc: #03100a;
+  --text: #f6f1e4;
+  --text-2: #a9bdb0;
+  --text-3: #6f8a7b;
+  --line: #22392d;
+  --accent: #c42b3a;
+  --accent-press: #d63b4a;
+  --accent-soft: #3a1820;
+  --on-accent: #f6f1e4;
+  --gold: #e0b85c;
+  --danger: #ff7a86;
+  --open: #e0b85c;  --open-bg: #3b3118;
+  --res: #9fd3ad;   --res-bg: #1d3a2b;
+  --ok: #9fd3ad;
+  --hero: #c42b3a;  --hero-text: #f6f1e4; --hero-sub: #f6dcd8;
+  --t0: #44171f; --t0-fg: #f07d89;
+  --t1: #1d3a2b; --t1-fg: #a9bdb0;
+  --t2: #3b3118; --t2-fg: #e0b85c;
+  --a3: #c42b3a; --a3-fg: #f6f1e4;
+  --a4: #a9bdb0; --a4-fg: #0d1f17;
+  --a5: #e0b85c; --a5-fg: #0d1f17;
 }
+[data-mode="dark"][data-theme="weihnachten"] .hero-xmas { box-shadow: 4px 4px 0 var(--gold); }
+[data-mode="dark"][data-theme="weihnachten"] .hero-xmas::before { background: repeating-linear-gradient(-45deg, #f6f1e4 0 9px, var(--hero) 9px 18px); }
+[data-mode="dark"][data-theme="weihnachten"] .hero-deco,
+[data-mode="dark"][data-theme="weihnachten"] .features li > .ic { color: var(--gold); }
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -528,6 +540,27 @@ form h2 { margin-top: 24px; }
 .sw-weihnachten i:nth-child(1), .sw-auto i:nth-child(2) { background: #c8102e; }
 .sw-weihnachten i:nth-child(2) { background: #2fa37c; }
 .sw-weihnachten i:nth-child(3) { background: #ffe9b3; }
+[data-mode="dark"] .sw-weihnachten i:nth-child(1), [data-mode="dark"] .sw-auto i:nth-child(2) { background: #c42b3a; }
+[data-mode="dark"] .sw-weihnachten i:nth-child(2) { background: #e0b85c; }
+[data-mode="dark"] .sw-weihnachten i:nth-child(3) { background: #0d1f17; }
+
+/* Klappbereiche unter Konto: Design, Datenschutz (1.10.4) */
+.fold { margin-top: 30px; }
+.fold + .fold, .fold + .card { margin-top: 14px; }
+.fold > summary {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; list-style: none;
+  background: var(--card); color: var(--text); border: var(--bd); border-radius: 18px; box-shadow: var(--sh-sm);
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary .tile { width: 40px; height: 40px; border-radius: 12px; }
+.fold > summary .tile .ic { width: 21px; height: 21px; }
+.foldsum { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.foldsum b { font: 600 17px/1.25 var(--font-display); }
+.foldsum small { font-size: 13.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fold > summary .chev { transition: transform .2s; }
+.fold[open] > summary .chev { transform: rotate(90deg); }
+.fold[open] > summary { margin-bottom: 14px; }
+@media (prefers-reduced-motion: reduce) { .fold > summary .chev { transition: none; } }
 
 /* Hell/Dunkel (1.10.1) */
 .modeseg { margin-top: 12px; }
