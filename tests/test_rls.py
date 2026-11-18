@@ -969,6 +969,73 @@ vw5 = mkwish('Tasse')
 start(XE, vw5)
 check('Gemeinsam: Einstellung aus = keine Anfrage', pool_out('ask', vw5) == {YA})
 
+# ---------- Konto löschen (1.13.1) ----------
+EL, FI, GE, HO = (str(uuid.uuid4()) for _ in range(4))
+for u, n in ((EL, 'Ella'), (FI, 'Finn'), (GE, 'Gerd'), (HO, 'Holger')):
+    run(f"insert into auth.users (id, email) values ('{u}', 'del-{n.lower()}@x.de');")
+    as_exec(u, f"insert into public.profiles (id, name) values ('{u}', '{n}')")
+ok, r = as_user(EL, "select * from public.create_group('Löschtest')")
+lg = r[0]
+for u in (FI, GE):
+    as_user(u, f"select public.join_group('{lg['code']}') as g")
+ok, r = as_user(EL, "select * from public.create_group('Ellas allein')")
+solo = r[0]
+ok, r = as_user(EL, "insert into public.wishes (title) values ('Ellas Wunsch') returning id")
+ew = r[0]['id']
+ok, r = as_user(FI, "insert into public.wishes (title) values ('Finns Wunsch') returning id")
+fw = r[0]['id']
+ok, r = as_user(GE, "insert into public.wishes (title, price) values ('Gerds Wunsch', 90) returning id")
+gw = r[0]['id']
+as_exec(FI, f"insert into public.reservations (wish_id) values ('{ew}')")
+as_exec(EL, f"insert into public.reservations (wish_id) values ('{fw}')")
+ok, _ = rpc(EL, f"public.pool_start('{gw}', 90, 'equal', null, true, '{{}}'::uuid[], null, null, null)")
+rpc(FI, f"public.pool_join('{gw}', null)")
+check('Löschen: Vorbereitung (Gemeinsam mit Ella als Käuferin)', ok and gw in pools(FI))
+ok, r = as_user(FI, f"insert into public.idea_people (name, linked_user) values ('Ella', '{EL}') returning id")
+fip = r[0]['id']
+as_exec(FI, f"insert into public.ideas (person, title) values ('{fip}', 'Schal')")
+as_exec(EL, f"insert into public.profile_cards (data) values ('{{\"joy.text\": \"Bücher\"}}')")
+run(f"insert into public.accounts (user_id, username) values ('{EL}', 'ella');"
+    "insert into public.login_attempts (username, fails) values ('ella', 2);")
+
+ok, _ = rpc(None, 'public.delete_account()')
+check('Löschen: ohne Anmeldung verboten', not ok)
+ok, _ = rpc(None, 'public.delete_account()', role='anon')
+check('Löschen: anon darf nicht', not ok)
+ok, r = rpc(EL, 'public.delete_account()')
+check('Löschen: Ella löscht ihr Konto', ok)
+_, out, _ = run(f"select count(*) from auth.users where id = '{EL}'")
+check('Löschen: Konto ist weg', out == '0')
+_, out, _ = run(f"select (select count(*) from public.profiles where id = '{EL}') + (select count(*) from public.accounts where user_id = '{EL}')"
+                f" + (select count(*) from public.wishes where owner = '{EL}') + (select count(*) from public.members where user_id = '{EL}')"
+                f" + (select count(*) from public.profile_cards where user_id = '{EL}') + (select count(*) from public.login_attempts where username = 'ella')")
+check('Löschen: Profil, Benutzername, Wünsche, Mitgliedschaften, Steckbrief, Fehlversuche weg', out == '0')
+_, out, _ = run(f"select created_by from public.groups where id = '{lg['id']}'")
+check('Löschen: gegründete Gruppe bleibt, Finn übernimmt', out == FI)
+_, out, _ = run(f"select count(*) from public.groups where id = '{solo['id']}'")
+check('Löschen: Gruppe ohne andere Mitglieder verschwindet', out == '0')
+check('Löschen: Ellas Reservierung gelöst, Finns Wunsch wieder frei', res_of(fw) == '')
+check('Löschen: Reservierung auf Ellas Wunsch verschwindet mit dem Wunsch', res_of(ew) == '')
+check('Löschen: gemeinsames Geschenk mit Ella als Käuferin aufgelöst', gw not in pools(FI) and res_of(gw) == '')
+ok, r = as_user(FI, 'select linked_user, (select count(*) from public.ideas i where i.person = p.id) as n from public.idea_people p')
+check('Löschen: Finns Ideen bleiben, Verknüpfung gelöst', ok and r == [{'linked_user': None, 'n': 1}])
+check('Löschen: Finn sieht keine Wünsche von Ella mehr', ew not in seen(FI))
+check('Löschen: andere Konten unberührt', seen(GE) >= {gw, fw})
+
+run(f"delete from public.app_admins; insert into public.app_admins values ('{HO}');")
+ok, r = rpc(HO, 'public.delete_account()')
+check('Löschen: letzte Person mit Verwaltung darf nicht', not ok and 'Einzige' in str(r))
+run(f"insert into public.app_admins values ('{GE}');")
+ok, _ = rpc(HO, 'public.delete_account()')
+check('Löschen: mit zweitem Admin geht es', ok)
+_, out, _ = run('select count(*) from public.app_admins')
+check('Löschen: Admin-Eintrag mit gelöscht', out == '1')
+
+ok, _ = rpc(GE, "public.push_setup(repeat('A', 87), repeat('B', 43), 'https://x.de', 'https://p.supabase.co/functions/v1/push', 'k')")
+ok2, _ = rpc(GE, "public.push_setup(repeat('C', 87), repeat('B', 43), 'https://x.de', 'https://p.supabase.co/functions/v1/push', 'k')")
+_, out, _ = run('select count(*) from public.push_subs')
+check('Neue Schlüssel: Löschen aller Geräte klappt (DELETE mit WHERE)', ok and ok2 and out == '0')
+
 
 print('\nAlle Tests grün' if not fails else f'\n{fails} Fehler')
 sys.exit(1 if fails else 0)

@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.13';
+const VERSION = '1.13.1';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -520,6 +520,7 @@ const I = {
   shield: '<path d="M12 3 5 6v5c0 4.5 3 8.4 7 10 4-1.6 7-5.5 7-10V6z"/>',
   bulb: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.3 1.1 2.2h5c0-.9.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/>',
   heart: '<path d="M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.4-7.5 10-7.5 10z"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3M14 9l2 2"/>',
   paste: '<rect x="6" y="4.5" width="12" height="16" rx="2"/><path d="M9.5 4.5V3.5h5v1M9 11h6M9 15h4"/>',
   phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/>',
@@ -847,20 +848,22 @@ function notifySection() {
     return b ? (isStandalone() ? '<h2>App</h2>' : '') + b : '';
   }
   if (st !== 'on') {
-    return `<h2>Benachrichtigungen</h2><section class="card install"><div class="cardhead">${icon('bell')}<b>${st === 'denied' ? 'Ausgeschaltet' : 'Benachrichtigungen'}</b></div>${notifyBody(st, 'konto')}</section>`;
+    const sub = st === 'denied' ? 'Auf diesem Gerät ausgeschaltet' : st === 'install' ? 'Nur in der App vom Home-Bildschirm' : 'Noch nicht erlaubt';
+    return fold('notify', 'bell', 't2', 'Benachrichtigungen', sub, `<section class="card install">${notifyBody(st, 'konto')}</section>`);
   }
   const rows = PREFS.map(([k, t, d]) => {
     const on = prefOn(k);
     return `<li class="row-item"><span class="row-main"><span class="row-title">${t}</span><span class="row-meta">${d}</span></span>
       <button class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" aria-label="${t}" data-act="pref" data-k="${k}" data-on="${on ? '0' : '1'}"></button></li>`;
   }).join('');
-  return `<h2>Benachrichtigungen</h2>
-    <ul class="rows plain">${rows}</ul>
+  const nOn = PREFS.filter(([k]) => prefOn(k)).length;
+  const sub = nOn === PREFS.length ? 'An für alles' : nOn ? `An für ${nOn} von ${PREFS.length}` : 'An, aber alles abgewählt';
+  return fold('notify', 'bell', 't2', 'Benachrichtigungen', sub, `<ul class="rows plain">${rows}</ul>
     <p class="foot">${icon('eyeoff')}<span>Was du dir wünschst, wer etwas reserviert und wen jemand beim Wichteln gezogen hat, verrät keine Nachricht.</span></p>
     <div class="card stack">
       <button class="secondary withicon" data-act="pushtest">${icon('bell')}Testnachricht senden</button>
       <button class="ghost danger-text" data-act="pushoff">Auf diesem Gerät ausschalten</button>
-    </div>`;
+    </div>`);
 }
 /* Startseite: einmal fragen, sonst wie 1.8 der Hinweis zum Zähler */
 function notifyBanner() {
@@ -2330,13 +2333,15 @@ function adminSection() {
       <span class="row-main"><span class="row-title">${esc(h.name || h.username)}</span><span class="row-meta">${esc(h.username)}${h.reset_open ? ' · Code offen' : ''}</span></span>
       <button class="${confirm ? 'primary' : 'secondary'} sm" data-act="${confirm ? 'adminreset' : 'askreset'}" data-id="${h.user_id}">${confirm ? 'Wirklich' : 'Zurücksetzen'}</button></li>`;
   }).join('')}</ul>` : `<p class="empty-line">Niemand gefunden.</p>`);
-  return `<h2>Verwaltung</h2>
+  const ps = D.ps;
+  const sub = ps && ps.last_error ? 'Benachrichtigungen: Fehler' : ps && ps.configured ? 'Zugänge zurücksetzen, Benachrichtigungen' : 'Zugänge zurücksetzen';
+  return fold('admin', 'shield', 't1', 'Verwaltung', sub, `
     <div class="card stack">
       <p class="small muted">Wer Passwort und Code verloren hat, bekommt hier einen Rücksetz-Code.</p>
       <form data-form="adminsearch" class="inline"><input name="q" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Name oder Benutzername" value="${esc(ui.adminQuery || '')}" required><button class="secondary" type="submit">Suchen</button></form>
     </div>
     ${result}${list}
-    ${pushAdmin()}`;
+    ${pushAdmin()}`);
 }
 
 function viewAccount() {
@@ -2367,8 +2372,28 @@ function viewAccount() {
       ${unsafe && ui.confirmLogout
         ? `<p class="small">Ohne Benutzername und Passwort kommst du danach nicht mehr in dieses Konto zurück. Deine Liste wäre verloren.</p><button class="danger" data-act="logout">Trotzdem abmelden</button>`
         : `<button class="ghost danger-text" data-act="${unsafe ? 'asklogout' : 'logout'}">Abmelden</button>`}
+      ${ui.confirmDelAcc
+        ? `<button class="danger withicon" id="delacc" data-act="delaccdlg">${icon('trash')}Sicher?</button>`
+        : `<button class="ghost danger-text withicon" id="delacc" data-act="askdelacc">${icon('trash')}Konto löschen</button>`}
     </div>
-    <p class="version">Geschenkeliste ${VERSION}</p>`, { tab: 'acc' });
+    <p class="version">Geschenkeliste ${VERSION}</p>
+    ${ui.delAccDlg ? delAccDialog() : ''}`, { tab: 'acc' });
+}
+
+/* Konto löschen (1.13.1): Knopf → „Sicher?“ → Fenster mit Warnung → „Ja, löschen“ */
+function delAccDialog() {
+  const acc = D.account;
+  return `<div class="modalwrap"><div class="modalbg" data-act="delacccancel"></div>
+    <div class="modal card stack" role="alertdialog" aria-modal="true" aria-labelledby="delacct" aria-describedby="delaccd">
+      <span class="tile t2 modalicon">${icon('trash')}</span>
+      <h2 class="modaltitle" id="delacct">Konto wirklich löschen?</h2>
+      <div id="delaccd" class="stack">
+        <p>Dein Konto${acc ? ` <b>${esc(acc.username)}</b>` : ''} ist danach vollständig weg. Das lässt sich nicht rückgängig machen, auch nicht durch die Verwaltung.</p>
+        <p class="small muted">Gelöscht werden deine Wunschliste, deine Reservierungen (die Wünsche sind dann wieder frei), deine Ideen, dein Steckbrief und deine Mitgliedschaft in allen Gruppen. Gruppen, die du gegründet hast, übernimmt das nächste Mitglied.</p>
+      </div>
+      <button class="danger" data-act="delacc">Ja, löschen</button>
+      <button class="ghost" data-act="delacccancel">Abbrechen</button>
+    </div></div>`;
 }
 
 /* ---------- Router ---------- */
@@ -2755,6 +2780,20 @@ const acts = {
     paintInstall();
   },
   asklogout: async () => { ui.confirmLogout = 1; render(); },
+  askdelacc: async () => { ui.confirmDelAcc = 1; render(); },
+  delaccdlg: async () => { ui.delAccDlg = 1; render(); const b = $('.modal .ghost'); if (b) b.focus(); },
+  delacccancel: async () => { delete ui.delAccDlg; delete ui.confirmDelAcc; render(); },
+  delacc: async () => {
+    const uid = me();
+    await sb('/rest/v1/rpc/delete_account', { method: 'POST', body: {} });
+    if (push.sub) { try { await push.sub.unsubscribe(); } catch (e) { /* egal */ } }
+    try {
+      const all = JSON.parse(localStorage.getItem('geschenkeliste-seen') || '{}');
+      delete all[uid];
+      localStorage.setItem('geschenkeliste-seen', JSON.stringify(all));
+    } catch (e) { /* egal */ }
+    logout('Dein Konto wurde gelöscht.');
+  },
   copycode: async () => copyText(fmtRecovery(fresh.code), 'Code kopiert.'),
   sharecode: async () => {
     const text = `Geschenkeliste\nBenutzername: ${fresh.username}\nWiederherstellungscode: ${fmtRecovery(fresh.code)}`;
@@ -3062,6 +3101,9 @@ document.addEventListener('change', e => {
     const sub = $('#gsel');
     if (sub) sub.classList.toggle('hide', e.target.value === 'all');
   }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && ui.delAccDlg) { delete ui.delAccDlg; delete ui.confirmDelAcc; render(); }
 });
 window.addEventListener('hashchange', () => {
   ui = {};

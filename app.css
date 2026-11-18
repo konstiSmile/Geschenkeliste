@@ -698,3 +698,16 @@ label.check small { display: block; font-size: 13px; color: var(--text-3); font-
 .poolask .link { flex: none; font-size: 14px; }
 .acts .withicon .ic { width: 17px; height: 17px; }
 .acts { flex-wrap: wrap; justify-content: flex-end; }
+
+/* Konto löschen (1.13.1) */
+#delacc { margin-top: 2px; }
+.modalwrap { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modalbg { position: absolute; inset: 0; background: rgba(10, 8, 20, .55); animation: modalfade .18s ease-out; }
+.modal { position: relative; width: 100%; max-width: 400px; max-height: calc(100vh - 40px); overflow: auto; animation: modalpop .2s ease-out; }
+.modal .modalicon { width: 48px; height: 48px; border-radius: 14px; }
+.modal .modalicon .ic { width: 24px; height: 24px; }
+.modal .modaltitle { margin: 0; font: 600 22px/1.2 var(--font-display); color: var(--text); text-transform: none; letter-spacing: 0; }
+.modal p { font-size: 15.5px; }
+@keyframes modalfade { from { opacity: 0; } }
+@keyframes modalpop { from { opacity: 0; transform: translateY(12px) scale(.97); } }
+@media (prefers-reduced-motion: reduce) { .modalbg, .modal { animation: none; } }

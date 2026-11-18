@@ -1,4 +1,4 @@
--- Geschenkeliste – Datenbank, Stand Version 1.13 (Gemeinsam schenken)
+-- Geschenkeliste – Datenbank, Stand Version 1.13.1 (Konto löschen)
 -- Im Supabase SQL Editor komplett einfügen und „Run“ drücken.
 -- Das Skript darf mehrfach ausgeführt werden (bestehende Daten bleiben erhalten).
 
@@ -937,7 +937,7 @@ create trigger push_queue after insert on public.push_outbox
 
 -- ---------- Zeitplan (pg_cron) ----------
 
--- Alle 5 Minuten: Liegengebliebenes verschicken (z. B. gebündelte Wünsche)
+-- Jede Minute (seit 1.13.1, vorher alle 5): Liegengebliebenes verschicken (z. B. gebündelte Wünsche)
 create or replace function public.push_tick() returns void
 language plpgsql security definer set search_path = '' as $$
 begin
@@ -969,7 +969,7 @@ end $$;
 
 do $$ begin
   if to_regnamespace('cron') is not null then
-    perform cron.schedule('geschenkeliste-push', '*/5 * * * *', 'select public.push_tick()');
+    perform cron.schedule('geschenkeliste-push', '* * * * *', 'select public.push_tick()');
     perform cron.schedule('geschenkeliste-erinnerung', '0 17 * * *', 'select public.push_daily()');
   end if;
 exception when others then raise notice 'Zeitplan nicht angelegt: %', sqlerrm; end $$;
@@ -1187,7 +1187,7 @@ begin
   if p_url !~ '^https://[^/]+/functions/v1/[a-z0-9_-]+$' then raise exception 'Adresse ungültig'; end if;
   if p_subject !~ '^(https://|mailto:)' then raise exception 'Absender ungültig'; end if;
   if exists (select 1 from public.push_config where id = 1 and vapid_public <> p_public) then
-    delete from public.push_subs;
+    delete from public.push_subs where true;  -- Supabase verbietet DELETE ohne WHERE (1.13.1)
   end if;
   insert into public.push_config (id, vapid_public, vapid_private, subject, function_url, api_key)
     values (1, p_public, p_private, p_subject, p_url, p_key)
@@ -1981,3 +1981,40 @@ grant execute on function public.pool_visible(uuid),
   public.pool_update(uuid, numeric, text, boolean, uuid[], int, date, text),
   public.pool_join(uuid, numeric), public.pool_leave(uuid), public.pool_paid(uuid, uuid, boolean),
   public.pool_handover(uuid, uuid), public.pool_cancel(uuid) to authenticated;
+
+-- =====================================================================
+-- Konto löschen (Version 1.13.1)
+-- Löscht das eigene Konto mit allem, was daran hängt (Wünsche, Reservierungen,
+-- Ideen, Steckbrief, Geräte). Vorher werden alle Gruppen verlassen, damit
+-- gegründete Gruppen an das nächste Mitglied gehen statt mitgelöscht zu werden.
+-- Die letzte Person mit Verwaltungsrechten kann sich nicht löschen.
+-- =====================================================================
+
+create or replace function public.delete_account() returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  uid uuid := auth.uid();
+  g uuid;
+  uname text;
+begin
+  if uid is null then raise exception 'Nicht angemeldet'; end if;
+  if exists (select 1 from public.app_admins where user_id = uid)
+     and not exists (select 1 from public.app_admins where user_id <> uid) then
+    raise exception 'Du verwaltest die App als Einzige. Trag erst eine andere Person als Admin ein.';
+  end if;
+  for g in select group_id from public.members where user_id = uid loop
+    perform public.leave_group(g);
+  end loop;
+  -- Gruppen ohne Mitgliedschaft (sollte es nicht geben): übergeben oder löschen
+  update public.groups gr set created_by = (
+      select m.user_id from public.members m where m.group_id = gr.id order by m.joined_at, m.user_id limit 1)
+    where gr.created_by = uid and exists (select 1 from public.members m where m.group_id = gr.id);
+  delete from public.groups where created_by = uid;
+  select username into uname from public.accounts where user_id = uid;
+  if uname is not null then delete from public.login_attempts where username = uname; end if;
+  delete from public.push_outbox where actor = uid and sent_at is null;
+  delete from auth.users where id = uid;
+end $$;
+
+revoke execute on function public.delete_account() from public, anon;
+grant execute on function public.delete_account() to authenticated;
