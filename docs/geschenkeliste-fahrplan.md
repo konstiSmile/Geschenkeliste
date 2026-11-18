@@ -1,4 +1,4 @@
-# Geschenkeliste – Fahrplan (Stand 18. November 2026, Version 1.12)
+# Geschenkeliste – Fahrplan (Stand 18. November 2026, Version 1.13)
 
 Reihenfolge der Features in kleinen Paketen. **Ein Paket = ein Chat** (Übergabe lesen, Paket bauen, testen, pushen, Übergabe aktualisieren). Jedes Paket ist für sich nutzbar, die Familie merkt nie eine halbe Baustelle.
 
@@ -82,10 +82,16 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Tests: 240 RLS-Prüfungen, 236 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
   - Später: Steckbrief für Personen ohne App, Größe im Wunsch-/Ideenformular
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.12“: A schema.sql ausführen, B neu laden (Version 1.12), C Steckbrief ausfüllen, D Sichtbarkeit prüfen
-- [ ] **[Du]** Vorher klären für Paket 6: Wer kauft und streckt vor? Was, wenn zu wenige mitmachen?
-- [ ] **Paket 6 – 1.13 Gemeinsam schenken** (M) [Claude], schema.sql – **als Nächstes**
-  - Anfrage an bestimmte Leute oder offen, Aufteilung fair/Budget/individuell, „bezahlt“ abhaken, Benachrichtigung (Preis am Wunsch gibt es seit 1.7, Push seit 1.9)
-- [ ] **Paket 7 – 1.14 Chats Teil 1** (M) [Claude], schema.sql
+- [x] **[Du]** Geklärt für Paket 6 (18.11.): Wer startet, kauft und streckt vor; bei zu wenigen entscheidet der Käufer nach der Frist; Aufteilung wählt der Starter; Wunsch sofort reserviert
+- [x] **Paket 6 – 1.13 Gemeinsam schenken** (M) [Claude], schema.sql – **gebaut und gepusht 18.11. (Commit `b423ea9`)**
+  - Knopf „Gemeinsam“ bei offenen Wünschen (oder „Mit anderen zusammenlegen“ bei eigener Reservierung); Gesamtbetrag, Aufteilung gleich/Budget/individuell, alle oder nur bestimmte Leute fragen, optional Mindestzahl und Frist, Notiz
+  - Seite des Geschenks: wer mitmacht, Anteile, „Es fehlen noch …“, „Ich habe bezahlt“ (Käufer hakt für alle ab), als gekauft markieren, bearbeiten, Kaufen abgeben, absagen; nach der Frist: trotzdem schenken oder verlängern
+  - Startseite: Anfragen („Nein danke“), Beteiligungen mit Anteil, Hinweis wenn die Frist um ist. Beschenkte Person sieht nichts
+  - Benachrichtigungen: Anfrage, macht mit, gekauft, Käufer gewechselt, abgesagt, Frist um; eigener Schalter
+  - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.13: Gemeinsam schenken“ (A–D)
+  - Tests: 297 RLS-Prüfungen, 269 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
+- [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.13“: A schema.sql ausführen, B neu laden (Version 1.13), C gemeinsam starten, D mit zweitem Konto mitmachen
+- [ ] **Paket 7 – 1.14 Chats Teil 1** (M) [Claude], schema.sql – **als Nächstes**
   - Chat pro Geschenk + Plattform-Abfrage (WhatsApp, Signal, …, ausgegraut wenn gewählt)
 - [ ] **Paket 8 – 1.15 Chats Teil 2** (S) [Claude]
   - Gruppenchat und „ohne X“-Chats, Push bei neuer Nachricht
@@ -114,4 +120,4 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - Anlässe kommen vor Farbthemen, weil dabei das fest eingebaute Weihnachten verschwindet.
 - Öffnen für Freunde erst, wenn Datenschutz und Schutz vor Spam stehen.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann besprechen und bauen wir Paket 6 (Gemeinsam schenken).“
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann besprechen und bauen wir Paket 7 (Chats Teil 1).“
