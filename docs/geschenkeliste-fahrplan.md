@@ -1,4 +1,4 @@
-# Geschenkeliste – Fahrplan (Stand 18. November 2026, Version 1.13)
+# Geschenkeliste – Fahrplan (Stand 18. November 2026, Version 1.13.1)
 
 Reihenfolge der Features in kleinen Paketen. **Ein Paket = ein Chat** (Übergabe lesen, Paket bauen, testen, pushen, Übergabe aktualisieren). Jedes Paket ist für sich nutzbar, die Familie merkt nie eine halbe Baustelle.
 
@@ -91,14 +91,14 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.13: Gemeinsam schenken“ (A–D)
   - Tests: 297 RLS-Prüfungen, 269 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.13“: A schema.sql ausführen, B neu laden (Version 1.13), C gemeinsam starten, D mit zweitem Konto mitmachen
-- [ ] **[Du + Claude] Einrichtung nachholen – im nächsten Chat zuerst** (ca. 30 Min., gemeinsam Schritt für Schritt)
-  - Aktuelle schema.sql einmal ausführen (deckt 1.6 bis 1.13 ab)
-  - Benachrichtigungen (1.9, A–F): Edge Function `push` anlegen, Verify JWT aus, Schlüssel erzeugen, iPhone erlauben + Testnachricht, zweites Gerät. Erster echter Test gegen Apple/Google → Logs und rote Hinweise in der Verwaltung prüfen
-  - Prüfen: pg_net und pg_cron aktiv (Verwaltung zeigt es), Statusleiste der iPhone-App (1.10), App-Version unter Konto
+- [x] **[Du + Claude] Einrichtung nachgeholt (18.11.)**: pg_net und pg_cron an, schema.sql 1.13 ausgeführt, Edge Function `push` angelegt, Verify JWT aus, Schlüssel erzeugt, erster Versand an 4 Geräte ohne Fehler
+- [ ] **[Du]** Restpunkte: Kommen die Mitteilungen auf dem iPhone an (auch die Testnachricht)? schema.sql für 1.13.1 ausführen, App neu laden. Statusleiste der iPhone-App (1.10) prüfen
+- [x] **1.13.1** (18.11., Commit `0956c41`), schema.sql: Verwaltung und Benachrichtigungen unter Konto einklappbar; **Konto löschen** in drei Stufen (Knopf, „Sicher?“, Fenster mit Warnung); gegründete Gruppen gehen an das nächste Mitglied; Fix „neue Schlüssel“; Push-Takt jede Minute
 - [ ] **Paket 15 – 1.14 Direkte Freundschaft** (M) [Claude], schema.sql – **als Nächstes, gewünscht 18.11.**
   - Freunde ohne gemeinsame Gruppe: hinzufügen per Link, Code oder Benutzername mit Anfrage und Annehmen (keine offene Suche, damit Fremde niemanden finden)
   - Wünsche auch für einzelne Freunde freigeben, nicht nur für Gruppen; Freundesliste zeigt direkte Freunde mit ihren Wünschen, Reservieren und gemeinsam schenken wie in Gruppen
   - Zu besprechen: Sichtbarkeit neuer Wünsche für Freunde (Standard an/aus?), Benutzername suchbar ja/nein, Freundschaft beenden, Push „Freundschaftsanfrage“, Verhältnis zu Paket 13
+  - Gewünscht 18.11. (hier oder kleines eigenes Paket): **Spitznamen** für Leute vergeben (nur für mich sichtbar) und Leute mit **gleichem Namen unterscheidbar** machen
 - [ ] **Paket 7 – 1.15 Chats Teil 1** (M) [Claude], schema.sql
   - Chat pro Geschenk + Plattform-Abfrage (WhatsApp, Signal, …, ausgegraut wenn gewählt)
 - [ ] **Paket 8 – 1.16 Chats Teil 2** (S) [Claude]
@@ -128,4 +128,4 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - Anlässe kommen vor Farbthemen, weil dabei das fest eingebaute Weihnachten verschwindet.
 - Öffnen für Freunde erst, wenn Datenschutz und Schutz vor Spam stehen.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan. Zuerst richten wir zusammen Supabase fertig ein (alles Offene aus 1.9 bis 1.13, vor allem Benachrichtigungen), dann besprechen und bauen wir Paket 15 (Direkte Freundschaft).“
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan. Supabase ist eingerichtet (Restpunkte im Fahrplan). Jetzt besprechen und bauen wir Paket 15 (Direkte Freundschaft), inklusive Spitznamen und Unterscheidung gleicher Namen.“
