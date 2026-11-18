@@ -111,6 +111,9 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 
 - [ ] **Paket 9 – 2.0 Anlässe** (L) [Claude], schema.sql
   - Anlass pro Gruppe (Weihnachten, Geburtstag, Hochzeit, …), Geburtstage im Profil, Countdown allgemein, Erinnerungen (Push-Erinnerung ist bis dahin fest auf Heiligabend), neutrales App-Symbol (dann auch Kurzbefehl-Symbole und Screenshots neu)
+  - Idee des Nutzers (18.11.): **Geburtstag im Profil**, die anderen (Gruppen, Freunde) werden vorher erinnert
+  - Idee des Nutzers (18.11.): **Geburtstagsgruppe für jemanden**, ohne dass die Person etwas mitbekommt. Die Mitglieder sehen Wünsche und Steckbrief der Person, als wäre sie in der Gruppe (deutlich markiert: „Geburtstag von X am …“), und können reservieren und gemeinsam schenken
+  - Zu klären: Welche Wünsche sieht die Geburtstagsgruppe (nur was jedes Mitglied ohnehin sieht, oder alles, was die Person für Gruppen/Freunde freigibt)? Darf die Person solche Gruppen erlauben/verbieten? Was passiert nach dem Geburtstag (Gruppe archivieren, im nächsten Jahr wieder nutzen)?
 - [ ] **[Du]** Vorher festlegen: Wie sieht das Standarddesign aus, welche zwei Zusatzthemen (Namen, Stimmung)?
 - [ ] **Paket 10 – 2.1 Farbthemen** (S) [Claude], schema.sql – größtenteils mit 1.10 erledigt
   - Rest: weitere Themen, Wahl im Profil speichern (geräteübergreifend), Thema pro Anlass
