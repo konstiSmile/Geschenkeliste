@@ -962,6 +962,9 @@ with sync_playwright() as pw:
     a.wait_for_selector('.hero')
     check('1.10: Wahl bleibt nach Neuladen', a.locator('.hero-jahr').count() == 1 and a.evaluate("document.documentElement.dataset.theme") == 'jahr')
     a.emulate_media(color_scheme='dark')
+    for _ in range(20):   # theme.js zieht per matchMedia-Ereignis nach
+        if a.evaluate('document.documentElement.dataset.mode') == 'dark': break
+        a.wait_for_timeout(100)
     shot(a, '30-dunkel-jahr')
     check('1.10: Dunkel Ganzjährig: Grund Tinte', a.evaluate("getComputedStyle(document.body).backgroundColor") == 'rgb(30, 27, 46)')
     a.goto(BASE + '#/konto')
