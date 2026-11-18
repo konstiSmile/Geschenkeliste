@@ -72,6 +72,7 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.11: Private Ideenliste“ (A–D)
   - Tests: 201 RLS-Prüfungen, 194 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.11“: A schema.sql ausführen, B neu laden (Version 1.11), C Idee für jemanden aus der Gruppe notieren, D Person ohne App anlegen
+- [x] **1.11.1 Freunde** (18.11.): unter Gruppen eine Freundesliste (Leute aus den Gruppen + selbst angelegte), Personenseite mit aufklappbaren Bereichen: gemeinsame Gruppen, Wünsche, Ideen, Verwalten. Steckbrief kommt dort mit Paket 11 dazu
 - [ ] **Paket 11 – 1.12 Steckbrief + „Früh dran“** (M) [Claude], schema.sql – **vorgezogen (18.11.), als Nächstes**
   - Erst Ideen besprechen, wie der Steckbrief Spaß macht statt zu überfordern; Inhalte Größen, Lieblingsdinge, Lieber nicht, Freitext. „Früh dran“: dezentes Lob nur für mich, auch für einzelne Besorgungen
 - [ ] **[Du]** Vorher klären für Paket 6: Wer kauft und streckt vor? Was, wenn zu wenige mitmachen?

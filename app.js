@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.11';
+const VERSION = '1.11.1';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -1085,8 +1085,8 @@ const MODES = [['light', 'Hell', 'sun'], ['auto', 'Automatisch', ''], ['dark', '
 // Klappbereiche unter Konto (Design, Datenschutz): anfangs zu, Zustand bleibt beim Neuzeichnen erhalten (1.10.4)
 const folds = {};
 document.addEventListener('toggle', e => { if (e.target.classList && e.target.classList.contains('fold')) folds[e.target.id] = e.target.open; }, true);
-function fold(id, ic, tint, title, sub, inner) {
-  return `<details class="fold" id="${id}" ${folds[id] ? 'open' : ''}><summary><span class="tile ${tint}">${icon(ic)}</span>
+function fold(id, ic, tint, title, sub, inner, def = false) {
+  return `<details class="fold" id="${id}" ${(id in folds ? folds[id] : def) ? 'open' : ''}><summary><span class="tile ${tint}">${icon(ic)}</span>
       <span class="foldsum"><b>${title}</b><small>${sub}</small></span>${icon('chev', 'chev')}</summary>${inner}</details>`;
 }
 function themeSection() {
@@ -1187,7 +1187,7 @@ function viewIdeas() {
     const list = ideasFor(p.id).slice().sort(byDone);
     return { p, list, open: list.filter(i => !i.done_at).length };
   }).sort((a, b) => (b.open ? 1 : 0) - (a.open ? 1 : 0) || ipName(a.p).localeCompare(ipName(b.p), 'de'));
-  const sec = ({ p, list, open }) => `<div class="sechead ideahead"><a href="#/ideen/p/${p.id}" class="ideaperson">${ipAvatar(p, 'sm')}<h2>${esc(ipName(p))}</h2></a>
+  const sec = ({ p, list, open }) => `<div class="sechead ideahead"><a href="#/f/${friendKey(p)}?r=ideen" class="ideaperson">${ipAvatar(p, 'sm')}<h2>${esc(ipName(p))}</h2></a>
       <span class="row-meta">${list.length ? (open ? plural(open, 'Idee', 'Ideen') : 'alles besorgt') : 'noch keine Ideen'}</span></div>
       ${list.length ? `<ul class="rows plain">${list.map(i => ideaRow(i, 'ideen')).join('')}</ul>` : ''}`;
   const open = all.filter(i => !i.done_at).length;
@@ -1195,34 +1195,103 @@ function viewIdeas() {
     Object.assign(opt, { sub: `${plural(open, 'offene Idee', 'offene Ideen')}${all.length - open ? ` · ${all.length - open} besorgt` : ''}` }));
 }
 
-function viewIdeaPerson(pid) {
-  const back = ['#/ideen', 'Ideen'];
-  const p = ipById(pid);
-  if (!p) return shell('Ideen', emptyState('bulb', 'Nicht gefunden', 'Diese Person gibt es in deiner Ideenliste nicht mehr.'), { tab: 'list', back });
-  const name = ipName(p);
-  const list = ideasFor(pid).slice().sort(byDone);
-  const linked = p.linked_user && inMyGroups(p.linked_user);
-  const gid = linked ? groupFor({ owner: p.linked_user, all_groups: true }) : null;
-  const head = `<section class="profile">${ipAvatar(p, 'lg')}<div class="profile-main">
-      <p class="row-meta">${linked ? 'Aus deinen Gruppen' : (p.linked_user ? 'Nicht mehr in deinen Gruppen' : 'Ohne App')}</p>
-      ${gid ? `<a class="link-out" href="#/g/${gid}/p/${p.linked_user}">${icon('gift')}Wunschliste ansehen</a>` : ''}</div></section>`;
-  const add = `<a class="primary withicon" href="#/i/neu/p:${pid}?r=ideen/p/${pid}">${icon('plus')}Idee notieren</a>`;
-  const ideas = list.length ? `<ul class="rows plain">${list.map(i => ideaRow(i, 'ideen/p/' + pid)).join('')}</ul>` : `<p class="empty-line">Noch keine Ideen für ${esc(name)}.</p>`;
+/* ---------- Freunde (1.11.1) ----------
+   Alle Leute aus meinen Gruppen und selbst angelegte Personen der Ideenliste an einem Ort.
+   Schlüssel wie im Ideen-Formular: u:<uid> (in meinen Gruppen) oder p:<idea_people.id>. */
+function friendOf(key) {
+  let uid = null, p = null;
+  if (/^u:[\w-]+$/.test(key || '')) { uid = key.slice(2); p = ipFor(uid) || null; }
+  else if (/^p:[\w-]+$/.test(key || '')) { p = ipById(key.slice(2)) || null; if (p && p.linked_user) uid = p.linked_user; }
+  if (uid && !inMyGroups(uid)) uid = null;
+  if (!uid && !p) return null;
+  return { uid, p, key: uid ? 'u:' + uid : 'p:' + p.id, name: uid ? nameOf(uid) : ipName(p) };
+}
+const friendKey = p => (p.linked_user && inMyGroups(p.linked_user) ? 'u:' + p.linked_user : 'p:' + p.id);
+const sharedGroups = uid => myGroups().filter(g => membersOf(g.id).some(m => m.user_id === uid));
+function friendsList() {
+  const gp = groupPeople().map(uid => ({ key: 'u:' + uid, uid, p: ipFor(uid) || null, name: nameOf(uid) }));
+  const own = (D.ip || []).filter(p => !(p.linked_user && inMyGroups(p.linked_user))).map(p => ({ key: 'p:' + p.id, uid: null, p, name: ipName(p) }));
+  return gp.concat(own).sort((a, b) => a.name.localeCompare(b.name, 'de'));
+}
+function groupsSwitch(on) {
+  const n = friendsList().length;
+  return `<nav class="subtabs" aria-label="Gruppen oder Freunde"><a href="#/gruppen" class="${on === 'g' ? 'on' : ''}">Gruppen</a>
+    <a href="#/freunde" class="${on === 'f' ? 'on' : ''}">Freunde${n ? `<span class="subcount">${n}</span>` : ''}</a></nav>`;
+}
 
-  // Verwalten: Namen ändern, mit Konto verknüpfen oder lösen, löschen
-  const cands = groupPeople().filter(u => u !== p.linked_user);
-  const opts = cands.map(u => `<option value="${u}">${esc(nameOf(u))}</option>`).join('');
-  const nameForm = !p.linked_user || !linked ? `<form data-form="ipname" data-id="${pid}" class="inline">
-      <input name="name" maxlength="40" required value="${esc(p.name)}" aria-label="Name"><button class="secondary sm" type="submit">Umbenennen</button></form>` : '';
-  const linkForm = !linked && cands.length ? `<form data-form="iplink" data-id="${pid}" class="stack tight">
-      <label>Ist ${esc(name)} inzwischen dabei?<select name="u" required><option value="">Person auswählen</option>${opts}</select></label>
-      <button class="secondary sm" type="submit">Verknüpfen</button></form>` : '';
-  const unlink = p.linked_user ? `<button class="ghost sm" data-act="ipunlink" data-id="${pid}">Verknüpfung lösen</button>` : '';
-  const del = ui.confirmDelIp === pid
-    ? `<button class="danger" data-act="delip" data-id="${pid}">${list.length ? `Mit ${plural(list.length, 'Idee', 'Ideen')} löschen` : 'Wirklich löschen'}</button>`
-    : `<button class="ghost danger-text" data-act="askdelip" data-id="${pid}">Person aus der Ideenliste löschen</button>`;
-  const manage = `<h2>Verwalten</h2><div class="card stack manage">${nameForm}${linkForm}${unlink}</div>${del}`;
-  return shell(name, `${head}${add}${ideas}${manage}${privacyFoot(name)}`, { tab: 'list', back: backParam() ? [backParam(), 'Zurück'] : back, eyebrow: 'Ideen für' });
+function viewFriends() {
+  const list = friendsList();
+  const row = f => {
+    const nIdeas = f.p ? ideasFor(f.p.id).filter(i => !i.done_at).length : 0;
+    const meta = f.uid
+      ? [sharedGroups(f.uid).map(g => g.name).join(', '), plural(openWishes(f.uid).length, 'Wunsch', 'Wünsche')]
+      : ['Ohne App'];
+    if (nIdeas) meta.push(plural(nIdeas, 'Idee', 'Ideen'));
+    return `<li><a class="row-item" href="#/f/${f.key}">${f.uid ? avatar(f.uid) : ipAvatar(f.p)}
+      <span class="row-main"><span class="row-title">${esc(f.name)}</span><span class="row-meta">${esc(meta.join(' · '))}</span></span>${icon('chev', 'chev')}</a></li>`;
+  };
+  const add = D.ideasOk ? `<h2>Person ohne App</h2>
+    <div class="card"><form data-form="newfriend" class="inline"><input name="name" maxlength="40" placeholder="Name, z. B. Oma Ruth" required><button class="secondary" type="submit">Hinzufügen</button></form></div>` : '';
+  const body = list.length
+    ? `<ul class="rows">${list.map(row).join('')}</ul>${add}<p class="foot">${icon('eyeoff')}<span>Leute ohne App und deine Ideen siehst nur du.</span></p>`
+    : emptyState('people', 'Noch niemand hier', 'Hier erscheinen alle aus deinen Gruppen und Leute ohne App, die du selbst anlegst.') + add;
+  return shell('Freunde', groupsSwitch('f') + body, { tab: 'groups', sub: list.length ? plural(list.length, 'Person', 'Personen') : '' });
+}
+
+function viewFriend(key) {
+  const back = backParam() ? [backParam(), 'Zurück'] : ['#/freunde', 'Freunde'];
+  const f = friendOf(key);
+  if (!f) return shell('Freunde', emptyState('people', 'Nicht gefunden', 'Diese Person gibt es hier nicht mehr.'), { tab: 'groups', back });
+  const { uid, p, name } = f;
+  const ret = 'f/' + f.key;
+  const shared = uid ? sharedGroups(uid) : [];
+  const ws = uid ? openWishes(uid).sort(byPrio) : [];
+  const nFree = ws.filter(w => !resOf(w.id)).length;
+  const ideas = p ? ideasFor(p.id).slice().sort(byDone) : [];
+  const nOpen = ideas.filter(i => !i.done_at).length;
+  const head = `<section class="profile">${uid ? avatar(uid, 'lg') : ipAvatar(p, 'lg')}<div class="profile-main">
+      <p class="row-meta">${uid ? esc(shared.map(g => g.name).join(', ')) : (p.linked_user ? 'Nicht mehr in deinen Gruppen' : 'Ohne App')}</p>
+      ${uid && ws.length ? `<progress max="${ws.length}" value="${ws.length - nFree}"></progress>` : ''}</div></section>`;
+
+  let html = '';
+  if (uid) {
+    const gRows = shared.map(g => `<li><a class="row-item" href="#/g/${g.id}/p/${uid}"><span class="tile c${hueIdx(g.id)}">${esc(initials(g.name))}</span>
+        <span class="row-main"><span class="row-title">${esc(g.name)}</span><span class="row-meta">${plural(openWishes(uid, g.id).length, 'Wunsch', 'Wünsche')} in dieser Gruppe</span></span>${icon('chev', 'chev')}</a></li>`).join('');
+    html += fold('fr-groups', 'people', 't1', 'Gemeinsame Gruppen', plural(shared.length, 'Gruppe', 'Gruppen'), `<ul class="rows plain">${gRows}</ul>`);
+    const status = w => {
+      const r = resOf(w.id);
+      if (!r) return 'offen';
+      if (r.user_id === me()) return r.status === 'gekauft' ? 'von dir gekauft' : 'von dir reserviert';
+      return 'vergeben';
+    };
+    const wRows = ws.map(w => `<li><a class="row-item ${resOf(w.id) ? 'taken' : ''}" href="#/g/${groupFor(w) || (shared[0] || {}).id}/p/${uid}">${tile(w)}
+        <span class="row-main"><span class="row-title">${prioMark(w)}${esc(w.title)}</span><span class="row-meta">${esc(wishMeta(w, [status(w)]))}</span></span>${icon('chev', 'chev')}</a></li>`).join('');
+    html += fold('fr-wishes', 'gift', 't0', 'Wünsche', ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${nFree} noch frei` : 'Noch keine Wünsche',
+      ws.length ? `<ul class="rows plain">${wRows}</ul><p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert ist. Reservieren geht in der Liste der Gruppe.</span></p>` : `<p class="empty-line">${esc(name)} hat noch nichts eingetragen.</p>`, true);
+  }
+  // Paket 11: Klappbereich „Steckbrief“ kommt hier hin
+  if (D.ideasOk) {
+    const iList = ideas.length ? `<ul class="rows plain">${ideas.map(i => ideaRow(i, ret)).join('')}</ul>` : '';
+    html += fold('fr-ideas', 'bulb', 't2', 'Deine Ideen', ideas.length ? `${plural(nOpen, 'offene Idee', 'offene Ideen')}${ideas.length - nOpen ? ` · ${ideas.length - nOpen} besorgt` : ''}` : 'Nur du siehst sie',
+      `${iList}<a class="secondary withicon addidea" href="#/i/neu/${f.key}?r=${ret}">${icon('plus')}Idee notieren</a>`, true);
+  }
+  if (p) {
+    const linked = !!uid;
+    const cands = groupPeople().filter(u => u !== p.linked_user);
+    const opts = cands.map(u => `<option value="${u}">${esc(nameOf(u))}</option>`).join('');
+    const nameForm = !linked ? `<form data-form="ipname" data-id="${p.id}" class="inline">
+        <input name="name" maxlength="40" required value="${esc(p.name)}" aria-label="Name"><button class="secondary sm" type="submit">Umbenennen</button></form>` : '';
+    const linkForm = !linked && cands.length ? `<form data-form="iplink" data-id="${p.id}" class="stack tight">
+        <label>Ist ${esc(name)} inzwischen dabei?<select name="u" required><option value="">Person auswählen</option>${opts}</select></label>
+        <button class="secondary sm" type="submit">Verknüpfen</button></form>` : '';
+    const unlink = p.linked_user ? `<button class="ghost sm" data-act="ipunlink" data-id="${p.id}">Verknüpfung mit dem Konto lösen</button>` : '';
+    const del = ui.confirmDelIp === p.id
+      ? `<button class="danger" data-act="delip" data-id="${p.id}">${ideas.length ? `Mit ${plural(ideas.length, 'Idee', 'Ideen')} löschen` : 'Wirklich löschen'}</button>`
+      : `<button class="ghost danger-text" data-act="askdelip" data-id="${p.id}">${linked ? 'Ideen für diese Person löschen' : 'Person löschen'}</button>`;
+    html += fold('fr-manage', 'user', 't0', 'Verwalten', linked ? 'Verknüpft mit dem Konto' : 'Umbenennen, verknüpfen, löschen',
+      `<div class="card stack manage">${nameForm}${linkForm}${unlink}</div>${del}`);
+  }
+  return shell(name, head + html + privacyFoot(name), { tab: 'groups', back });
 }
 
 function viewIdeaForm(id, key) {
@@ -1278,7 +1347,7 @@ function personIdeas(gid, uid) {
   const list = p ? ideasFor(p.id).slice().sort(byDone) : [];
   const ret = `g/${gid}/p/${uid}`;
   const key = p ? 'p:' + p.id : 'u:' + uid;
-  return `<div class="sechead"><h2>Deine Ideen</h2>${p ? `<a class="link" href="#/ideen/p/${p.id}?r=${ret}">Alle</a>` : ''}</div>
+  return `<div class="sechead"><h2>Deine Ideen</h2><a class="link" href="#/f/u:${uid}?r=${ret}">Alles zu ${esc(nameOf(uid))}</a></div>
     ${list.length ? `<ul class="rows plain">${list.map(i => ideaRow(i, ret)).join('')}</ul>` : ''}
     <a class="secondary withicon addidea" href="#/i/neu/${key}?r=${ret}">${icon('bulb')}Idee für ${esc(nameOf(uid))} notieren</a>
     ${privacyFoot(nameOf(uid))}`;
@@ -1346,7 +1415,7 @@ function viewGroups() {
   const body = gs.length
     ? `<ul class="rows">${rows}</ul>${forms}`
     : emptyState('people', 'Noch in keiner Gruppe', 'Lege eine Gruppe an und lade andere mit dem Code ein, oder tritt einer bestehenden Gruppe bei.') + forms;
-  return shell('Gruppen', body, { tab: 'groups', sub: gs.length ? plural(gs.length, 'Gruppe', 'Gruppen') : '' });
+  return shell('Gruppen', groupsSwitch('g') + body, { tab: 'groups', sub: gs.length ? plural(gs.length, 'Gruppe', 'Gruppen') : '' });
 }
 
 function viewGroup(gid) {
@@ -1645,7 +1714,9 @@ function render() {
   let html;
   if (parts[0] === 'w' && parts[1]) html = viewWishForm(parts[1]);
   else if (parts[0] === 'i' && parts[1]) html = viewIdeaForm(parts[1], parts[2]);
-  else if (parts[0] === 'ideen' && parts[1] === 'p' && parts[2]) html = viewIdeaPerson(parts[2]);
+  else if (parts[0] === 'ideen' && parts[1] === 'p' && parts[2]) html = viewFriend('p:' + parts[2]);
+  else if (parts[0] === 'f' && parts[1]) html = viewFriend(parts[1]);
+  else if (parts[0] === 'freunde') html = viewFriends();
   else if (parts[0] === 'ideen') html = viewIdeas();
   else if (parts[0] === 'gruppen') html = viewGroups();
   else if (parts[0] === 'g' && parts[1] && parts[2] === 'p' && parts[3]) html = viewPerson(parts[1], parts[3]);
@@ -1819,6 +1890,11 @@ const forms = {
     toast('Gespeichert. Nur du siehst diese Idee.');
     go(backParam() || '#/ideen');
   },
+  async newfriend(f) {
+    const r = await sb('/rest/v1/idea_people', { method: 'POST', prefer: 'return=representation', body: { name: f.name.value.trim() } });
+    await sync(true);
+    go('#/f/p:' + r[0].id);
+  },
   async ipname(f) {
     await sb('/rest/v1/idea_people?id=eq.' + f.dataset.id, { method: 'PATCH', prefer: 'return=minimal', body: { name: f.name.value.trim() } });
     await sync(true);
@@ -1978,12 +2054,13 @@ const acts = {
     ui = {};
     await sync(true);
     toast('Gelöscht.');
-    go('#/ideen');
+    go(backParam() || '#/freunde');
   },
   ipunlink: async el => {
     await sb('/rest/v1/rpc/idea_link', { method: 'POST', body: { p_person: el.dataset.id, p_user: null } });
     await sync(true);
     toast('Verknüpfung gelöst.');
+    go('#/f/p:' + el.dataset.id);
   },
   delwish: async el => {
     await sb('/rest/v1/wishes?id=eq.' + el.dataset.id, { method: 'DELETE' });

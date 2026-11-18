@@ -587,3 +587,7 @@ form h2 { margin-top: 24px; }
 .manage:empty { display: none; }
 .manage:empty + .ghost, .manage:empty + .danger { margin-top: 0; }
 .card.manage + .ghost, .card.manage + .danger { margin-top: 12px; }
+/* Freunde (1.11.1) */
+.rows .row-item.taken .row-title { color: var(--text-2); }
+.fold .rows.plain + .foot, .fold .rows.plain + .addidea { margin-top: 12px; }
+.fold > .empty-line { margin: 0 4px; }

@@ -829,17 +829,51 @@ with sync_playwright() as pw:
     check('1.11: Kim sieht keine Ideen für sich', k.locator('.emptystate:has-text("Noch keine Ideen")').count() == 1
           and 'Zimmerpflanze' not in k.content())
 
+    # 1.11.1 Freunde: Leute aus den Gruppen und Personen ohne App an einem Ort
+    j.click('.tabs >> text=Gruppen')
+    j.click('.subtabs >> text=Freunde')
+    j.wait_for_selector('h1:has-text("Freunde")')
+    check('1.11.1: Freundesliste mit Gruppe und ohne App', j.locator('.rows .row-item:has-text("Kim")').count() == 1
+          and j.locator('.rows .row-item:has-text("Oma Ruth") .row-meta:has-text("Ohne App")').count() == 1
+          and 'Nachbarn' in j.inner_text('.rows .row-item:has-text("Kim") .row-meta'))
+    j.click('.rows .row-item:has-text("Kim")')
+    j.wait_for_selector('h1:has-text("Kim")')
+    check('1.11.1: Freund: Gruppen zu, Wünsche und Ideen offen', not j.evaluate("document.getElementById('fr-groups').open")
+          and j.evaluate("document.getElementById('fr-wishes').open") and j.evaluate("document.getElementById('fr-ideas').open"))
+    check('1.11.1: Freund: gemeinsame Gruppe', 'Nachbarn' in j.text_content('#fr-groups'))
+    check('1.11.1: Freund: Wünsche mit Status', j.locator('#fr-wishes .row-item:has-text("Hörbuch") .row-meta:has-text("von dir reserviert")').count() == 1
+          and j.locator('#fr-wishes .row-item:has-text("Tee") .row-meta:has-text("offen")').count() == 1)
+    check('1.11.1: Freund: Ideen', j.locator('#fr-ideas .row-item:has-text("Zimmerpflanze")').count() == 1)
+    j.click('#fr-groups summary')
+    shot(j, '36-freund')
+    check('1.11.1: kein Überlauf', overflow(j))
+    j.click('#fr-groups .row-item:has-text("Nachbarn")')
+    j.wait_for_selector('.wish:has-text("Tee")')
+    check('1.11.1: Gruppe führt zur Liste in der Gruppe', f'/p/{kim}' in j.url)
+    j.goto(BASE + '#/freunde')
+    j.fill('form[data-form=newfriend] input', 'Onkel Ben')
+    j.click('form[data-form=newfriend] button')
+    j.wait_for_selector('h1:has-text("Onkel Ben")')
+    check('1.11.1: Person ohne App hinzugefügt', j.locator('#fr-wishes').count() == 0 and j.locator('#fr-ideas').count() == 1)
+    j.click('#fr-manage summary')
+    j.click('text=Person löschen')
+    j.click('.danger:has-text("Wirklich löschen")')
+    j.wait_for_selector('h1:has-text("Freunde")')
+    check('1.11.1: Person gelöscht', j.locator('.row-item:has-text("Onkel Ben")').count() == 0)
+
     # Oma Ruth ist inzwischen Kim: verknüpfen führt zusammen
     j.goto(BASE + '#/ideen')
     j.click('.ideaperson:has-text("Oma Ruth")')
-    j.wait_for_selector('form[data-form=iplink]')
+    j.wait_for_selector('h1:has-text("Oma Ruth")')
+    if not j.evaluate("document.getElementById('fr-manage').open"):
+        j.click('#fr-manage summary')
     j.select_option('form[data-form=iplink] select', label='Kim')
     j.click('form[data-form=iplink] button')
     toast(j, 'Verknüpft')
     j.wait_for_selector('h1:has-text("Kim")')
-    check('1.11: verknüpft, Ideen zusammengeführt', j.locator('.row-item').count() == 3
-          and j.locator('a:has-text("Wunschliste ansehen")').count() == 1)
-    j.click('text=Verknüpfung lösen')
+    check('1.11: verknüpft, Ideen zusammengeführt', j.locator('#fr-ideas .row-item').count() == 3
+          and j.locator('#fr-wishes').count() == 1)
+    j.click('text=Verknüpfung mit dem Konto lösen')
     toast(j, 'gelöst')
     j.wait_for_selector('h1:has-text("Oma Ruth")')
     check('1.11: Verknüpfung gelöst, Name bleibt', j.locator('form[data-form=ipname]').count() == 1)
@@ -857,8 +891,10 @@ with sync_playwright() as pw:
     toast(j, 'Gelöscht')
     j.wait_for_selector('h1:has-text("Oma Ruth")')
     check('1.11: Idee gelöscht', j.locator('.row-item:has-text("Kinogutschein")').count() == 0)
-    j.click('text=Person aus der Ideenliste löschen')
+    j.click('text=Person löschen')
     j.click('.danger:has-text("löschen")')
+    j.wait_for_selector('h1:has-text("Freunde")')
+    j.goto(BASE + '#/ideen')
     j.wait_for_selector('h1:has-text("Ideen für andere")')
     check('1.11: Person mit Ideen gelöscht', j.locator('.ideahead').count() == 0 and j.locator('.emptystate').count() == 1)
 
