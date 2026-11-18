@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.13.1';
+const VERSION = '1.14';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -11,7 +11,7 @@ const USER_RE = /^[a-z0-9][a-z0-9._-]{2,23}$/;
 const APP_URL = 'https://konstismile.github.io/Geschenkeliste/'; // Absender der Benachrichtigungen (VAPID)
 
 /* ---------- Speicher ---------- */
-let S = loadState();      // {session, pendingJoin, pendingName, cache}
+let S = loadState();      // {session, pendingJoin, pendingFriend, pendingName, cache}
 let D = emptyData();      // Daten vom Server
 let busy = false;
 let ui = {};              // flüchtiger Zustand der Ansicht (offene Formulare, Löschbestätigung)
@@ -19,7 +19,7 @@ let sbPending = 0;         // laufende Speichervorgänge im Steckbrief
 let fresh = null;         // neu erzeugter Wiederherstellungscode {code, username, reason}, nur im Speicher
 
 function emptyData() {
-  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], pp: null, ps: null, ip: [], ideas: [], card: null, cardVis: [], cards: {}, pools: [], shares: [], at: 0, loaded: false };
+  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], pp: null, ps: null, ip: [], ideas: [], card: null, cardVis: [], cards: {}, pools: [], shares: [], fr: [], wf: [], fq: { in: [], out: [] }, nick: [], fcode: null, at: 0, loaded: false };
 }
 function loadState() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; }
@@ -44,10 +44,43 @@ function go(hash) {
   if (location.hash === hash) render(); else location.hash = hash;
 }
 function me() { return S.session && S.session.user ? S.session.user.id : null; }
+/* Namen (1.14): eigener Spitzname vor dem Anzeigenamen; gleiche Namen bekommen einen Zusatz,
+   z. B. „Lena (Familie)“ (Gruppe, die nur diese Lena mit mir teilt), „(befreundet)“ oder „(2)“. */
+function realName(uid) {
+  const p = D.profiles.find(x => x.id === uid);
+  return p && p.name ? p.name : '';
+}
+const nickOf = uid => ((D.nick || []).find(x => x.user_id === uid) || {}).nick || '';
+function baseName(uid) { return nickOf(uid) || realName(uid) || 'Jemand'; }
+let dupCache = { key: null, map: new Map() };
+function dupMap() {
+  const key = D.at + '|' + (D.nick || []).map(x => x.user_id + x.nick).join(',') + '|' + D.profiles.length;
+  if (dupCache.key === key) return dupCache.map;
+  const map = new Map(), by = new Map();
+  D.profiles.filter(p => p.id !== me()).forEach(p => {
+    const b = baseName(p.id).trim().toLowerCase();
+    if (!by.has(b)) by.set(b, []);
+    by.get(b).push(p.id);
+  });
+  by.forEach(ids => {
+    if (ids.length < 2) return;
+    const sorted = ids.slice().sort();
+    ids.forEach(u => {
+      const others = ids.filter(x => x !== u);
+      const g = sharedGroups(u).find(g => !others.some(o => membersOf(g.id).some(m => m.user_id === o)));
+      let x = g ? g.name : '';
+      if (!x && isFriend(u) && !others.some(isFriend)) x = 'befreundet';
+      map.set(u, x || String(sorted.indexOf(u) + 1));
+    });
+  });
+  dupCache = { key, map };
+  return map;
+}
+const isDup = uid => dupMap().has(uid);
 function nameOf(uid) {
   if (uid === me()) return 'Du';
-  const p = D.profiles.find(x => x.id === uid);
-  return p && p.name ? p.name : 'Jemand';
+  const x = dupMap().get(uid);
+  return x ? `${baseName(uid)} (${x})` : baseName(uid);
 }
 function genitive(name) {
   return /[sßxz]$/i.test(name) ? name + '’' : name + 's';
@@ -169,7 +202,14 @@ function errText(j, status) {
   if (/Push nicht eingerichtet/.test(m)) return 'Die Benachrichtigungen sind noch nicht eingerichtet.';
   if (/Push-Adresse ungültig/.test(m)) return 'Dieser Browser wird für Benachrichtigungen nicht unterstützt.';
   if (/Schlüssel ungültig|Adresse ungültig|Absender ungültig/.test(m)) return 'Die Schlüssel ließen sich nicht speichern.';
+  if (/Freundes-Code nicht gefunden/.test(m)) return 'Diesen Freundes-Link gibt es nicht (mehr).';
   if (/Code nicht gefunden/.test(m)) return 'Diesen Gruppen-Code gibt es nicht.';
+  if (/Das bist du/.test(m)) return 'Das bist du selbst.';
+  if (/Zu viele Anfragen/.test(m)) return 'Zu viele Anfragen. Versuch es morgen wieder.';
+  if (/Zu viele Freunde/.test(m)) return 'Mehr als 500 Freunde gehen nicht.';
+  if (/Anfrage nicht gefunden/.test(m)) return 'Diese Anfrage gibt es nicht mehr.';
+  if (/Diese Person kennst du nicht/.test(m)) return 'Diese Person kennst du hier nicht.';
+  if (/Höchstens 500 Spitznamen/.test(m)) return 'Mehr als 500 Spitznamen gehen nicht.';
   if (/Frist abgelaufen/.test(m)) return 'Die Frist zum Mitmachen ist abgelaufen.';
   if (/Frist ungültig/.test(m)) return 'Die Frist muss heute oder später sein, höchstens ein Jahr.';
   if (/Niemand ausgewählt/.test(m)) return 'Wähle mindestens eine Person aus.';
@@ -251,9 +291,10 @@ function refresh(force) {
 }
 
 function logout(msg) {
-  const keep = S.pendingJoin;
+  const keep = S.pendingJoin, keepF = S.pendingFriend;
   S = {};
   if (keep) S.pendingJoin = keep;
+  if (keepF) S.pendingFriend = keepF;
   D = emptyData();
   fresh = null;
   ui = {};
@@ -282,12 +323,14 @@ async function passwordLogin(username, password) {
 async function sync(quiet) {
   if (!S.session) return;
   try {
-    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards, pools, shares] = await Promise.all([
+    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards, pools, shares, fr, wf, fq, nick] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
       sb('/rest/v1/groups?select=id,name,code,created_by,created_at&order=created_at'),
       sb('/rest/v1/members?select=group_id,user_id,joined_at&order=joined_at'),
       // Preis, Kategorie, Wichtigkeit, „Hab ich schon“ ab 1.7; vorher ohne diese Spalten
-      sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,created_at,price,category,priority,have_at&order=created_at.desc')
+      // ab 1.14 mit all_friends
+      sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,all_friends,created_at,price,category,priority,have_at&order=created_at.desc')
+        .catch(() => sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,created_at,price,category,priority,have_at&order=created_at.desc'))
         .catch(() => sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,created_at&order=created_at.desc')),
       sb('/rest/v1/wish_groups?select=wish_id,group_id'),
       sb('/rest/v1/reservations?select=wish_id,user_id,status'),
@@ -300,7 +343,8 @@ async function sync(quiet) {
       sb('/rest/v1/wichtel_exclusions?select=group_id,a,b,created_at&order=created_at').catch(() => []),
       sb('/rest/v1/wichtel_out?select=group_id,user_id').catch(() => []),
       // Benachrichtigungen ab 1.9
-      sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have,pool')
+      sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have,pool,friend')
+        .catch(() => sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have,pool'))
         .catch(() => sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have')).catch(() => null),
       // Private Ideenliste ab 1.11 (nur eigene Zeilen)
       sb('/rest/v1/idea_people?select=id,name,linked_user,created_at&order=created_at').catch(() => null),
@@ -311,7 +355,12 @@ async function sync(quiet) {
       sb('/rest/v1/rpc/card_list', { method: 'POST', body: {} }).catch(() => null),
       // Gemeinsam schenken ab 1.13 (nur was ich sehen darf)
       sb('/rest/v1/gift_pools?select=wish_id,buyer,created_by,total,split,open,invited,min_people,deadline,note,created_at').catch(() => null),
-      sb('/rest/v1/gift_shares?select=wish_id,user_id,amount,paid_at,joined_at&order=joined_at').catch(() => null)
+      sb('/rest/v1/gift_shares?select=wish_id,user_id,amount,paid_at,joined_at&order=joined_at').catch(() => null),
+      // Direkte Freundschaft ab 1.14
+      sb('/rest/v1/friendships?select=a,b,created_at').catch(() => null),
+      sb('/rest/v1/wish_friends?select=wish_id,user_id').catch(() => null),
+      sb('/rest/v1/rpc/friend_requests_list', { method: 'POST', body: {} }).catch(() => null),
+      sb('/rest/v1/nicknames?select=user_id,nick').catch(() => null)
     ]);
     const ps = admin === true ? await sb('/rest/v1/rpc/push_status', { method: 'POST', body: {} }).catch(() => null) : null;
     if (!S.session) return;
@@ -321,7 +370,9 @@ async function sync(quiet) {
       // Während ein Feld gespeichert wird, bleibt der lokale Stand (sonst springt die Auswahl kurz zurück)
       card: sbPending ? D.card : (card && card[0] ? card[0] : null), cardVis: cardVis || [], cardOk: !!(card && cardVis),
       cards: cards && typeof cards === 'object' ? cards : {}, cardsOk: !!cards,
-      pools: pools || [], shares: shares || [], poolsOk: !!(pools && shares), at: Date.now(), loaded: true };
+      pools: pools || [], shares: shares || [], poolsOk: !!(pools && shares),
+      fr: fr || [], wf: wf || [], fq: fq && fq.in ? fq : { in: [], out: [] }, nick: nick || [], friendsOk: !!(fr && wf && fq && nick),
+      fcode: D.fcode, at: Date.now(), loaded: true };
     S.cache = { uid: me(), D };
     saveState();
     seenSync();
@@ -333,6 +384,11 @@ async function sync(quiet) {
 
 /* ---------- Abgeleitete Daten ---------- */
 const myGroups = () => D.groups.filter(g => D.members.some(m => m.group_id === g.id && m.user_id === me()));
+/* Direkte Freundschaft (1.14) */
+const friendIds = () => (D.fr || []).map(f => (f.a === me() ? f.b : f.a));
+const isFriend = uid => !!uid && uid !== me() && (D.fr || []).some(f => f.a === uid || f.b === uid);
+const known = uid => isFriend(uid) || inMyGroups(uid);
+const wishFriendIds = wid => (D.wf || []).filter(x => x.wish_id === wid).map(x => x.user_id);
 const membersOf = gid => D.members.filter(m => m.group_id === gid);
 const groupIdsOf = wid => D.wg.filter(x => x.wish_id === wid).map(x => x.group_id);
 const resOf = wid => D.res.find(r => r.wish_id === wid);
@@ -378,7 +434,7 @@ function seenLoad() {
   let all = {};
   try { all = JSON.parse(localStorage.getItem(SEEN_KEY)) || {}; } catch (e) { /* kaputt: neu anfangen */ }
   const s = all[me()];
-  seen = s && s.w ? Object.assign({ m: {}, g: {}, d: {} }, s, { uid: me() }) : null;
+  seen = s && s.w ? Object.assign({ m: {}, g: {}, d: {}, f: {} }, s, { uid: me() }) : null;
   return seen;
 }
 function seenSave() {
@@ -403,7 +459,7 @@ function seenSync() {
   const gs = myGroups().map(g => g.id);
   let s = seenLoad();
   const first = !s;
-  if (first) s = seen = { uid: me(), w: {}, m: {}, g: {}, d: {} };
+  if (first) s = seen = { uid: me(), w: {}, m: {}, g: {}, d: {}, f: {} };
   for (const gid of gs) {
     if (!first && s.g[gid]) continue;
     s.g[gid] = 1;
@@ -412,6 +468,14 @@ function seenSync() {
     const st = wichtelState(gid);
     if (st.receiver) s.d[gid] = st.at;
   }
+  // neue direkte Freunde (1.14): ihre bisherigen Wünsche gelten als gesehen
+  const fs = friendIds();
+  for (const u of fs) {
+    if (!first && s.f[u]) continue;
+    s.f[u] = 1;
+    D.wishes.filter(w => w.owner === u).forEach(w => { s.w[w.id] = 1; });
+  }
+  s.f = Object.fromEntries(Object.keys(s.f).filter(k => fs.includes(k)).map(k => [k, 1]));
   // wer auslost, hat es selbst gesehen
   myGroups().filter(isFounder).forEach(g => { const st = wichtelState(g.id); if (st.receiver) s.d[g.id] = st.at; });
   const keepW = new Set(D.wishes.map(w => w.id));
@@ -446,7 +510,7 @@ function newIn(gid, uid) {
 }
 function newCount() {
   if (!D.loaded || !seenLoad()) return 0;
-  return newWishes().length + newMembers().length + newDraws().length;
+  return newWishes().length + newMembers().length + newDraws().length + friendReqsIn().length;
 }
 /* aus den Ansichten heraus: als gesehen vormerken, die Markierung bleibt in dieser Ansicht stehen */
 function markSeen(kind, key, val = 1) { marks.push([kind, key, val]); }
@@ -571,7 +635,7 @@ function initials(name) {
 }
 function myName() { return (D.profiles.find(x => x.id === me()) || {}).name || ''; }
 function avatar(uid, size = '') {
-  const n = uid === me() ? myName() : nameOf(uid);
+  const n = uid === me() ? myName() : baseName(uid);
   return `<span class="av ${size} c${hueIdx(uid)}">${esc(initials(n))}</span>`;
 }
 function avStack(uids, max = 4) {
@@ -608,13 +672,24 @@ function groupFor(w) {
   const g = myGroups().find(g => membersOf(g.id).some(m => m.user_id === w.owner) && visibleIn(w, g.id));
   return g ? g.id : null;
 }
+// Wo man einen fremden Wunsch reserviert: Liste in der Gruppe, sonst die Liste der Person (1.14)
+function wishHref(w) {
+  const g = groupFor(w);
+  if (g) return `#/g/${g}/p/${w.owner}`;
+  return known(w.owner) ? `#/p/${w.owner}` : '#/';
+}
 function emptyState(ic, title, text, action = '') {
   return `<div class="emptystate"><span class="emptyicon">${icon(ic)}</span><h3>${title}</h3><p>${text}</p>${action}</div>`;
 }
 function visLabel(w) {
-  if (w.all_groups) return 'Alle Gruppen';
   const names = groupIdsOf(w.id).map(g => (D.groups.find(x => x.id === g) || {}).name).filter(Boolean);
-  return names.length ? names.join(', ') : 'Nicht freigegeben';
+  const g = w.all_groups ? 'Alle Gruppen' : names.join(', ');
+  // Freunde nur erwähnen, wenn es welche gibt (1.14)
+  if (!friendIds().length) return g || 'Nicht freigegeben';
+  const nf = wishFriendIds(w.id).length;
+  const fr = w.all_friends !== false ? 'alle Freunde' : (nf ? plural(nf, 'Freund', 'Freunde') : '');
+  const out = [g, fr].filter(Boolean).join(' und ');
+  return out ? out[0].toUpperCase() + out.slice(1) : 'Nicht freigegeben';
 }
 
 /* ---------- Ansichten ---------- */
@@ -682,7 +757,9 @@ function installCard(ctx) {
       ? (D.account ? 'Melde dich in der App mit deinem Benutzernamen an. Safari und App speichern getrennt.' : 'Sichere vorher dein Konto. Safari und App speichern getrennt, in der App meldest du dich mit Benutzername an.')
       : 'Danach die Geschenkeliste vom Home-Bildschirm aus öffnen und dort starten.';
     const code = ctx === 'login' && S.pendingJoin
-      ? `<div class="invcode">Dein Einladungscode für die App<b class="code">${esc(String(S.pendingJoin).toUpperCase())}</b><small>In der App unter Gruppen eingeben.</small></div>` : '';
+      ? `<div class="invcode">Dein Einladungscode für die App<b class="code">${esc(String(S.pendingJoin).toUpperCase())}</b><small>In der App unter Gruppen eingeben.</small></div>`
+      : (ctx === 'login' && S.pendingFriend
+        ? `<div class="invcode">Dein Freundes-Code für die App<b class="code">${esc(fmtFriendCode(String(S.pendingFriend).toUpperCase()))}</b><small>In der App unter Gruppen → Freunde eingeben.</small></div>` : '');
     return `${head('phone', 'Als App auf den Home-Bildschirm')}
       ${notSafari ? '<p class="small hint">Das geht am zuverlässigsten in Safari. Öffne diese Seite dort.</p>' : ''}
       ${iosSteps()}<p class="small muted note">${note}</p>${code}
@@ -735,11 +812,12 @@ function badgeCard(ctx) {
    Das Gerät meldet ein Push-Abo bei der Datenbank an. Was verschickt wird, entscheidet die Datenbank,
    die Edge Function „push“ verschickt. Der Schlüssel kommt vom Server (Verwaltung → Schlüssel erzeugen). */
 const PREFS = [
-  ['wish', 'Neue Wünsche', 'Aus deinen Gruppen'],
+  ['wish', 'Neue Wünsche', 'Aus deinen Gruppen und von Freunden'],
   ['member', 'Neue Mitglieder', 'Wenn jemand beitritt'],
   ['draw', 'Wichteln', 'Wenn ausgelost wurde'],
   ['have', 'Schon vorhanden', 'Bei etwas, das du reserviert hast'],
   ['pool', 'Gemeinsam schenken', 'Anfragen, wer mitmacht, gekauft'],
+  ['friend', 'Freundschaften', 'Anfragen und neue Freunde'],
   ['remind', 'Erinnerung vor Heiligabend', '14, 7 und 1 Tag vorher']
 ];
 const PUSH_OFF = 'geschenkeliste-push-aus';   // auf diesem Gerät bewusst ausgeschaltet
@@ -851,13 +929,14 @@ function notifySection() {
     const sub = st === 'denied' ? 'Auf diesem Gerät ausgeschaltet' : st === 'install' ? 'Nur in der App vom Home-Bildschirm' : 'Noch nicht erlaubt';
     return fold('notify', 'bell', 't2', 'Benachrichtigungen', sub, `<section class="card install">${notifyBody(st, 'konto')}</section>`);
   }
-  const rows = PREFS.map(([k, t, d]) => {
+  const prefs = PREFS.filter(([k]) => k !== 'friend' || D.friendsOk);
+  const rows = prefs.map(([k, t, d]) => {
     const on = prefOn(k);
     return `<li class="row-item"><span class="row-main"><span class="row-title">${t}</span><span class="row-meta">${d}</span></span>
       <button class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" aria-label="${t}" data-act="pref" data-k="${k}" data-on="${on ? '0' : '1'}"></button></li>`;
   }).join('');
-  const nOn = PREFS.filter(([k]) => prefOn(k)).length;
-  const sub = nOn === PREFS.length ? 'An für alles' : nOn ? `An für ${nOn} von ${PREFS.length}` : 'An, aber alles abgewählt';
+  const nOn = prefs.filter(([k]) => prefOn(k)).length;
+  const sub = nOn === prefs.length ? 'An für alles' : nOn ? `An für ${nOn} von ${prefs.length}` : 'An, aber alles abgewählt';
   return fold('notify', 'bell', 't2', 'Benachrichtigungen', sub, `<ul class="rows plain">${rows}</ul>
     <p class="foot">${icon('eyeoff')}<span>Was du dir wünschst, wer etwas reserviert und wen jemand beim Wichteln gezogen hat, verrät keine Nachricht.</span></p>
     <div class="card stack">
@@ -922,7 +1001,8 @@ async function makeVapid() {
 }
 
 function viewLogin() {
-  const invited = S.pendingJoin ? `<div class="banner">${icon('people')}<span><b>Du wurdest eingeladen</b><small>Nach der Anmeldung bist du automatisch in der Gruppe.</small></span></div>` : '';
+  const invited = S.pendingJoin ? `<div class="banner">${icon('people')}<span><b>Du wurdest eingeladen</b><small>Nach der Anmeldung bist du automatisch in der Gruppe.</small></span></div>`
+    : (S.pendingFriend ? `<div class="banner">${icon('people')}<span><b>Freundschaftseinladung</b><small>Nach der Anmeldung kannst du sie bestätigen.</small></span></div>` : '');
   return `<main class="login">
     ${brand()}
     <h1 class="title xl">Wünsche teilen, ohne die Überraschung zu verderben.</h1>
@@ -1017,12 +1097,17 @@ function viewHome() {
       <a href="#/gruppen"><b>${gs.length}</b><span>${gs.length === 1 ? 'Gruppe' : 'Gruppen'}</span></a>
     </div>`;
 
-  if (!gs.length) {
-    return shell('Hallo ' + myName(), `${secure}${notifyBanner()}${hero}${stats}
+  // Freundschaftsanfragen (1.14)
+  const fq = friendReqsIn();
+  const freq = fq.length ? `<a class="banner tap" href="#/freunde">${icon('people')}<span><b>${fq.length === 1 ? `${esc(nameOf(fq[0].user))} möchte mit dir befreundet sein` : `${fq.length} Freundschaftsanfragen`}</b><small>Annehmen oder ablehnen unter Freunde.</small></span>${icon('chev', 'chev')}</a>` : '';
+
+  if (!gs.length && !friendIds().length) {
+    return shell('Hallo ' + myName(), `${secure}${freq}${notifyBanner()}${hero}${stats}
       <div class="card cta">
         <h3>Starte mit deiner Familie</h3>
         <p>Lege eine Gruppe an und teile den Einladungscode. Alle in der Gruppe sehen gegenseitig ihre Wunschlisten.</p>
         <div class="btnrow"><a class="primary" href="#/gruppen">Gruppe anlegen</a><a class="secondary" href="#/gruppen">Code eingeben</a></div>
+        <p class="small muted">Oder füge einzelne Freunde hinzu, ganz ohne Gruppe. <a href="#/freunde">Zu den Freunden</a></p>
       </div>`, { tab: 'home', eyebrow: today });
   }
 
@@ -1051,7 +1136,6 @@ function viewHome() {
       </li>`;
   };
   const errHtml = nErr ? `${haveWarn}<ul class="rows">${errands.map(({ r, w }) => {
-    const g = groupFor(w);
     const done = r.status === 'gekauft';
     const pool = poolOf(w.id);
     if (pool) {
@@ -1063,7 +1147,7 @@ function viewHome() {
     }
     return `<li class="row-item ${done ? 'done' : ''}">
         <button class="tick ${done ? 'on' : ''}" data-act="resstatus" data-id="${w.id}" data-s="${done ? 'reserviert' : 'gekauft'}" aria-label="${done ? 'Doch nicht gekauft' : 'Als gekauft markieren'}">${icon('check')}</button>
-        <a class="row-main" href="${g ? `#/g/${g}/p/${w.owner}` : '#/'}"><span class="row-title">${esc(w.title)}</span><span class="row-meta ${w.have_at ? 'warn' : ''}">für ${esc(nameOf(w.owner))} · ${w.have_at ? `hat ${esc(nameOf(w.owner))} schon` : (done ? 'gekauft' : 'reserviert')}</span></a>
+        <a class="row-main" href="${wishHref(w)}"><span class="row-title">${esc(w.title)}</span><span class="row-meta ${w.have_at ? 'warn' : ''}">für ${esc(nameOf(w.owner))} · ${w.have_at ? `hat ${esc(nameOf(w.owner))} schon` : (done ? 'gekauft' : 'reserviert')}</span></a>
         ${avatar(w.owner, 'sm')}
       </li>`;
   }).join('')}${ideasDone.map(ideaDoneRow).join('')}</ul>`
@@ -1073,10 +1157,9 @@ function viewHome() {
   const nw = newWishes(), nm = newMembers();
   const FEED_MAX = 8;
   const wishRow = w => {
-    const g = groupFor(w);
     const r = resOf(w.id);
     const isNew = nw.includes(w);
-    return `<li><a class="row-item ${isNew ? 'isnew' : ''}" href="${g ? `#/g/${g}/p/${w.owner}` : '#/'}">${avatar(w.owner)}
+    return `<li><a class="row-item ${isNew ? 'isnew' : ''}" href="${wishHref(w)}">${avatar(w.owner)}
         <span class="row-main"><span class="row-title">${esc(w.title)}</span><span class="row-meta">${esc(nameOf(w.owner))} · ${ago(w.created_at)}${r ? ' · vergeben' : ''}</span></span>${isNew ? '<span class="newdot" aria-label="neu"></span>' : ''}${icon('chev', 'chev')}</a></li>`;
   };
   const memberRow = m => {
@@ -1096,12 +1179,13 @@ function viewHome() {
       + (rest > 0 ? `<p class="empty-line">Und ${plural(rest, 'weiterer Wunsch', 'weitere Wünsche')}. <a href="#/gruppen">Zu den Gruppen</a></p>` : '');
   } else {
     const feed = othersWishes().slice(0, 6);
-    feedHead = '<h2>Neu in deinen Gruppen</h2>';
+    const fr = friendIds().length;
+    feedHead = `<h2>${fr ? 'Neu bei deinen Leuten' : 'Neu in deinen Gruppen'}</h2>`;
     feedHtml = feed.length ? `<ul class="rows">${feed.map(wishRow).join('')}</ul>`
-      : `<p class="empty-line">Sobald jemand aus deinen Gruppen etwas einträgt, erscheint es hier.</p>`;
+      : `<p class="empty-line">Sobald jemand aus deinen Gruppen${fr ? ' oder ein Freund' : ''} etwas einträgt, erscheint es hier.</p>`;
   }
 
-  return shell('Hallo ' + myName(), `${secure}${notifyBanner()}${hero}${stats}${wichtelHtml}${poolHome()}
+  return shell('Hallo ' + myName(), `${secure}${freq}${notifyBanner()}${hero}${stats}${wichtelHtml}${poolHome()}
     <h2>Deine Besorgungen</h2>${errHtml}
     ${feedHead}${feedHtml}`, { tab: 'home', eyebrow: today });
 }
@@ -1188,15 +1272,18 @@ function groupPeople() {
   return [...ids].sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'de'));
 }
 const inMyGroups = uid => groupPeople().includes(uid);
+// Alle, die ich kenne: aus meinen Gruppen und direkte Freunde (1.14)
+function knownPeople() {
+  const ids = new Set(groupPeople());
+  friendIds().forEach(u => ids.add(u));
+  return [...ids].sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'de'));
+}
 function ipName(p) {
-  if (p.linked_user) {
-    const pr = D.profiles.find(x => x.id === p.linked_user);
-    if (pr && pr.name) return pr.name;
-  }
+  if (p.linked_user && (realName(p.linked_user) || nickOf(p.linked_user))) return baseName(p.linked_user);
   return p.name;
 }
 function ipAvatar(p, size = '') {
-  if (p.linked_user && inMyGroups(p.linked_user)) return avatar(p.linked_user, size);
+  if (p.linked_user && known(p.linked_user)) return avatar(p.linked_user, size);
   return `<span class="av ${size} c${hueIdx(p.id)}">${esc(initials(p.name))}</span>`;
 }
 // Wohin „Zurück“ nach dem Speichern führt (?r=… im Hash, nur eigene Pfade)
@@ -1240,28 +1327,43 @@ function viewIdeas() {
     Object.assign(opt, { sub: `${plural(open, 'offene Idee', 'offene Ideen')}${all.length - open ? ` · ${all.length - open} besorgt` : ''}` }));
 }
 
-/* ---------- Freunde (1.11.1) ----------
-   Alle Leute aus meinen Gruppen und selbst angelegte Personen der Ideenliste an einem Ort.
-   Schlüssel wie im Ideen-Formular: u:<uid> (in meinen Gruppen) oder p:<idea_people.id>. */
+/* ---------- Freunde (1.11.1, direkte Freundschaft seit 1.14) ----------
+   Alle Leute aus meinen Gruppen, direkte Freunde und selbst angelegte Personen der Ideenliste an einem Ort.
+   Schlüssel wie im Ideen-Formular: u:<uid> (kenne ich) oder p:<idea_people.id>. */
 function friendOf(key) {
   let uid = null, p = null;
   if (/^u:[\w-]+$/.test(key || '')) { uid = key.slice(2); p = ipFor(uid) || null; }
   else if (/^p:[\w-]+$/.test(key || '')) { p = ipById(key.slice(2)) || null; if (p && p.linked_user) uid = p.linked_user; }
-  if (uid && !inMyGroups(uid)) uid = null;
+  if (uid && !known(uid)) uid = null;
   if (!uid && !p) return null;
   return { uid, p, key: uid ? 'u:' + uid : 'p:' + p.id, name: uid ? nameOf(uid) : ipName(p) };
 }
-const friendKey = p => (p.linked_user && inMyGroups(p.linked_user) ? 'u:' + p.linked_user : 'p:' + p.id);
+const friendKey = p => (p.linked_user && known(p.linked_user) ? 'u:' + p.linked_user : 'p:' + p.id);
 const sharedGroups = uid => myGroups().filter(g => membersOf(g.id).some(m => m.user_id === uid));
 function friendsList() {
-  const gp = groupPeople().map(uid => ({ key: 'u:' + uid, uid, p: ipFor(uid) || null, name: nameOf(uid) }));
-  const own = (D.ip || []).filter(p => !(p.linked_user && inMyGroups(p.linked_user))).map(p => ({ key: 'p:' + p.id, uid: null, p, name: ipName(p) }));
-  return gp.concat(own).sort((a, b) => a.name.localeCompare(b.name, 'de'));
+  const kp = knownPeople().map(uid => ({ key: 'u:' + uid, uid, p: ipFor(uid) || null, name: nameOf(uid) }));
+  const own = (D.ip || []).filter(p => !(p.linked_user && known(p.linked_user))).map(p => ({ key: 'p:' + p.id, uid: null, p, name: ipName(p) }));
+  return kp.concat(own).sort((a, b) => a.name.localeCompare(b.name, 'de'));
 }
+const friendReqsIn = () => ((D.fq || {}).in || []);
+const friendReqsOut = () => ((D.fq || {}).out || []);
+const reqFrom = uid => friendReqsIn().find(r => r.user === uid);
+const reqTo = uid => friendReqsOut().find(r => r.user === uid);
 function groupsSwitch(on) {
-  const n = friendsList().length;
+  const n = friendsList().length, q = friendReqsIn().length;
   return `<nav class="subtabs" aria-label="Gruppen oder Freunde"><a href="#/gruppen" class="${on === 'g' ? 'on' : ''}">Gruppen</a>
-    <a href="#/freunde" class="${on === 'f' ? 'on' : ''}">Freunde${n ? `<span class="subcount">${n}</span>` : ''}</a></nav>`;
+    <a href="#/freunde" class="${on === 'f' ? 'on' : ''}">Freunde${q ? `<span class="subcount new">${q}</span>` : (n ? `<span class="subcount">${n}</span>` : '')}</a></nav>`;
+}
+function friendLink(code) { return location.origin + location.pathname + '#/freund/' + code; }
+function fmtFriendCode(c) { return String(c || '').replace(/(.{4})(?=.)/g, '$1-'); }
+
+// Anfragen an mich: Annehmen / Ablehnen
+function friendReqCards() {
+  const list = friendReqsIn();
+  if (!list.length) return '';
+  return `<h2>Anfragen</h2><ul class="rows">${list.map(r => `<li class="row-item freq">${avatar(r.user)}
+      <span class="row-main"><span class="row-title">${esc(nameOf(r.user))}</span><span class="row-meta">möchte mit dir befreundet sein · ${esc(ago(r.at))}</span></span>
+      <span class="acts"><button class="primary sm" data-act="freqyes" data-id="${r.id}">Annehmen</button><button class="ghost sm" data-act="freqno" data-id="${r.id}">Ablehnen</button></span></li>`).join('')}</ul>`;
 }
 
 function viewFriends() {
@@ -1269,18 +1371,34 @@ function viewFriends() {
   const row = f => {
     const nIdeas = f.p ? ideasFor(f.p.id).filter(i => !i.done_at).length : 0;
     const meta = f.uid
-      ? [sharedGroups(f.uid).map(g => g.name).join(', '), plural(openWishes(f.uid).length, 'Wunsch', 'Wünsche')]
+      ? [sharedGroups(f.uid).map(g => g.name).join(', '), isFriend(f.uid) ? 'befreundet' : '', plural(openWishes(f.uid).length, 'Wunsch', 'Wünsche')].filter(Boolean)
       : ['Ohne App'];
     if (nIdeas) meta.push(plural(nIdeas, 'Idee', 'Ideen'));
     return `<li><a class="row-item" href="#/f/${f.key}">${f.uid ? avatar(f.uid) : ipAvatar(f.p)}
       <span class="row-main"><span class="row-title">${esc(f.name)}</span><span class="row-meta">${esc(meta.join(' · '))}</span></span>${icon('chev', 'chev')}</a></li>`;
   };
+  const addFriend = D.friendsOk ? `<h2>Freund hinzufügen</h2>
+    <div class="card stack friendadd">
+      <p class="small muted">Teile deinen Freundes-Link. Wer ihn öffnet und bestätigt, ist mit dir befreundet, auch ohne gemeinsame Gruppe.</p>
+      <button class="primary withicon" data-act="friendshare">${icon('share')}Freundes-Link teilen</button>
+      ${ui.confirmNewCode ? `<button class="danger sm" data-act="friendnewcode">Neuen Link erzeugen, alter gilt nicht mehr</button>` : `<button class="link newcode" data-act="asknewcode">Alten Link ungültig machen</button>`}
+      <form data-form="friendadd" class="inline"><input name="q" maxlength="80" placeholder="Benutzername oder Freundes-Code" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" required aria-label="Benutzername oder Freundes-Code"><button class="secondary" type="submit">Anfragen</button></form>
+    </div>` : '';
+  const out = friendReqsOut();
+  const outHtml = out.length ? `<h2>Gesendete Anfragen</h2><ul class="rows plain">${out.map(r => `<li class="row-item">
+      <span class="row-main"><span class="row-title">${esc(r.user ? nameOf(r.user) : '@' + r.name)}</span><span class="row-meta">wartet · ${esc(ago(r.at))}</span></span>
+      <button class="ghost sm" data-act="freqwithdraw" data-id="${r.id}">Zurückziehen</button></li>`).join('')}</ul>` : '';
   const add = D.ideasOk ? `<h2>Person ohne App</h2>
     <div class="card"><form data-form="newfriend" class="inline"><input name="name" maxlength="40" placeholder="Name, z. B. Oma Ruth" required><button class="secondary" type="submit">Hinzufügen</button></form></div>` : '';
   const body = list.length
-    ? `<ul class="rows">${list.map(row).join('')}</ul>${add}<p class="foot">${icon('eyeoff')}<span>Leute ohne App und deine Ideen siehst nur du.</span></p>`
-    : emptyState('people', 'Noch niemand hier', 'Hier erscheinen alle aus deinen Gruppen und Leute ohne App, die du selbst anlegst.') + add;
+    ? `${friendReqCards()}<ul class="rows">${list.map(row).join('')}</ul>${addFriend}${outHtml}${add}<p class="foot">${icon('eyeoff')}<span>Leute ohne App, Spitznamen und deine Ideen siehst nur du.</span></p>`
+    : friendReqCards() + emptyState('people', 'Noch niemand hier', 'Hier erscheinen alle aus deinen Gruppen, deine Freunde und Leute ohne App, die du selbst anlegst.') + addFriend + outHtml + add;
   return shell('Freunde', groupsSwitch('f') + body, { tab: 'groups', sub: list.length ? plural(list.length, 'Person', 'Personen') : '' });
+}
+
+// Spitzname vergeben (nur für mich sichtbar); leer = entfernen
+function nickForm(uid, cls = '') {
+  return `<form data-form="nick" data-u="${uid}" class="inline ${cls}"><input name="nick" maxlength="40" value="${esc(nickOf(uid))}" placeholder="Spitzname" aria-label="Spitzname, nur für dich"><button class="secondary sm" type="submit">${nickOf(uid) ? 'Ändern' : 'Speichern'}</button></form>`;
 }
 
 function viewFriend(key) {
@@ -1290,19 +1408,29 @@ function viewFriend(key) {
   const { uid, p, name } = f;
   const ret = 'f/' + f.key;
   const shared = uid ? sharedGroups(uid) : [];
+  const friend = uid && isFriend(uid);
   const ws = uid ? openWishes(uid).sort(byPrio) : [];
   const nFree = ws.filter(w => !resOf(w.id)).length;
   const ideas = p ? ideasFor(p.id).slice().sort(byDone) : [];
   const nOpen = ideas.filter(i => !i.done_at).length;
+  const where = uid ? [shared.map(g => g.name).join(', '), friend ? 'befreundet' : ''].filter(Boolean).join(' · ') : (p.linked_user ? 'Nicht mehr in deinen Gruppen' : 'Ohne App');
+  const real = uid && nickOf(uid) && realName(uid) && realName(uid) !== nickOf(uid) ? `<p class="row-meta">Heißt in der App ${esc(realName(uid))}</p>` : '';
   const head = `<section class="profile">${uid ? avatar(uid, 'lg') : ipAvatar(p, 'lg')}<div class="profile-main">
-      <p class="row-meta">${uid ? esc(shared.map(g => g.name).join(', ')) : (p.linked_user ? 'Nicht mehr in deinen Gruppen' : 'Ohne App')}</p>
+      <p class="row-meta">${esc(where)}</p>${real}
       ${uid && ws.length ? `<progress max="${ws.length}" value="${ws.length - nFree}"></progress>` : ''}</div></section>`;
+  // Gleicher Name wie jemand anderes und noch kein Spitzname: Hinweis mit Formular
+  const dup = uid && isDup(uid) && !nickOf(uid) && D.friendsOk ? `<div class="banner dupname">${icon('user')}<span><b>Mehrere heißen ${esc(baseName(uid))}</b><small>Gib ${esc(baseName(uid))} einen Spitznamen, den nur du siehst. Bis dahin steht ${esc(nameOf(uid).slice(baseName(uid).length + 1))} dahinter.</small>${nickForm(uid, 'tight')}</span></div>` : '';
+  const incoming = uid ? reqFrom(uid) : null;
+  const reqBanner = incoming ? `<div class="banner">${icon('people')}<span><b>${esc(name)} möchte mit dir befreundet sein</b><small>Ihr seht dann gegenseitig eure Wünsche, auch ohne gemeinsame Gruppe.</small></span>
+      <span class="acts"><button class="primary sm" data-act="freqyes" data-id="${incoming.id}">Annehmen</button></span></div>` : '';
 
   let html = '';
   if (uid) {
-    const gRows = shared.map(g => `<li><a class="row-item" href="#/g/${g.id}/p/${uid}"><span class="tile c${hueIdx(g.id)}">${esc(initials(g.name))}</span>
-        <span class="row-main"><span class="row-title">${esc(g.name)}</span><span class="row-meta">${plural(openWishes(uid, g.id).length, 'Wunsch', 'Wünsche')} in dieser Gruppe</span></span>${icon('chev', 'chev')}</a></li>`).join('');
-    html += fold('fr-groups', 'people', 't1', 'Gemeinsame Gruppen', plural(shared.length, 'Gruppe', 'Gruppen'), `<ul class="rows plain">${gRows}</ul>`);
+    if (shared.length) {
+      const gRows = shared.map(g => `<li><a class="row-item" href="#/g/${g.id}/p/${uid}"><span class="tile c${hueIdx(g.id)}">${esc(initials(g.name))}</span>
+          <span class="row-main"><span class="row-title">${esc(g.name)}</span><span class="row-meta">${plural(openWishes(uid, g.id).length, 'Wunsch', 'Wünsche')} in dieser Gruppe</span></span>${icon('chev', 'chev')}</a></li>`).join('');
+      html += fold('fr-groups', 'people', 't1', 'Gemeinsame Gruppen', plural(shared.length, 'Gruppe', 'Gruppen'), `<ul class="rows plain">${gRows}</ul>`);
+    }
     const status = w => {
       const r = resOf(w.id);
       if (!r) return 'offen';
@@ -1310,10 +1438,11 @@ function viewFriend(key) {
       if (r.user_id === me()) return r.status === 'gekauft' ? 'von dir gekauft' : 'von dir reserviert';
       return 'vergeben';
     };
-    const wRows = ws.map(w => `<li><a class="row-item ${resOf(w.id) ? 'taken' : ''}" href="#/g/${groupFor(w) || (shared[0] || {}).id}/p/${uid}">${tile(w)}
+    const listHref = `#/p/${uid}?r=${ret}`;
+    const wRows = ws.map(w => `<li><a class="row-item ${resOf(w.id) ? 'taken' : ''}" href="${listHref}">${tile(w)}
         <span class="row-main"><span class="row-title">${prioMark(w)}${esc(w.title)}</span><span class="row-meta">${esc(wishMeta(w, [status(w)]))}</span></span>${icon('chev', 'chev')}</a></li>`).join('');
     html += fold('fr-wishes', 'gift', 't0', 'Wünsche', ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${nFree} noch frei` : 'Noch keine Wünsche',
-      ws.length ? `<ul class="rows plain">${wRows}</ul><p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert ist. Reservieren geht in der Liste der Gruppe.</span></p>` : `<p class="empty-line">${esc(name)} hat noch nichts eingetragen.</p>`, true);
+      ws.length ? `<ul class="rows plain">${wRows}</ul><a class="secondary withicon" href="${listHref}">${icon('gift')}Liste öffnen und reservieren</a><p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert ist.</span></p>` : `<p class="empty-line">${esc(name)} hat noch nichts eingetragen.</p>`, true);
   }
   if (uid) html += cardFold(uid, name);
   if (D.ideasOk) {
@@ -1321,23 +1450,75 @@ function viewFriend(key) {
     html += fold('fr-ideas', 'bulb', 't2', 'Deine Ideen', ideas.length ? `${plural(nOpen, 'offene Idee', 'offene Ideen')}${ideas.length - nOpen ? ` · ${ideas.length - nOpen} besorgt` : ''}` : 'Nur du siehst sie',
       `${iList}<a class="secondary withicon addidea" href="#/i/neu/${f.key}?r=${ret}">${icon('plus')}Idee notieren</a>`, true);
   }
+  // Verwalten: Spitzname, Freundschaft, Person ohne App
+  const parts = [];
+  let sub = [];
+  if (uid && D.friendsOk) {
+    parts.push(`<div class="field"><span class="flabel">Spitzname</span>${nickForm(uid)}<p class="muted fhelp">Nur du siehst ihn. Er steht überall statt ${esc(realName(uid) || 'des Namens')}.</p></div>`);
+    sub.push(nickOf(uid) ? 'Spitzname ' + nickOf(uid) : 'Spitzname');
+    if (friend) {
+      parts.push(ui.confirmUnfriend === uid
+        ? `<p class="small">Ihr seht dann gegenseitig keine Wünsche mehr, außer über gemeinsame Gruppen. Reservierungen bleiben.</p><button class="danger" data-act="unfriend" data-id="${uid}">Freundschaft wirklich beenden</button>`
+        : `<button class="ghost danger-text" data-act="askunfriend" data-id="${uid}">Freundschaft beenden</button>`);
+      sub.push('befreundet');
+    } else if (incoming) {
+      parts.push(`<button class="primary sm" data-act="freqyes" data-id="${incoming.id}">Freundschaft annehmen</button>`);
+    } else if (reqTo(uid)) {
+      parts.push(`<p class="small muted">Freundschaftsanfrage gesendet, wartet.</p>`);
+    } else {
+      parts.push(`<button class="secondary withicon sm" data-act="friendask" data-id="${uid}">${icon('people')}Als Freund hinzufügen</button><p class="muted fhelp">Dann seht ihr euch auch ohne gemeinsame Gruppe.</p>`);
+    }
+  }
+  let del = '';
   if (p) {
     const linked = !!uid;
-    const cands = groupPeople().filter(u => u !== p.linked_user);
+    const cands = knownPeople().filter(u => u !== p.linked_user);
     const opts = cands.map(u => `<option value="${u}">${esc(nameOf(u))}</option>`).join('');
-    const nameForm = !linked ? `<form data-form="ipname" data-id="${p.id}" class="inline">
-        <input name="name" maxlength="40" required value="${esc(p.name)}" aria-label="Name"><button class="secondary sm" type="submit">Umbenennen</button></form>` : '';
-    const linkForm = !linked && cands.length ? `<form data-form="iplink" data-id="${p.id}" class="stack tight">
+    if (!linked) parts.push(`<form data-form="ipname" data-id="${p.id}" class="inline">
+        <input name="name" maxlength="40" required value="${esc(p.name)}" aria-label="Name"><button class="secondary sm" type="submit">Umbenennen</button></form>`);
+    if (!linked && cands.length) parts.push(`<form data-form="iplink" data-id="${p.id}" class="stack tight">
         <label>Ist ${esc(name)} inzwischen dabei?<select name="u" required><option value="">Person auswählen</option>${opts}</select></label>
-        <button class="secondary sm" type="submit">Verknüpfen</button></form>` : '';
-    const unlink = p.linked_user ? `<button class="ghost sm" data-act="ipunlink" data-id="${p.id}">Verknüpfung mit dem Konto lösen</button>` : '';
-    const del = ui.confirmDelIp === p.id
+        <button class="secondary sm" type="submit">Verknüpfen</button></form>`);
+    if (p.linked_user) parts.push(`<button class="ghost sm" data-act="ipunlink" data-id="${p.id}">Verknüpfung mit dem Konto lösen</button>`);
+    del = ui.confirmDelIp === p.id
       ? `<button class="danger" data-act="delip" data-id="${p.id}">${ideas.length ? `Mit ${plural(ideas.length, 'Idee', 'Ideen')} löschen` : 'Wirklich löschen'}</button>`
       : `<button class="ghost danger-text" data-act="askdelip" data-id="${p.id}">${linked ? 'Ideen für diese Person löschen' : 'Person löschen'}</button>`;
-    html += fold('fr-manage', 'user', 't0', 'Verwalten', linked ? 'Verknüpft mit dem Konto' : 'Umbenennen, verknüpfen, löschen',
-      `<div class="card stack manage">${nameForm}${linkForm}${unlink}</div>${del}`);
+    if (!uid) sub = ['Umbenennen, verknüpfen, löschen'];
   }
-  return shell(name, head + html + privacyFoot(name), { tab: 'groups', back });
+  if (parts.length || del) {
+    html += fold('fr-manage', 'user', 't0', 'Verwalten', sub.join(' · ') || 'Verknüpft mit dem Konto', `<div class="card stack manage">${parts.join('')}</div>${del}`);
+  }
+  return shell(name, reqBanner + head + dup + html + privacyFoot(name), { tab: 'groups', back });
+}
+
+/* Freundes-Link geöffnet: #/freund/<code> (1.14) */
+function viewFriendCode(code) {
+  const back = ['#/freunde', 'Freunde'];
+  ui.peek = ui.peek || {};
+  const x = ui.peek[code];
+  if (x === undefined) {
+    ui.peek[code] = 'laden';
+    sb('/rest/v1/rpc/friend_peek', { method: 'POST', body: { p_code: code } })
+      .then(r => { (ui.peek = ui.peek || {})[code] = r; }).catch(e => { (ui.peek = ui.peek || {})[code] = { err: e.message }; })
+      .then(() => { if (route()[0] === 'freund') render(); });
+  }
+  if (x === undefined || x === 'laden') return shell('Freundes-Link', '<p class="boot">Lädt …</p>', { tab: 'groups', back });
+  let body;
+  if (!x) body = emptyState('people', 'Link gilt nicht mehr', 'Diesen Freundes-Link gibt es nicht (mehr). Bitte um einen neuen.');
+  else if (x.err) body = emptyState('people', 'Hat nicht geklappt', esc(x.err));
+  else if (x.self) body = emptyState('people', 'Das ist dein eigener Link', 'Schick ihn an Leute, mit denen du befreundet sein möchtest.', `<button class="primary withicon" data-act="friendshare">${icon('share')}Freundes-Link teilen</button>`);
+  else if (x.friends || isFriend(x.user)) body = emptyState('people', `Ihr seid schon befreundet`, `Du und ${esc(x.name)} seht gegenseitig eure Wünsche.`, `<a class="primary" href="#/f/u:${esc(x.user)}">Zu ${esc(nameOf(x.user) === 'Jemand' ? x.name : nameOf(x.user))}</a>`);
+  else {
+    body = `<div class="card reveal friendinvite">
+      <span class="av lg c${hueIdx(x.user)}">${esc(initials(x.name))}</span>
+      <p class="eyebrow">Freundschaft</p>
+      <p class="reveal-name">${esc(x.name)}</p>
+      <p class="small muted">möchte mit dir befreundet sein. Ihr seht dann gegenseitig eure Wünsche und könnt füreinander reservieren, auch ohne gemeinsame Gruppe.</p>
+      <button class="primary" data-act="friendcode" data-id="${esc(code)}">Freund werden</button>
+      <a class="ghost" href="#/">Nein danke</a>
+    </div>`;
+  }
+  return shell('Freundes-Link', body, { tab: 'groups', back });
 }
 
 function viewIdeaForm(id, key) {
@@ -1347,15 +1528,15 @@ function viewIdeaForm(id, key) {
   const back = [ret || '#/ideen', ret ? 'Zurück' : 'Ideen'];
   if (!D.ideasOk) return shell('Idee', ideasMissing(), { tab: 'list', back });
   if (!i) return shell('Idee', emptyState('bulb', 'Nicht gefunden', 'Diese Idee gibt es nicht mehr.'), { tab: 'list', back });
-  // Auswahl: Leute aus meinen Gruppen, dann frei angelegte (und solche, die nicht mehr in meinen Gruppen sind)
-  const gp = groupPeople();
+  // Auswahl: Leute aus meinen Gruppen und Freunde, dann frei angelegte (und solche, die ich nicht mehr kenne)
+  const gp = knownPeople();
   const own = D.ip.filter(p => !p.linked_user || !gp.includes(p.linked_user));
   let cur = '';
   if (!neu) { const p = ipById(i.person); cur = p && p.linked_user && gp.includes(p.linked_user) ? 'u:' + p.linked_user : 'p:' + i.person; }
   else if (key && /^[up]:[\w-]+$/.test(key)) cur = key.startsWith('p:') && ipById(key.slice(2)) && ipById(key.slice(2)).linked_user && gp.includes(ipById(key.slice(2)).linked_user) ? 'u:' + ipById(key.slice(2)).linked_user : key;
   const o = (v, n) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${esc(n)}</option>`;
   const sel = `<option value="" ${cur ? '' : 'selected'} disabled>Person auswählen</option>`
-    + (gp.length ? `<optgroup label="Aus deinen Gruppen">${gp.map(u => o('u:' + u, nameOf(u))).join('')}</optgroup>` : '')
+    + (gp.length ? `<optgroup label="${friendIds().length ? 'Gruppen und Freunde' : 'Aus deinen Gruppen'}">${gp.map(u => o('u:' + u, nameOf(u))).join('')}</optgroup>` : '')
     + (own.length ? `<optgroup label="Ohne App">${own.map(p => o('p:' + p.id, ipName(p))).join('')}</optgroup>` : '')
     + `<option value="new" ${cur === 'new' ? 'selected' : ''}>Neue Person …</option>`;
   const cats = '<option value="">Keine</option>' + CATS.map(([k, n]) => `<option value="${k}" ${i.category === k ? 'selected' : ''}>${esc(n)}</option>`).join('');
@@ -1391,7 +1572,7 @@ function personIdeas(gid, uid) {
   if (!D.ideasOk) return '';
   const p = ipFor(uid);
   const list = p ? ideasFor(p.id).slice().sort(byDone) : [];
-  const ret = `g/${gid}/p/${uid}`;
+  const ret = gid ? `g/${gid}/p/${uid}` : `p/${uid}`;
   const key = p ? 'p:' + p.id : 'u:' + uid;
   return `<div class="sechead"><h2>Deine Ideen</h2><a class="link" href="#/f/u:${uid}?r=${ret}">Alles zu ${esc(nameOf(uid))}</a></div>
     ${list.length ? `<ul class="rows plain">${list.map(i => ideaRow(i, ret)).join('')}</ul>` : ''}
@@ -1465,8 +1646,8 @@ function poolPreview(p, a) {
 function poolBack(w) {
   const r = backParam();
   if (r) return [r, 'Zurück'];
-  const g = groupFor(w);
-  return g ? ['#/g/' + g + '/p/' + w.owner, nameOf(w.owner)] : ['#/', 'Start'];
+  const h = wishHref(w);
+  return h !== '#/' ? [h, nameOf(w.owner)] : ['#/', 'Start'];
 }
 const poolRet = () => (backParam() ? '?r=' + backParam().slice(2) : '');
 
@@ -1607,11 +1788,23 @@ function viewPool(wid) {
     { tab: 'groups', back: poolBack(w) });
 }
 
-// Leute, die den Wunsch sehen (aus meinen Gruppen), ohne die beschenkte Person und mich
+// Leute, die den Wunsch sehen (aus meinen Gruppen), ohne die beschenkte Person und mich.
+// Seit 1.14 zusätzlich alle, die ich kenne und die ihn als Freund der Person sehen (fragt die Datenbank, einmal pro Seite).
 function poolCandidates(w) {
   const out = [];
   myGroups().filter(g => visibleIn(w, g.id) && membersOf(g.id).some(m => m.user_id === w.owner))
     .forEach(g => membersOf(g.id).forEach(m => { if (m.user_id !== w.owner && m.user_id !== me() && !out.includes(m.user_id)) out.push(m.user_id); }));
+  if (D.friendsOk) {
+    ui.pc = ui.pc || {};
+    if (ui.pc[w.id] === undefined) {
+      ui.pc[w.id] = null;
+      const h = location.hash;
+      sb('/rest/v1/rpc/pool_candidates', { method: 'POST', body: { p_wish: w.id } })
+        .then(r => { (ui.pc = ui.pc || {})[w.id] = r || []; if (location.hash === h && (r || []).some(u => !out.includes(u))) render(); })
+        .catch(() => { (ui.pc = ui.pc || {})[w.id] = []; });
+    }
+    (ui.pc[w.id] || []).forEach(u => { if (u !== w.owner && u !== me() && !out.includes(u)) out.push(u); });
+  }
   return out.sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'de'));
 }
 
@@ -1650,7 +1843,7 @@ function viewPoolForm(wid, mode) {
       <div class="card options">
         <label class="check"><input type="radio" name="who" value="all" ${x.open ? 'checked' : ''}><span>Alle, die die Liste sehen<small>Jeder kann mitmachen, ${esc(owner)} ausgenommen</small></span></label>
         <label class="check"><input type="radio" name="who" value="some" ${x.open ? '' : 'checked'}><span>Nur bestimmte Leute</span></label>
-        <div class="sub ${x.open ? 'hide' : ''}" id="ppick">${boxes || '<p class="muted">In deinen Gruppen sieht sonst niemand diesen Wunsch.</p>'}</div>
+        <div class="sub ${x.open ? 'hide' : ''}" id="ppick">${boxes || '<p class="muted">Von deinen Leuten sieht sonst niemand diesen Wunsch.</p>'}</div>
       </div>
       <h2>Wenn zu wenige mitmachen</h2>
       <div class="card fields">
@@ -1722,18 +1915,30 @@ function poolHome() {
 
 function viewWishForm(id) {
   const pre = id === 'neu' ? sharedPrefill() : null;
-  const w = id === 'neu' ? { title: pre ? pre.title : '', url: pre ? pre.url : '', note: '', all_groups: true, priority: 2 } : D.wishes.find(x => x.id === id && x.owner === me());
+  const w = id === 'neu' ? { title: pre ? pre.title : '', url: pre ? pre.url : '', note: '', all_groups: true, all_friends: true, priority: 2 } : D.wishes.find(x => x.id === id && x.owner === me());
   if (!w) return shell('Wunsch', emptyState('gift', 'Nicht gefunden', 'Diesen Wunsch gibt es nicht mehr.'), { tab: 'list', back: ['#/liste', 'Wunschliste'] });
   const gs = myGroups();
   const sel = id === 'neu' ? [] : groupIdsOf(id);
   const boxes = gs.map(g => `<label class="check"><input type="checkbox" name="g" value="${g.id}" ${sel.includes(g.id) ? 'checked' : ''}><span>${esc(g.name)}</span></label>`).join('');
-  const vis = gs.length ? `
-    <h2>Sichtbar für</h2>
+  // Freunde (1.14): alle direkten Freunde oder nur ausgewählte
+  const fids = D.friendsOk ? friendIds().slice().sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'de')) : [];
+  const allF = w.all_friends !== false;
+  const fsel = id === 'neu' ? [] : wishFriendIds(id);
+  const fboxes = fids.map(u => `<label class="check"><input type="checkbox" name="fr" value="${u}" ${fsel.includes(u) ? 'checked' : ''}><span>${esc(nameOf(u))}</span></label>`).join('');
+  const gCard = gs.length ? `
     <div class="card options">
       <label class="check"><input type="radio" name="vis" value="all" ${w.all_groups ? 'checked' : ''}><span>Alle meine Gruppen</span></label>
       <label class="check"><input type="radio" name="vis" value="some" ${w.all_groups ? '' : 'checked'}><span>Nur ausgewählte Gruppen</span></label>
       <div class="sub ${w.all_groups ? 'hide' : ''}" id="gsel">${boxes}</div>
-    </div>` : `<p class="foot">${icon('people')}<span>Sichtbar für alle Gruppen, denen du später beitrittst.</span></p>`;
+    </div>` : '';
+  const fCard = fids.length ? `
+    <div class="card options" id="fvis">
+      <label class="check"><input type="radio" name="fvis" value="all" ${allF ? 'checked' : ''}><span>Alle meine Freunde</span></label>
+      <label class="check"><input type="radio" name="fvis" value="some" ${allF ? '' : 'checked'}><span>Nur ausgewählte Freunde<small>Ohne Auswahl sieht ihn kein direkter Freund</small></span></label>
+      <div class="sub ${allF ? 'hide' : ''}" id="fsel">${fboxes}</div>
+    </div>` : '';
+  const vis = gs.length || fids.length ? `<h2>Sichtbar für</h2>${gCard}${fCard}`
+    : `<p class="foot">${icon('people')}<span>Sichtbar für alle Gruppen und Freunde, die später dazukommen.</span></p>`;
   const cats = '<option value="">Keine</option>' + CATS.map(([k, n]) => `<option value="${k}" ${w.category === k ? 'selected' : ''}>${esc(n)}</option>`).join('');
   const prios = PRIOS.map(([v, n]) => `<label><input type="radio" name="prio" value="${v}" ${prio(w) === v ? 'checked' : ''}><span>${n}</span></label>`).join('');
   const have = id === 'neu' ? '' : (w.have_at
@@ -1831,10 +2036,13 @@ function viewGroup(gid) {
     </div>`, { tab: 'groups', back: ['#/gruppen', 'Gruppen'], sub: `${plural(ms.length, 'Mitglied', 'Mitglieder')}` });
 }
 
+/* Liste einer Person: in einer Gruppe (#/g/<gid>/p/<uid>) oder ohne Gruppe (#/p/<uid>, seit 1.14):
+   dann alle Wünsche, die ich von ihr sehe (über Gruppen oder als Freund). */
 function viewPerson(gid, uid) {
-  const g = myGroups().find(x => x.id === gid);
-  if (!g || !membersOf(gid).some(m => m.user_id === uid) || uid === me()) {
-    return shell('Liste', emptyState('gift', 'Nicht verfügbar', 'Diese Liste kannst du nicht sehen.'), { tab: 'groups', back: ['#/g/' + gid, 'Gruppe'] });
+  const g = gid ? myGroups().find(x => x.id === gid) : null;
+  const ok = gid ? g && membersOf(gid).some(m => m.user_id === uid) : known(uid);
+  if (!ok || uid === me()) {
+    return shell('Liste', emptyState('gift', 'Nicht verfügbar', 'Diese Liste kannst du nicht sehen.'), { tab: 'groups', back: gid ? ['#/g/' + gid, 'Gruppe'] : ['#/freunde', 'Freunde'] });
   }
   const name = nameOf(uid);
   const all = wishesOf(uid, gid);
@@ -1842,9 +2050,9 @@ function viewPerson(gid, uid) {
   const had = all.filter(w => w.have_at);
   const taken = ws.filter(w => resOf(w.id)).length;
   // Beim Ansehen der Liste gilt alles darauf als gesehen; die Markierung bleibt, bis du die Seite verlässt
-  if (isNewMember(gid, uid)) markSeen('m', mkey(gid, uid));
+  if (gid && isNewMember(gid, uid)) markSeen('m', mkey(gid, uid));
   ws.filter(isNewWish).forEach(w => markSeen('w', w.id));
-  const ret = `?r=g/${gid}/p/${uid}`;
+  const ret = gid ? `?r=g/${gid}/p/${uid}` : `?r=p/${uid}`;
   const card = w => {
     const r = resOf(w.id);
     const pool = r ? poolOf(w.id) : null;
@@ -1906,8 +2114,9 @@ function viewPerson(gid, uid) {
       <p class="row-meta">${ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${ws.length - taken} noch frei` : 'Noch keine Wünsche'}</p>
       ${ws.length ? `<progress max="${ws.length}" value="${taken}"></progress>` : ''}</div></section>
     <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert oder gekauft ist.</span></p>${cardHint(gid, uid)}`;
-  const body = ws.length || had.length ? filterBar + list + hadHtml : emptyState('gift', 'Noch leer', `${esc(name)} hat für diese Gruppe noch nichts eingetragen.`);
-  return shell(name, head + body + personIdeas(gid, uid), { tab: 'groups', back: ['#/g/' + gid, g.name] });
+  const body = ws.length || had.length ? filterBar + list + hadHtml : emptyState('gift', 'Noch leer', `${esc(name)} hat ${gid ? 'für diese Gruppe ' : ''}noch nichts eingetragen.`);
+  const back = gid ? ['#/g/' + gid, g.name] : (backParam() ? [backParam(), 'Zurück'] : ['#/f/u:' + uid, name]);
+  return shell(name, head + body + personIdeas(gid, uid), { tab: 'groups', back, eyebrow: gid ? '' : 'Wunschliste' });
 }
 
 function viewWichteln(gid) {
@@ -2070,10 +2279,10 @@ function sbNames(r) {
 }
 function sbVisText(item) {
   const r = sbRule(item);
-  if (!r) return item === 'all' ? 'Alle aus deinen Gruppen' : 'Wie der Rest';
+  if (!r) return item === 'all' ? 'Alle aus deinen Gruppen und Freunde' : 'Wie der Rest';
   const n = sbNames(r);
   if (r.mode === 'only') return n ? 'Nur ' + n : 'Niemand';
-  return n ? 'Alle außer ' + n : (item === 'all' ? 'Alle aus deinen Gruppen' : 'Wie der Rest');
+  return n ? 'Alle außer ' + n : (item === 'all' ? 'Alle aus deinen Gruppen und Freunde' : 'Wie der Rest');
 }
 const sbVisLink = (item, ret) => `<a class="vislink ${sbRule(item) ? 'on' : ''}" href="#/steckbrief/sicht/${item}?r=${ret}">${icon(sbRule(item) ? 'eyeoff' : 'eye')}<span>${esc(sbVisText(item))}</span></a>`;
 
@@ -2166,7 +2375,7 @@ function viewCardHome() {
         <p class="quizq">Damit die anderen wissen, was passt</p>
         <p class="small">${n} kurze Fragen, fast alle mit einem Tipp beantwortet. Alles lässt sich überspringen und später ändern.</p></section>
       <a class="primary" href="#/steckbrief/quiz/0">Los geht’s</a>
-      <p class="foot">${icon('eye')}<span>Sichtbar für alle aus deinen Gruppen. Einzelne Teile kannst du später verbergen.</span></p>`,
+      <p class="foot">${icon('eye')}<span>Sichtbar für alle aus deinen Gruppen und deine Freunde. Einzelne Teile kannst du später verbergen.</span></p>`,
     { tab: 'acc', back: ['#/konto', 'Konto'] });
   }
   const stamps = (D.card && D.card.stamps) || {};
@@ -2216,7 +2425,7 @@ function viewCardVis(item) {
   const ret = backParam() || '#/steckbrief';
   const r = sbRule(item);
   const mode = r ? r.mode : 'all';
-  const gs = myGroups(), ps = groupPeople().slice().sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'de'));
+  const gs = myGroups(), ps = knownPeople();
   const box = (name, val, label, on, meta = '') => `<label class="check"><input type="checkbox" name="${name}" value="${val}" ${on ? 'checked' : ''}><span>${esc(label)}${meta ? `<small>${esc(meta)}</small>` : ''}</span></label>`;
   const opts = [['all', 'Alle'], ['except', 'Alle außer'], ['only', 'Nur']].map(([k, l]) =>
     `<label><input type="radio" name="vmode" value="${k}" ${mode === k ? 'checked' : ''}><span>${l}</span></label>`).join('');
@@ -2224,7 +2433,7 @@ function viewCardVis(item) {
   const body = `<form data-form="sbvis" data-item="${item}" data-ret="${esc(ret)}" class="stack">
       <div class="seg" role="radiogroup" aria-label="Wer sieht das">${opts}</div>
       <div id="vispick" class="${mode === 'all' ? 'hide' : ''}">
-        <p class="small muted" id="vishelp">${mode === 'only' ? 'Nur wen du hier auswählst, sieht es.' : 'Wer in einer anderen deiner Gruppen ist, sieht es trotzdem. Einzelne Personen kannst du direkt auswählen.'}</p>
+        <p class="small muted" id="vishelp">${mode === 'only' ? 'Nur wen du hier auswählst, sieht es.' : 'Wer in einer anderen deiner Gruppen ist oder direkt mit dir befreundet, sieht es trotzdem. Einzelne Personen kannst du direkt auswählen.'}</p>
         ${gs.length ? `<h2>Gruppen</h2><div class="card options">${gs.map(g => box('g', g.id, g.name, r && r.groups.includes(g.id), plural(membersOf(g.id).length, 'Person', 'Personen'))).join('')}</div>` : ''}
         ${ps.length ? `<h2>Personen</h2><div class="card options">${ps.map(u => box('u', u, nameOf(u), r && r.users.includes(u))).join('')}</div>` : ''}
       </div>
@@ -2276,7 +2485,7 @@ function cardLink(listHint) {
 function cardHint(gid, uid) {
   const c = sbOf(uid);
   if (!c) return '';
-  return `<a class="banner tap sbhint" href="#/f/u:${uid}?r=g/${gid}/p/${uid}">${icon('idcard')}<span><b>Steckbrief</b><small>${esc(sbSummary(c))}</small></span>${icon('chev', 'chev')}</a>`;
+  return `<a class="banner tap sbhint" href="#/f/u:${uid}?r=${gid ? `g/${gid}/p/${uid}` : `p/${uid}`}">${icon('idcard')}<span><b>Steckbrief</b><small>${esc(sbSummary(c))}</small></span>${icon('chev', 'chev')}</a>`;
 }
 
 /* ---------- Früh dran (1.12) ----------
@@ -2362,9 +2571,10 @@ function viewAccount() {
     ${notifySection()}
     ${fold('privacy', 'lock', 't1', 'Datenschutz', 'Was gespeichert wird und wer was sieht', `    <div class="card prose">
       <p>Name, Benutzername, Gruppen, Wünsche und Reservierungen liegen in einer Datenbank bei Supabase in der EU. Passwort und Wiederherstellungscode werden nur verschlüsselt gespeichert.</p>
-      <p>Andere sehen deinen Namen und die Wünsche, die du für ihre Gruppe freigibst. Reservierungen sieht der Beschenkte nie.</p>
+      <p>Andere sehen deinen Namen und die Wünsche, die du für ihre Gruppe oder für sie als Freund freigibst. Reservierungen sieht der Beschenkte nie.</p>
       <p>Bei gemeinsamen Geschenken sehen nur die Gefragten und wer mitmacht, wer dabei ist, wie viel jeder gibt und wer bezahlt hat. Die beschenkte Person sieht nichts davon.</p>
-      <p>Deinen Steckbrief sehen alle aus deinen Gruppen. Unter Steckbrief kannst du ihn ganz oder teilweise für bestimmte Gruppen oder Personen verbergen.</p>
+      <p>Deinen Steckbrief sehen alle aus deinen Gruppen und deine Freunde. Unter Steckbrief kannst du ihn ganz oder teilweise für bestimmte Gruppen oder Personen verbergen.</p>
+      <p>Direkte Freunde sehen deinen Namen, die Wünsche, die du für Freunde freigibst, und deinen Steckbrief. Niemand kann nach dir suchen: Freund wird nur, wer deinen Freundes-Link hat oder deinen Benutzernamen kennt und du die Anfrage annimmst. Ob es einen Benutzernamen gibt, verrät die App nicht. Spitznamen siehst nur du.</p>
       <p>Für Benachrichtigungen wird eine Adresse des Push-Dienstes deines Geräts gespeichert (Apple, Google oder Mozilla). Die Nachrichten sind verschlüsselt.</p>
       <p>Auf dem Gerät bleiben nur die Anmeldung und eine Kopie der Listen, damit die App schnell startet.</p>
     </div>`)}
@@ -2405,6 +2615,12 @@ function route() {
 function render() {
   const app = $('#app');
   let parts = route();
+  if (parts[0] === 'freund' && parts[1] && !S.session) {
+    S.pendingFriend = parts[1];
+    saveState();
+    history.replaceState(null, '', location.pathname + '#/');
+    parts = [];
+  }
   if (parts[0] === 'join' && parts[1]) {
     S.pendingJoin = parts[1];
     saveState();
@@ -2423,6 +2639,8 @@ function render() {
   else if (parts[0] === 'ideen' && parts[1] === 'p' && parts[2]) html = viewFriend('p:' + parts[2]);
   else if (parts[0] === 'f' && parts[1]) html = viewFriend(parts[1]);
   else if (parts[0] === 'freunde') html = viewFriends();
+  else if (parts[0] === 'freund' && parts[1]) html = viewFriendCode(parts[1]);
+  else if (parts[0] === 'p' && parts[1]) html = viewPerson(null, parts[1]);
   else if (parts[0] === 'ideen') html = viewIdeas();
   else if (parts[0] === 'gruppen') html = viewGroups();
   else if (parts[0] === 'g' && parts[1] && parts[2] === 'p' && parts[3]) html = viewPerson(parts[1], parts[3]);
@@ -2441,6 +2659,17 @@ function render() {
   render.lastKey = location.hash;
 }
 
+// Freundes-Link vor der Anmeldung geöffnet: danach die Bestätigungsseite zeigen (1.14)
+function doPendingFriend() {
+  const code = S.pendingFriend;
+  if (!code || !S.session) return false;
+  if (D.loaded && !(D.profiles.find(x => x.id === me()) || {}).name) return false; // erst Namen setzen
+  delete S.pendingFriend;
+  saveState();
+  go('#/freund/' + code);
+  return true;
+}
+
 async function doPendingJoin() {
   const code = S.pendingJoin;
   if (!code || !S.session) return;
@@ -2451,7 +2680,7 @@ async function doPendingJoin() {
     const gid = await sb('/rest/v1/rpc/join_group', { method: 'POST', body: { p_code: code } });
     await sync(true);
     toast('Du bist der Gruppe beigetreten.');
-    go('#/g/' + gid);
+    if (!doPendingFriend()) go('#/g/' + gid);
   } catch (e) {
     toast(e.message);
     render();
@@ -2599,7 +2828,7 @@ const forms = {
     const reason = fresh.reason;
     fresh = null;
     toast(reason === 'secured' ? 'Konto gesichert.' : 'Neuer Code gespeichert.');
-    if (S.pendingJoin) await doPendingJoin(); else render();
+    if (S.pendingJoin) await doPendingJoin(); else if (!doPendingFriend()) render();
   },
   async adminsearch(f) {
     ui.adminQuery = f.q.value.trim();
@@ -2614,6 +2843,7 @@ const forms = {
     await sb('/rest/v1/profiles?on_conflict=id', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: { id: me(), name } });
     await sync(true);
     if (S.pendingJoin) { await doPendingJoin(); return; }
+    if (doPendingFriend()) return;
     toast('Gespeichert.');
     render();
   },
@@ -2633,6 +2863,11 @@ const forms = {
     const sel = [...f.querySelectorAll('input[name=g]:checked')].map(x => x.value);
     if (!all && !sel.length) throw new Error('Wähle mindestens eine Gruppe aus.');
     const row = { title, url, note, all_groups: all, price, category, priority };
+    // Freunde (1.14): nur wenn die Auswahl angezeigt wurde
+    const fv = f.querySelector('input[name=fvis]:checked');
+    const allF = !fv || fv.value === 'all';
+    const fsel = allF ? [] : [...f.querySelectorAll('input[name=fr]:checked')].map(x => x.value);
+    if (fv) row.all_friends = allF;
     let wid = id;
     if (id === 'neu') {
       const r = await sb('/rest/v1/wishes', { method: 'POST', prefer: 'return=representation', body: row });
@@ -2640,8 +2875,10 @@ const forms = {
     } else {
       await sb('/rest/v1/wishes?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: row });
       await sb('/rest/v1/wish_groups?wish_id=eq.' + id, { method: 'DELETE' });
+      if (fv) await sb('/rest/v1/wish_friends?wish_id=eq.' + id, { method: 'DELETE' });
     }
     if (!all) await sb('/rest/v1/wish_groups', { method: 'POST', prefer: 'return=minimal', body: sel.map(g => ({ wish_id: wid, group_id: g })) });
+    if (fsel.length) await sb('/rest/v1/wish_friends', { method: 'POST', prefer: 'return=minimal', body: fsel.map(u => ({ wish_id: wid, user_id: u })) });
     if (id === 'neu' && S.share) { delete S.share; saveState(); }
     await sync(true);
     toast('Gespeichert.');
@@ -2663,7 +2900,7 @@ const forms = {
     } else if (v.startsWith('u:')) {
       const uid = v.slice(2);
       const p = ipFor(uid);
-      person = p ? p.id : (await sb('/rest/v1/idea_people', { method: 'POST', prefer: 'return=representation', body: { name: nameOf(uid).slice(0, 40), linked_user: uid } }))[0].id;
+      person = p ? p.id : (await sb('/rest/v1/idea_people', { method: 'POST', prefer: 'return=representation', body: { name: (realName(uid) || baseName(uid)).slice(0, 40), linked_user: uid } }))[0].id;
     } else if (v.startsWith('p:')) person = v.slice(2);
     else throw new Error('Wähle aus, für wen die Idee ist.');
     const row = { person, title, url, price, category: f.category.value || null, note: f.note.value.trim() || null };
@@ -2672,6 +2909,34 @@ const forms = {
     await sync(true);
     toast('Gespeichert. Nur du siehst diese Idee.');
     go(backParam() || '#/ideen');
+  },
+  // Freund hinzufügen (1.14): Freundes-Link oder -Code → Bestätigungsseite, sonst Anfrage per Benutzername
+  async friendadd(f) {
+    const q = f.q.value.trim();
+    const m = /#\/freund\/([A-Za-z0-9-]+)/.exec(q);
+    const raw = m ? m[1] : q;
+    const norm = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (m || (/^[A-Za-z0-9-\s]+$/.test(raw) && norm.length === 12 && /^[ABCDEFGHJKMNPQRSTUVWXYZ2-9]+$/.test(norm))) {
+      const x = await sb('/rest/v1/rpc/friend_peek', { method: 'POST', body: { p_code: norm } });
+      if (x) { ui.peek = Object.assign(ui.peek || {}, { [norm]: x }); f.q.value = ''; go('#/freund/' + norm); return; }
+      if (m) throw new Error('Diesen Freundes-Link gibt es nicht (mehr).');
+    }
+    const u = normUser(q);
+    checkUser(u);
+    const r = await sb('/rest/v1/rpc/friend_request', { method: 'POST', body: { p_username: u } });
+    f.q.value = '';
+    await sync(true);
+    toast(r === 'accepted' ? 'Ihr seid jetzt befreundet.' : (r === 'friends' ? 'Ihr seid schon befreundet.' : 'Anfrage verschickt. Sobald sie angenommen ist, seid ihr befreundet.'));
+  },
+  async nick(f) {
+    const uid = f.dataset.u, nick = f.nick.value.trim().slice(0, 40);
+    if (nick) {
+      await sb('/rest/v1/nicknames?on_conflict=owner,user_id', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: { owner: me(), user_id: uid, nick } });
+    } else {
+      await sb(`/rest/v1/nicknames?owner=eq.${me()}&user_id=eq.${uid}`, { method: 'DELETE' });
+    }
+    await sync(true);
+    toast(nick ? 'Spitzname gespeichert. Nur du siehst ihn.' : 'Spitzname entfernt.');
   },
   async newfriend(f) {
     const r = await sb('/rest/v1/idea_people', { method: 'POST', prefer: 'return=representation', body: { name: f.name.value.trim() } });
@@ -2716,6 +2981,56 @@ const forms = {
 
 const acts = {
   sync: () => sync(),
+  /* Direkte Freundschaft (1.14) */
+  friendshare: async () => {
+    if (!D.fcode) D.fcode = await sb('/rest/v1/rpc/friend_code', { method: 'POST', body: {} });
+    const link = friendLink(D.fcode);
+    const text = `Lass uns bei der Geschenkeliste befreundet sein, dann sehen wir gegenseitig unsere Wünsche. Freundes-Code: ${fmtFriendCode(D.fcode)}`;
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Geschenkeliste', text, url: link }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    try { await navigator.clipboard.writeText(text + '\n' + link); toast('Freundes-Link kopiert.'); } catch (e) { toast('Freundes-Code: ' + fmtFriendCode(D.fcode)); }
+  },
+  asknewcode: async () => { ui.confirmNewCode = 1; render(); },
+  friendnewcode: async () => {
+    D.fcode = await sb('/rest/v1/rpc/friend_code', { method: 'POST', body: { p_new: true } });
+    delete ui.confirmNewCode;
+    toast('Neuer Freundes-Link. Der alte gilt nicht mehr.');
+    render();
+  },
+  friendcode: async el => {
+    const uid = await sb('/rest/v1/rpc/friend_accept_code', { method: 'POST', body: { p_code: el.dataset.id } });
+    if (ui.peek) delete ui.peek[el.dataset.id];
+    await sync(true);
+    toast('Ihr seid jetzt befreundet.');
+    location.replace('#/f/u:' + uid);
+  },
+  freqyes: async el => {
+    await sb('/rest/v1/rpc/friend_answer', { method: 'POST', body: { p_id: el.dataset.id, p_accept: true } });
+    await sync(true);
+    toast('Ihr seid jetzt befreundet.');
+  },
+  freqno: async el => {
+    await sb('/rest/v1/rpc/friend_answer', { method: 'POST', body: { p_id: el.dataset.id, p_accept: false } });
+    await sync(true);
+    toast('Abgelehnt. Die andere Person erfährt das nicht.');
+  },
+  freqwithdraw: async el => {
+    await sb('/rest/v1/rpc/friend_withdraw', { method: 'POST', body: { p_id: el.dataset.id } });
+    await sync(true);
+  },
+  friendask: async el => {
+    const r = await sb('/rest/v1/rpc/friend_request_user', { method: 'POST', body: { p_user: el.dataset.id } });
+    await sync(true);
+    toast(r === 'accepted' ? 'Ihr seid jetzt befreundet.' : 'Anfrage verschickt.');
+  },
+  askunfriend: async el => { ui.confirmUnfriend = el.dataset.id; render(); },
+  unfriend: async el => {
+    await sb('/rest/v1/rpc/friend_remove', { method: 'POST', body: { p_user: el.dataset.id } });
+    delete ui.confirmUnfriend;
+    await sync(true);
+    toast('Freundschaft beendet.');
+  },
   theme: async el => { if (window.GLTheme) GLTheme.set(el.dataset.v); render(); },
   mode: async el => { if (window.GLTheme) GLTheme.setMode(el.dataset.v); render(); },
   badgelater: async () => { S.badgeAsked = 1; saveState(); render(); },
@@ -3051,7 +3366,7 @@ async function afterLogin() {
     } catch (e) { toast(e.message); }
   }
   if (S.pendingJoin) await doPendingJoin();
-  else render();
+  else if (!doPendingFriend()) render();
   pushInit();
 }
 
@@ -3083,7 +3398,7 @@ document.addEventListener('change', e => {
   if (e.target.name === 'vmode') {
     const box = $('#vispick'), help = $('#vishelp');
     if (box) box.classList.toggle('hide', e.target.value === 'all');
-    if (help) help.textContent = e.target.value === 'only' ? 'Nur wen du hier auswählst, sieht es.' : 'Wer in einer anderen deiner Gruppen ist, sieht es trotzdem. Einzelne Personen kannst du direkt auswählen.';
+    if (help) help.textContent = e.target.value === 'only' ? 'Nur wen du hier auswählst, sieht es.' : 'Wer in einer anderen deiner Gruppen ist oder direkt mit dir befreundet, sieht es trotzdem. Einzelne Personen kannst du direkt auswählen.';
   }
   if (e.target.name === 'split' && e.target.form) {
     const v = e.target.value, f = e.target.form;
@@ -3099,6 +3414,10 @@ document.addEventListener('change', e => {
   }
   if (e.target.name === 'vis') {
     const sub = $('#gsel');
+    if (sub) sub.classList.toggle('hide', e.target.value === 'all');
+  }
+  if (e.target.name === 'fvis') {
+    const sub = $('#fsel');
     if (sub) sub.classList.toggle('hide', e.target.value === 'all');
   }
 });

@@ -1037,5 +1037,204 @@ _, out, _ = run('select count(*) from public.push_subs')
 check('Neue Schlüssel: Löschen aller Geräte klappt (DELETE mit WHERE)', ok and ok2 and out == '0')
 
 
+# ---------- Direkte Freundschaft (1.14) ----------
+AD, BO, CE, DI, EM = (str(uuid.uuid4()) for _ in range(5))
+run('truncate public.push_outbox, net.calls;')
+for u, n in ((AD, 'Ada'), (BO, 'Bo'), (CE, 'Cem'), (DI, 'Dina'), (EM, 'Emil')):
+    run(f"insert into auth.users (id, email) values ('{u}', '{n.lower()}.fr@x.de');")
+    run(f"insert into public.accounts (user_id, username) values ('{u}', '{n.lower()}');")
+    as_exec(u, f"insert into public.profiles (id, name) values ('{u}', '{n}')")
+    rpc(u, f"public.push_subscribe('{ep('fr-' + n)}', '{P256}', '{AUTH}')")
+
+
+def names(u):
+    ok, r = as_user(u, 'select id from public.profiles')
+    return {x['id'] for x in r} if ok else r
+
+
+def msg(u, tag, kind, delta=1):
+    _, out, err = run(f"select public.push_message('{u}', '{tag}', '{kind}', {delta})")
+    return json.loads(out) if out else None
+
+
+def reqs(u):
+    ok, r = rpc(u, 'public.friend_requests_list()')
+    return r if ok else {'in': [], 'out': [], 'err': r}
+
+
+ok, code = rpc(AD, 'public.friend_code()')
+check('Freunde: Code mit 12 Zeichen', ok and len(code) == 12)
+ok, code2 = rpc(AD, 'public.friend_code()')
+check('Freunde: Code bleibt gleich', code2 == code)
+ok, r = as_user(BO, 'select code from public.friend_codes')
+check('Freunde: fremden Code nicht lesbar', ok and r == [])
+ok, r = rpc(BO, f"public.friend_peek('{code.lower()[:6]}-{code.lower()[6:]}')")
+check('Freunde: Link zeigt Namen', ok and r['name'] == 'Ada' and r['user'] == AD and not r['self'] and not r['friends'])
+ok, r = rpc(BO, "public.friend_peek('XXXXYYYYZZZZ')")
+check('Freunde: falscher Code = nichts', ok and r is None)
+ok, r = rpc(None, f"public.friend_peek('{code}')", role='anon')
+check('Freunde: ohne Anmeldung kein Blick', not ok)
+ok, r = rpc(AD, f"public.friend_accept_code('{code}')")
+check('Freunde: eigener Link geht nicht', not ok)
+check('Freunde: vorher sieht Bo Ada nicht', AD not in names(BO))
+ok, r = rpc(BO, f"public.friend_accept_code('{code}')")
+check('Freunde: Bo nimmt Link an', ok and r == AD)
+ok, r = as_user(AD, 'select a, b from public.friendships')
+check('Freunde: Ada sieht die Freundschaft', ok and len(r) == 1)
+ok, r = as_user(CE, 'select a from public.friendships')
+check('Freunde: Cem sieht sie nicht', ok and r == [])
+ok, _ = as_exec(CE, f"insert into public.friendships (a, b) values ('{min(CE, AD)}', '{max(CE, AD)}')")
+check('Freunde: direkt eintragen verboten', not ok)
+check('Freunde: Namen gegenseitig sichtbar', AD in names(BO) and BO in names(AD) and AD not in names(CE))
+check('Freunde: Ada bekommt „befreundet“', len(outbox(f"kind = 'friend' and user_id = '{AD}' and ref = 'ok:{BO}'")) == 1)
+ok, r = rpc(BO, f"public.friend_peek('{code}')")
+check('Freunde: Link zeigt „schon befreundet“', ok and r['friends'])
+
+ok, r = as_user(AD, "insert into public.wishes (title) values ('Teekanne') returning id")
+fw1 = r[0]['id']
+ok, r = as_user(AD, "insert into public.wishes (title, all_friends) values ('Nur für Bo', false) returning id")
+fw2 = r[0]['id']
+check('Freunde: neuer Wunsch für alle Freunde', fw1 in seen(BO) and fw1 not in seen(CE))
+check('Freunde: eingeschränkter Wunsch erst nach Freigabe unsichtbar', fw2 not in seen(BO))
+ok, _ = as_exec(AD, f"insert into public.wish_friends values ('{fw2}', '{BO}')")
+check('Freunde: Freigabe für einzelnen Freund', ok and fw2 in seen(BO))
+ok, _ = as_exec(AD, f"insert into public.wish_friends values ('{fw2}', '{CE}')")
+check('Freunde: Freigabe für Nicht-Freund verboten', not ok)
+ok, _ = as_exec(BO, f"insert into public.wish_friends values ('{fw1}', '{BO}')")
+check('Freunde: fremde Wünsche freigeben verboten', not ok)
+ok, r = as_user(BO, 'select wish_id from public.wish_friends')
+check('Freunde: Bo sieht nur seine Freigabe', ok and r == [{'wish_id': fw2}])
+ok, _ = as_exec(BO, f"insert into public.reservations (wish_id) values ('{fw1}')")
+check('Freunde: Bo reserviert ohne Gruppe', ok)
+ok, r = as_user(AD, 'select wish_id from public.reservations')
+check('Freunde: Ada sieht die Reservierung nicht', ok and r == [])
+check('Freunde: Ada bekommt keine Wunsch-Nachricht für eigene', not outbox(f"kind = 'wish' and user_id = '{AD}'"))
+o = outbox(f"kind = 'wish' and user_id = '{BO}'")
+check('Freunde: Bo bekommt Nachrichten zu beiden Wünschen ohne Gruppe', {x['wish_id'] for x in o} == {fw1, fw2} and all(x['group_id'] is None for x in o))
+run(f"update public.push_outbox set sent_at = now() where user_id = '{BO}' and kind = 'wish'")
+m = msg(BO, f'wish-{AD}', 'wish', 2) or {}
+check('Freunde: Text und Link zur Liste der Person', m.get('title') == 'Ada hat 2 neue Wünsche' and m['url'] == f'#/p/{AD}')
+
+# Anfrage per Benutzername
+ok, r = rpc(CE, "public.friend_request('@Ada')")
+check('Anfrage: per Benutzername', ok and r == 'sent')
+ok, r = rpc(CE, "public.friend_request('gibtsnicht')")
+check('Anfrage: unbekannter Name sieht genauso aus', ok and r == 'sent')
+ok, r = rpc(CE, "public.friend_request('cem')")
+check('Anfrage: an sich selbst nicht', not ok)
+ok, r = rpc(CE, "public.friend_request('a b')")
+check('Anfrage: ungültiger Name abgelehnt', not ok)
+ok, r = rpc(CE, "public.friend_request('ada')")
+check('Anfrage: doppelt bleibt eine', ok and r == 'sent' and len(reqs(CE)['out']) == 2)
+out_ = reqs(CE)['out']
+check('Anfrage: Absender sieht nicht, ob es den Namen gibt', all(x['user'] is None for x in out_) and {x['name'] for x in out_} == {'ada', 'gibtsnicht'})
+inc = reqs(AD)['in']
+check('Anfrage: Ada sieht sie mit Absender', len(inc) == 1 and inc[0]['user'] == CE)
+check('Anfrage: Ada sieht Cems Namen, Cem Adas nicht', CE in names(AD) and AD not in names(CE))
+ok, _ = as_user(CE, 'select * from public.friend_requests')
+check('Anfrage: Tabelle nicht direkt lesbar', not ok)
+check('Anfrage: Nachricht an Ada', len(outbox(f"kind = 'friend' and user_id = '{AD}' and tag = 'friend-req'")) == 1)
+run(f"update public.push_outbox set sent_at = now() where user_id = '{AD}' and kind = 'friend'")
+m = msg(AD, 'friend-req', 'friend') or {}
+check('Anfrage: Text', m.get('body') == 'Cem möchte mit dir befreundet sein.' and m.get('url') == '#/freunde')
+ok, _ = rpc(BO, f"public.friend_answer('{inc[0]['id']}', true)")
+check('Anfrage: nur die gefragte Person antwortet', not ok)
+ok, _ = rpc(AD, f"public.friend_answer('{inc[0]['id']}', false)")
+check('Anfrage: Ada lehnt ab', ok and reqs(AD)['in'] == [])
+check('Anfrage: Cem sieht weiter „wartet“', len(reqs(CE)['out']) == 2)
+check('Anfrage: nach Ablehnen kein Name mehr', CE not in names(AD))
+check('Anfrage: abgelehnte Anfrage ohne Nachricht', msg(AD, 'friend-req', 'friend') is None)
+ok, r = rpc(CE, "public.friend_request('ada')")
+check('Anfrage: erneut fragen ändert nichts', ok and r == 'sent' and reqs(AD)['in'] == [])
+gid_ = [x['id'] for x in reqs(CE)['out'] if x['name'] == 'gibtsnicht'][0]
+ok, _ = rpc(AD, f"public.friend_withdraw('{gid_}')")
+ok, _ = rpc(CE, f"public.friend_withdraw('{gid_}')")
+check('Anfrage: zurückziehen', len(reqs(CE)['out']) == 1)
+
+# Gegenanfrage = sofort befreundet; Annehmen
+rpc(DI, "public.friend_request('ada')")
+ok, r = rpc(AD, "public.friend_request('dina')")
+check('Anfrage: Gegenanfrage macht sofort befreundet', ok and r == 'accepted' and DI in names(AD) and reqs(DI)['out'] == [])
+check('Anfrage: Dina bekommt „befreundet“', len(outbox(f"kind = 'friend' and user_id = '{DI}' and tag = 'friend-ok-{AD}'")) == 1)
+ok, r = rpc(EM, "public.friend_request('ada')")
+inc = reqs(AD)['in']
+ok, _ = rpc(AD, f"public.friend_answer('{inc[0]['id']}', true)")
+check('Anfrage: Ada nimmt Emil an', ok and EM in names(AD) and fw1 in seen(EM) and reqs(EM)['out'] == [])
+run(f"update public.push_outbox set sent_at = now() where user_id = '{EM}' and kind = 'friend'")
+m = msg(EM, f'friend-ok-{AD}', 'friend') or {}
+check('Anfrage: Text „Neu befreundet“', m.get('title') == 'Neu befreundet: Ada' and m.get('url') == f'#/f/u:{AD}')
+ok, r = rpc(AD, "public.friend_request('emil')")
+check('Anfrage: schon befreundet', ok and r == 'friends')
+ok, r = rpc(BO, f"public.friend_request_user('{DI}')")
+check('Anfrage per Person nur an Bekannte', not ok)
+
+# Gemeinsam schenken über Freunde: Bo und Dina kennen sich nicht
+ok, _ = rpc(BO, f"public.friend_answer('{uuid.uuid4()}', true)")
+as_exec(BO, f"delete from public.reservations where wish_id = '{fw1}'")
+ok, _ = start(BO, fw1)
+check('Freunde: Bo startet gemeinsames Geschenk', ok)
+check('Freunde: Dina sieht es (Freundin von Ada)', fw1 in pools(DI) and fw1 not in pools(CE))
+ok, _ = rpc(DI, f"public.pool_join('{fw1}', null)")
+check('Freunde: Dina macht mit', ok)
+check('Freunde: Bo und Dina sehen sich über das Geschenk', DI in names(BO) and BO in names(DI))
+check('Freunde: Ada sieht davon nichts', fw1 not in pools(AD))
+ok, r = rpc(BO, f"public.friend_request_user('{DI}')")
+check('Anfrage: an Mitschenkende geht', ok and r == 'sent')
+ok, r = rpc(DI, f"public.pool_candidates('{fw1}')")
+check('Freunde: Kandidaten nur Bekannte (Dina kennt Bo jetzt über die Anfrage nicht)', ok and r == [])
+ok, r = rpc(CE, f"public.pool_candidates('{fw1}')")
+check('Freunde: Kandidaten nur für wer den Wunsch sieht', ok and r == [])
+rpc(DI, "public.friend_request('emil')")
+rpc(EM, f"public.friend_answer('{reqs(EM)['in'][0]['id']}', true)")
+ok, r = rpc(DI, f"public.pool_candidates('{fw1}')")
+check('Freunde: Kandidaten: Emil (Freund von Ada und Dina)', ok and r == [EM])
+
+# Steckbrief
+put(AD, 'sizes.shoe', '38')
+check('Freunde: Steckbrief für Freunde sichtbar', (card_of(BO, AD) or {}).get('d', {}).get('sizes.shoe') == '38' and card_of(CE, AD) is None)
+as_exec(AD, f"insert into public.profile_card_vis (item, mode, users, groups) values ('all', 'except', '{{{BO}}}', '{{}}')")
+check('Freunde: Steckbrief „alle außer Bo“', card_of(BO, AD) is None and card_of(DI, AD) is not None)
+as_exec(AD, "delete from public.profile_card_vis")
+
+# Spitznamen
+ok, _ = as_exec(AD, f"insert into public.nicknames (user_id, nick) values ('{BO}', ' Bobo ')")
+check('Spitzname: für Freund', ok)
+ok, _ = as_exec(AD, f"insert into public.nicknames (user_id, nick) values ('{CE}', 'X')")
+check('Spitzname: für Unbekannte nicht', not ok)
+ok, r = as_user(BO, 'select nick from public.nicknames')
+check('Spitzname: nur für mich', ok and r == [])
+ok, r = as_user(AD, 'select nick from public.nicknames')
+check('Spitzname: getrimmt gespeichert', ok and r == [{'nick': 'Bobo'}])
+_, out, _ = run(f"select public.push_name('{BO}', '{AD}') || '/' || public.push_name('{BO}', '{DI}')")
+check('Spitzname: in Nachrichten an mich', out == 'Bobo/Bo')
+ok, _ = as_exec(AD, f"update public.nicknames set user_id = '{DI}' where user_id = '{BO}'")
+check('Spitzname: Person nicht umhängbar', not ok)
+
+# Ideen mit Freund verknüpfen
+ok, _ = as_exec(AD, f"insert into public.idea_people (name, linked_user) values ('Bo', '{BO}')")
+check('Freunde: Idee für Freund verknüpfbar', ok)
+
+# Neuer Wunsch von Dina: Nachricht an Ada ohne Gruppe
+run('truncate public.push_outbox;')
+as_user(DI, "insert into public.wishes (title) values ('Schal') returning id")
+check('Freunde: neuer Wunsch an Freundin', len(outbox(f"kind = 'wish' and user_id = '{AD}' and group_id is null")) == 1)
+run('truncate public.push_outbox;')
+run("select public.push_daily(make_date(extract(year from now())::int, 12, 17))")
+check('Freunde: Erinnerung erreicht Leute nur mit Freunden', len(outbox(f"kind = 'remind' and user_id = '{EM}'")) == 1)
+
+# Beenden
+ok, _ = rpc(AD, f"public.friend_remove('{BO}')")
+check('Beenden: Ada beendet Freundschaft mit Bo', ok)
+check('Beenden: Bo sieht Adas Wünsche nicht mehr', fw1 not in seen(BO) and fw2 not in seen(BO))
+_, out, _ = run(f"select count(*) from public.wish_friends where user_id = '{BO}'")
+check('Beenden: Einzel-Freigaben weg', out == '0')
+ok, r = rpc(BO, f"public.friend_accept_code('{code}')")
+ok, nc = rpc(AD, 'public.friend_code(true)')
+check('Neuer Link: anderer Code', ok and nc != code)
+ok, r = rpc(CE, f"public.friend_accept_code('{code}')")
+check('Neuer Link: alter gilt nicht mehr', not ok)
+ok, r = rpc(CE, f"public.friend_peek('{code}')")
+check('Neuer Link: alter zeigt nichts', ok and r is None)
+
 print('\nAlle Tests grün' if not fails else f'\n{fails} Fehler')
 sys.exit(1 if fails else 0)

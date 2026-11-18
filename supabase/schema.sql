@@ -1,4 +1,4 @@
--- Geschenkeliste – Datenbank, Stand Version 1.13.1 (Konto löschen)
+-- Geschenkeliste – Datenbank, Stand Version 1.14 (Direkte Freundschaft)
 -- Im Supabase SQL Editor komplett einfügen und „Run“ drücken.
 -- Das Skript darf mehrfach ausgeführt werden (bestehende Daten bleiben erhalten).
 
@@ -64,6 +64,27 @@ create table if not exists public.reservations (
   created_at timestamptz not null default now()
 );
 
+-- Seit 1.14: direkte Freundschaft (ohne gemeinsame Gruppe). Eine Zeile pro Paar, a < b.
+-- Anlegen und Beenden nur über die Funktionen im Block „Direkte Freundschaft“ am Ende.
+create table if not exists public.friendships (
+  a uuid not null references auth.users(id) on delete cascade,
+  b uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (a, b),
+  check (a < b)
+);
+create index if not exists friendships_b_idx on public.friendships(b);
+
+-- Seit 1.14: Wünsche für Freunde. all_friends = für alle direkten Freunde sichtbar,
+-- sonst nur für die in wish_friends eingetragenen.
+alter table public.wishes add column if not exists all_friends boolean not null default true;
+create table if not exists public.wish_friends (
+  wish_id uuid not null references public.wishes(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  primary key (wish_id, user_id)
+);
+create index if not exists wish_friends_user_idx on public.wish_friends(user_id);
+
 -- ---------- Hilfsfunktionen (umgehen die Regeln nur zum Prüfen) ----------
 
 create or replace function public.is_member(g uuid) returns boolean
@@ -84,20 +105,70 @@ language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.wishes where id = w and owner = auth.uid());
 $$;
 
-create or replace function public.can_see_wish(w uuid) returns boolean
+-- Seit 1.14: befreundet (direkt, ohne Gruppe)
+create or replace function public.are_friends(x uuid, y uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select x is not null and y is not null and exists (
+    select 1 from public.friendships where a = least(x, y) and b = greatest(x, y));
+$$;
+
+create or replace function public.is_friend(other uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select public.are_friends(auth.uid(), other);
+$$;
+
+-- Kenne ich die Person (gemeinsame Gruppe oder befreundet)?
+create or replace function public.knows(other uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select public.shares_group(other) or public.is_friend(other);
+$$;
+
+-- Sieht u den Wunsch w (und ist nicht selbst die beschenkte Person)?
+-- Über eine gemeinsame Gruppe (alle Gruppen oder freigegebene) oder als direkter Freund
+-- (alle Freunde oder einzeln freigegeben). Seit 1.13, mit Freunden seit 1.14.
+create or replace function public.wish_visible_to(w uuid, u uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
     select 1 from public.wishes x
-    where x.id = w and (
-      x.owner = auth.uid()
-      or exists (
+    where x.id = w and x.owner <> u and (
+      exists (
         select 1 from public.members mo
-        join public.members me on me.group_id = mo.group_id and me.user_id = auth.uid()
+        join public.members m on m.group_id = mo.group_id and m.user_id = u
         where mo.user_id = x.owner
           and (x.all_groups or exists (
-            select 1 from public.wish_groups wg
-            where wg.wish_id = x.id and wg.group_id = mo.group_id)))));
+            select 1 from public.wish_groups wg where wg.wish_id = x.id and wg.group_id = mo.group_id)))
+      or (public.are_friends(x.owner, u)
+          and (x.all_friends or exists (
+            select 1 from public.wish_friends wf where wf.wish_id = x.id and wf.user_id = u)))));
 $$;
+
+create or replace function public.can_see_wish(w uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.wishes x where x.id = w and x.owner = auth.uid())
+      or public.wish_visible_to(w, auth.uid());
+$$;
+
+-- Wessen Namen darf ich sehen? Gruppen, Freunde, offene Anfragen an mich und
+-- Leute, mit denen ich ein gemeinsames Geschenk sehe (seit 1.14).
+-- plpgsql, weil die Tabellen der späteren Blöcke beim ersten Ausführen noch fehlen.
+create or replace function public.profile_visible(other uuid) returns boolean
+language plpgsql stable security definer set search_path = '' as $$
+declare me uuid := auth.uid();
+begin
+  if me is null then return false; end if;
+  if other = me or public.knows(other) then return true; end if;
+  if to_regclass('public.friend_requests') is not null and exists (
+       select 1 from public.friend_requests r where r.from_user = other and r.to_user = me and r.declined_at is null) then
+    return true;
+  end if;
+  if to_regclass('public.gift_shares') is not null and exists (
+       select 1 from public.gift_pools p
+       where (p.buyer = other or exists (select 1 from public.gift_shares s where s.wish_id = p.wish_id and s.user_id = other))
+         and public.pool_visible_to(p.wish_id, me)) then
+    return true;
+  end if;
+  return false;
+end $$;
 
 -- Seit 1.7: Wunsch ist noch offen (nicht „Hab ich schon“)
 create or replace function public.wish_open(w uuid) returns boolean
@@ -195,7 +266,7 @@ drop policy if exists "profiles lesen" on public.profiles;
 drop policy if exists "profil anlegen" on public.profiles;
 drop policy if exists "profil ändern" on public.profiles;
 create policy "profiles lesen" on public.profiles for select to authenticated
-  using (id = auth.uid() or public.shares_group(id));
+  using (id = auth.uid() or public.profile_visible(id));
 create policy "profil anlegen" on public.profiles for insert to authenticated
   with check (id = auth.uid());
 create policy "profil ändern" on public.profiles for update to authenticated
@@ -232,6 +303,24 @@ create policy "freigabe anlegen" on public.wish_groups for insert to authenticat
 create policy "freigabe löschen" on public.wish_groups for delete to authenticated
   using (public.is_wish_owner(wish_id));
 
+alter table public.wish_friends enable row level security;
+alter table public.friendships enable row level security;
+
+-- Freigabe für einzelne Freunde (1.14): Besitzer sieht alle, Freunde nur die eigene Zeile
+drop policy if exists "freunde-freigabe lesen" on public.wish_friends;
+drop policy if exists "freunde-freigabe anlegen" on public.wish_friends;
+drop policy if exists "freunde-freigabe löschen" on public.wish_friends;
+create policy "freunde-freigabe lesen" on public.wish_friends for select to authenticated
+  using (public.is_wish_owner(wish_id) or user_id = auth.uid());
+create policy "freunde-freigabe anlegen" on public.wish_friends for insert to authenticated
+  with check (public.is_wish_owner(wish_id) and public.is_friend(user_id));
+create policy "freunde-freigabe löschen" on public.wish_friends for delete to authenticated
+  using (public.is_wish_owner(wish_id));
+
+drop policy if exists "freundschaft lesen" on public.friendships;
+create policy "freundschaft lesen" on public.friendships for select to authenticated
+  using (a = auth.uid() or b = auth.uid());
+
 drop policy if exists "reservierung lesen" on public.reservations;
 drop policy if exists "reservierung anlegen" on public.reservations;
 drop policy if exists "reservierung ändern" on public.reservations;
@@ -250,10 +339,16 @@ create policy "reservierung löschen" on public.reservations for delete to authe
 -- ---------- Rechte ----------
 
 revoke all on public.profiles, public.groups, public.members, public.wishes,
-  public.wish_groups, public.reservations from anon, authenticated;
+  public.wish_groups, public.reservations, public.wish_friends, public.friendships from anon, authenticated;
 grant select, insert, update on public.profiles to authenticated;
-grant select on public.groups, public.members to authenticated;
+grant select on public.groups, public.members, public.friendships to authenticated;
 grant select, insert, update, delete on public.wishes, public.wish_groups, public.reservations to authenticated;
+grant select, insert, delete on public.wish_friends to authenticated;
+
+revoke execute on function public.are_friends(uuid, uuid), public.is_friend(uuid), public.knows(uuid),
+  public.wish_visible_to(uuid, uuid), public.profile_visible(uuid) from public, anon;
+grant execute on function public.is_friend(uuid), public.knows(uuid), public.profile_visible(uuid) to authenticated;
+revoke execute on function public.are_friends(uuid, uuid), public.wish_visible_to(uuid, uuid) from authenticated;
 
 revoke execute on function public.is_member(uuid), public.shares_group(uuid), public.is_wish_owner(uuid),
   public.can_see_wish(uuid), public.wish_open(uuid), public.new_code(), public.create_group(text), public.join_group(text),
@@ -757,6 +852,7 @@ create table if not exists public.push_prefs (
   have boolean not null default true      -- „Hab ich schon“ bei etwas, das ich reserviert habe
 );
 alter table public.push_prefs add column if not exists pool boolean not null default true;  -- gemeinsam schenken (1.13)
+alter table public.push_prefs add column if not exists friend boolean not null default true;  -- Freundschaftsanfragen (1.14)
 
 -- Schlüssel und Adresse der Edge Function (eine Zeile, legt der Admin in der App an; für die App nicht lesbar)
 create table if not exists public.push_config (
@@ -790,7 +886,7 @@ create table if not exists public.push_outbox (
 alter table public.push_outbox add column if not exists info jsonb;
 alter table public.push_outbox drop constraint if exists push_outbox_kind_check;
 alter table public.push_outbox add constraint push_outbox_kind_check
-  check (kind in ('wish', 'member', 'draw', 'have', 'remind', 'test', 'pool'));
+  check (kind in ('wish', 'member', 'draw', 'have', 'remind', 'test', 'pool', 'friend'));
 create index if not exists push_outbox_pending_idx on public.push_outbox(id) where sent_at is null;
 create index if not exists push_outbox_tag_idx on public.push_outbox(user_id, tag, created_at);
 
@@ -801,7 +897,8 @@ create or replace function public.push_wants(u uuid, k text) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.push_subs s where s.user_id = u)
      and coalesce((select case k when 'wish' then p.wish when 'member' then p.member when 'draw' then p.draw
-                                 when 'remind' then p.remind when 'have' then p.have when 'pool' then p.pool else true end
+                                 when 'remind' then p.remind when 'have' then p.have when 'pool' then p.pool
+                                 when 'friend' then p.friend else true end
                    from public.push_prefs p where p.user_id = u), true);
 $$;
 
@@ -809,6 +906,17 @@ create or replace function public.push_name(u uuid) returns text
 language sql stable security definer set search_path = '' as $$
   select coalesce(nullif((select name from public.profiles where id = u), ''), 'Jemand');
 $$;
+
+-- Name, wie v die Person u sieht: eigener Spitzname, sonst Anzeigename (1.14)
+create or replace function public.push_name(u uuid, v uuid) returns text
+language plpgsql stable security definer set search_path = '' as $$
+declare n text;
+begin
+  if to_regclass('public.nicknames') is not null then
+    execute 'select nick from public.nicknames where owner = $1 and user_id = $2' into n using v, u;
+  end if;
+  return coalesce(n, public.push_name(u));
+end $$;
 
 -- „A, B und C“ bzw. „A, B, C und 2 weitere“
 create or replace function public.push_list(a text[]) returns text
@@ -852,6 +960,16 @@ begin
       order by m.user_id, m.joined_at
       on conflict do nothing;
   end if;
+  -- direkte Freunde (1.14), wenn für alle Freunde sichtbar
+  if new.have_at is null and new.all_friends and new.created_at > now() - interval '1 hour'
+     and (tg_op = 'INSERT' or not old.all_friends) then
+    insert into public.push_outbox (user_id, kind, ref, tag, actor, wish_id)
+      select case when f.a = new.owner then f.b else f.a end, 'wish', new.id::text, 'wish-' || new.owner, new.owner, new.id
+      from public.friendships f
+      where (f.a = new.owner or f.b = new.owner)
+        and public.push_wants(case when f.a = new.owner then f.b else f.a end, 'wish')
+      on conflict do nothing;
+  end if;
   -- nur an die Person, die reserviert hat (nie an den Wünschenden)
   if tg_op = 'UPDATE' and old.have_at is null and new.have_at is not null then
     insert into public.push_outbox (user_id, kind, ref, tag, actor, wish_id)
@@ -870,7 +988,7 @@ begin
   return null;
 end $$;
 drop trigger if exists push_wish on public.wishes;
-create trigger push_wish after insert or update of all_groups, have_at on public.wishes
+create trigger push_wish after insert or update of all_groups, all_friends, have_at on public.wishes
   for each row execute function public.push_on_wish();
 
 -- Neuer Wunsch, der nur für ausgewählte Gruppen freigegeben ist
@@ -892,6 +1010,24 @@ end $$;
 drop trigger if exists push_wish_group on public.wish_groups;
 create trigger push_wish_group after insert on public.wish_groups
   for each row execute function public.push_on_wish_group();
+
+-- Neuer Wunsch, der nur für einzelne Freunde freigegeben ist (1.14)
+create or replace function public.push_on_wish_friend() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  insert into public.push_outbox (user_id, kind, ref, tag, actor, wish_id)
+    select new.user_id, 'wish', w.id::text, 'wish-' || w.owner, w.owner, w.id
+    from public.wishes w
+    where w.id = new.wish_id and not w.all_friends and w.have_at is null
+      and w.created_at > now() - interval '1 hour'
+      and public.are_friends(w.owner, new.user_id)
+      and public.push_wants(new.user_id, 'wish')
+    on conflict do nothing;
+  return null;
+end $$;
+drop trigger if exists push_wish_friend on public.wish_friends;
+create trigger push_wish_friend after insert on public.wish_friends
+  for each row execute function public.push_on_wish_friend();
 
 -- Jemand ist einer Gruppe beigetreten
 create or replace function public.push_on_member() returns trigger
@@ -959,9 +1095,10 @@ begin
   end if;
   if d not in (14, 7, 1) then return coalesce(k, 0); end if;
   insert into public.push_outbox (user_id, kind, ref, tag, extra)
-    select distinct m.user_id, 'remind', extract(year from today)::int || '-' || d, 'remind', d::text
-    from public.members m
-    where public.push_wants(m.user_id, 'remind')
+    select distinct m.u, 'remind', extract(year from today)::int || '-' || d, 'remind', d::text
+    from (select user_id as u from public.members
+          union select a from public.friendships union select b from public.friendships) m
+    where public.push_wants(m.u, 'remind')
     on conflict do nothing;
   get diagnostics n = row_count;
   return n + coalesce(k, 0);
@@ -996,17 +1133,20 @@ begin
       join public.wishes w on w.id = o.wish_id
       where o.user_id = p_user and o.tag = p_tag and o.kind = 'wish' and o.sent_at is not null
         and o.created_at > now() - interval '1 hour' and w.have_at is null
-        and exists (select 1 from public.members m where m.group_id = o.group_id and m.user_id = p_user)
-        and exists (select 1 from public.members m where m.group_id = o.group_id and m.user_id = w.owner)
-        and (w.all_groups or exists (select 1 from public.wish_groups wg where wg.wish_id = w.id and wg.group_id = o.group_id));
+        and public.wish_visible_to(w.id, p_user);
     if coalesce(n, 0) = 0 then return null; end if;
+    -- Gruppe nur, wenn beide noch drin sind und der Wunsch dort sichtbar ist, sonst die Liste der Person (1.14)
+    if gid is null or not exists (select 1 from public.members m where m.group_id = gid and m.user_id = p_user)
+       or not exists (select 1 from public.members m where m.group_id = gid and m.user_id = who) then
+      gid := null;
+    end if;
     return jsonb_build_object('kind', 'wish', 'tag', p_tag, 'badge', p_delta,
-      'title', case when n = 1 then 'Neuer Wunsch von ' || public.push_name(who)
-                    else public.push_name(who) || ' hat ' || n || ' neue Wünsche' end,
+      'title', case when n = 1 then 'Neuer Wunsch von ' || public.push_name(who, p_user)
+                    else public.push_name(who, p_user) || ' hat ' || n || ' neue Wünsche' end,
       'body', public.push_list(titles),
-      'url', '#/g/' || gid || '/p/' || who);
+      'url', case when gid is null then '#/p/' || who else '#/g/' || gid || '/p/' || who end);
   elsif p_kind = 'member' then
-    select array_agg(public.push_name(o.actor) order by o.id), count(*), (array_agg(o.group_id))[1]
+    select array_agg(public.push_name(o.actor, p_user) order by o.id), count(*), (array_agg(o.group_id))[1]
       into titles, n, gid
       from public.push_outbox o
       where o.user_id = p_user and o.tag = p_tag and o.kind = 'member' and o.sent_at is not null
@@ -1041,12 +1181,12 @@ begin
     if ex is null then return null; end if;
     if gid <> p_user then
       return jsonb_build_object('kind', 'have', 'tag', p_tag, 'badge', 0,
-        'title', public.push_name(who) || ' hat „' || ex || '“ schon',
-        'body', 'Ihr wolltet es gemeinsam schenken. Sprich dich mit ' || public.push_name(gid) || ' ab.',
+        'title', public.push_name(who, p_user) || ' hat „' || ex || '“ schon',
+        'body', 'Ihr wolltet es gemeinsam schenken. Sprich dich mit ' || public.push_name(gid, p_user) || ' ab.',
         'url', '#/gemeinsam/' || wid);
     end if;
     return jsonb_build_object('kind', 'have', 'tag', p_tag, 'badge', 0,
-      'title', public.push_name(who) || ' hat „' || ex || '“ schon',
+      'title', public.push_name(who, p_user) || ' hat „' || ex || '“ schon',
       'body', case when gname = 'gekauft' then 'Du hast es schon gekauft. Vielleicht lässt es sich umtauschen.'
                    else 'Gib die Reservierung frei, falls du es noch nicht gekauft hast.' end,
       'url', '#/');
@@ -1066,6 +1206,8 @@ begin
       'url', '#/');
   elsif p_kind = 'pool' then
     return public.pool_message(p_user, p_tag, p_delta);
+  elsif p_kind = 'friend' then
+    return public.friend_message(p_user, p_tag, p_delta);
   elsif p_kind = 'test' then
     return jsonb_build_object('kind', 'test', 'tag', p_tag, 'badge', 0,
       'title', 'Benachrichtigungen sind eingeschaltet',
@@ -1240,7 +1382,7 @@ revoke all on public.push_subs, public.push_prefs, public.push_config, public.pu
 grant select, insert, update on public.push_prefs to authenticated;
 
 revoke execute on function public.push_wants(uuid, text), public.push_name(uuid), public.push_list(text[]),
-  public.push_kick(), public.push_on_wish(), public.push_on_wish_group(), public.push_on_member(), public.push_on_draw(),
+  public.push_kick(), public.push_on_wish(), public.push_on_wish_group(), public.push_on_wish_friend(), public.push_name(uuid, uuid), public.push_on_member(), public.push_on_draw(),
   public.push_after_queue(), public.push_tick(), public.push_daily(date), public.push_message(uuid, text, text, int),
   public.push_claim(int), public.push_report(jsonb, text), public.push_public_key(),
   public.push_subscribe(text, text, text), public.push_unsubscribe(text), public.push_test(),
@@ -1297,7 +1439,7 @@ begin
     raise exception 'Nicht erlaubt' using errcode = '42501';
   end if;
   if new.linked_user is not null and (tg_op = 'INSERT' or new.linked_user is distinct from old.linked_user)
-     and not public.shares_group(new.linked_user) then
+     and not public.knows(new.linked_user) then
     raise exception 'Diese Person ist in keiner deiner Gruppen' using errcode = '42501';
   end if;
   if tg_op = 'INSERT' and (select count(*) from public.idea_people where owner = new.owner) >= 200 then
@@ -1341,7 +1483,7 @@ begin
     update public.idea_people set linked_user = null where id = p_person;
     return;
   end if;
-  if not public.shares_group(p_user) or p_user = auth.uid() then
+  if not public.knows(p_user) or p_user = auth.uid() then
     raise exception 'Diese Person ist in keiner deiner Gruppen' using errcode = '42501';
   end if;
   select id into v_other from public.idea_people
@@ -1477,6 +1619,7 @@ create trigger profile_card_vis_check before insert or update on public.profile_
 -- Darf v diesen Teil (item) des Steckbriefs von o sehen? Ohne Regel: ja.
 -- only:   v steht in users oder ist in einer der Gruppen (in der auch o ist)
 -- except: v steht nicht in users und teilt mit o mindestens eine nicht ausgeschlossene Gruppe
+--         oder ist direkt mit o befreundet (seit 1.14)
 create or replace function public.card_allowed(o uuid, v uuid, it text) returns boolean
 language sql stable security definer set search_path = '' as $$
   select coalesce((
@@ -1484,9 +1627,9 @@ language sql stable security definer set search_path = '' as $$
       when 'only' then v = any(r.users) or exists (
         select 1 from public.members a join public.members b on b.group_id = a.group_id
         where a.user_id = o and b.user_id = v and a.group_id = any(r.groups))
-      else not (v = any(r.users)) and exists (
+      else not (v = any(r.users)) and (public.are_friends(o, v) or exists (
         select 1 from public.members a join public.members b on b.group_id = a.group_id
-        where a.user_id = o and b.user_id = v and not (a.group_id = any(r.groups)))
+        where a.user_id = o and b.user_id = v and not (a.group_id = any(r.groups))))
     end
     from public.profile_card_vis r where r.owner = o and r.item = it), true);
 $$;
@@ -1504,7 +1647,7 @@ language sql stable security definer set search_path = '' as $$
     where public.card_allowed(c.user_id, auth.uid(), split_part(e.key, '.', 1))
       and public.card_allowed(c.user_id, auth.uid(), e.key)) f
   where auth.uid() is not null and c.user_id <> auth.uid()
-    and public.shares_group(c.user_id)
+    and public.knows(c.user_id)
     and public.card_allowed(c.user_id, auth.uid(), 'all')
     and f.d is not null;
 $$;
@@ -1600,17 +1743,7 @@ create index if not exists gift_shares_user_idx on public.gift_shares(user_id);
 
 -- ---------- Hilfen ----------
 
--- Sieht u den Wunsch w (und ist nicht selbst die beschenkte Person)?
-create or replace function public.wish_visible_to(w uuid, u uuid) returns boolean
-language sql stable security definer set search_path = '' as $$
-  select exists (
-    select 1 from public.wishes x
-    join public.members mo on mo.user_id = x.owner
-    join public.members m on m.group_id = mo.group_id and m.user_id = u
-    where x.id = w and x.owner <> u
-      and (x.all_groups or exists (
-        select 1 from public.wish_groups wg where wg.wish_id = x.id and wg.group_id = mo.group_id)));
-$$;
+-- wish_visible_to(w, u) steht seit 1.14 oben bei den Hilfsfunktionen (mit Freunden)
 
 create or replace function public.pool_member(w uuid, u uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
@@ -1634,13 +1767,19 @@ $$;
 -- Wer gefragt wird: offen = alle, die den Wunsch sehen; sonst nur die Eingeladenen (die ihn auch sehen)
 create or replace function public.pool_audience(w uuid, p_open boolean, p_invited uuid[]) returns setof uuid
 language sql stable security definer set search_path = '' as $$
-  select distinct m.user_id
-  from public.wishes x
-  join public.members mo on mo.user_id = x.owner
-  join public.members m on m.group_id = mo.group_id
-  where x.id = w and m.user_id <> x.owner
-    and (x.all_groups or exists (select 1 from public.wish_groups wg where wg.wish_id = x.id and wg.group_id = mo.group_id))
-    and (p_open or m.user_id = any(coalesce(p_invited, '{}')));
+  select c.u from (
+    select m.user_id as u
+    from public.wishes x
+    join public.members mo on mo.user_id = x.owner
+    join public.members m on m.group_id = mo.group_id
+    where x.id = w
+    union
+    select case when f.a = x.owner then f.b else f.a end
+    from public.wishes x
+    join public.friendships f on f.a = x.owner or f.b = x.owner
+    where x.id = w) c
+  where public.wish_visible_to(w, c.u)
+    and (p_open or c.u = any(coalesce(p_invited, '{}')));
 $$;
 
 create or replace function public.pool_today() returns date
@@ -1914,31 +2053,31 @@ begin
   if o.extra = 'ask' then
     if public.pool_member(o.wish_id, p_user) then return null; end if;
     return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 1,
-      'title', public.push_name(p.buyer) || ' fragt, ob du mitmachst',
-      'body', '„' || t || '“ gemeinsam für ' || public.push_name(owner) || ' schenken',
+      'title', public.push_name(p.buyer, p_user) || ' fragt, ob du mitmachst',
+      'body', '„' || t || '“ gemeinsam für ' || public.push_name(owner, p_user) || ' schenken',
       'url', url);
   elsif o.extra = 'join' then
     if p.buyer <> p_user then return null; end if;
-    select array_agg(public.push_name(x.actor) order by x.id) into names
+    select array_agg(public.push_name(x.actor, p_user) order by x.id) into names
       from public.push_outbox x
       where x.user_id = p_user and x.tag = p_tag and x.sent_at is not null and x.created_at > now() - interval '1 hour'
         and public.pool_member(o.wish_id, x.actor);
     if coalesce(cardinality(names), 0) = 0 then return null; end if;
     return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
       'title', case when cardinality(names) = 1 then names[1] || ' macht mit' else public.push_list(names) || ' machen mit' end,
-      'body', '„' || t || '“ für ' || public.push_name(owner) || ' · ' || n || ' dabei',
+      'body', '„' || t || '“ für ' || public.push_name(owner, p_user) || ' · ' || n || ' dabei',
       'url', url);
   elsif o.extra = 'bought' then
     if not public.pool_member(o.wish_id, p_user) or p.buyer = p_user then return null; end if;
     return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
-      'title', public.push_name(p.buyer) || ' hat „' || t || '“ gekauft',
-      'body', 'Gemeinsames Geschenk für ' || public.push_name(owner) || '. Denk an deinen Anteil.',
+      'title', public.push_name(p.buyer, p_user) || ' hat „' || t || '“ gekauft',
+      'body', 'Gemeinsames Geschenk für ' || public.push_name(owner, p_user) || '. Denk an deinen Anteil.',
       'url', url);
   elsif o.extra = 'buyer' then
     if p.buyer <> p_user then return null; end if;
     return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
       'title', 'Du kaufst jetzt „' || t || '“',
-      'body', public.push_name(o.actor) || ' hat dir das gemeinsame Geschenk für ' || public.push_name(owner) || ' übergeben.',
+      'body', public.push_name(o.actor, p_user) || ' hat dir das gemeinsame Geschenk für ' || public.push_name(owner, p_user) || ' übergeben.',
       'url', url);
   elsif o.extra = 'due' then
     if p.buyer <> p_user or p.min_people is null or n >= p.min_people then return null; end if;
@@ -2018,3 +2157,322 @@ end $$;
 
 revoke execute on function public.delete_account() from public, anon;
 grant execute on function public.delete_account() to authenticated;
+
+-- =====================================================================
+-- Direkte Freundschaft (Version 1.14)
+-- Befreundet sein ohne gemeinsame Gruppe. Zwei Wege:
+--  1. Persönlicher Freundes-Link (Code): Wer ihn öffnet und bestätigt, ist sofort befreundet.
+--     Der Code lässt sich jederzeit neu erzeugen, der alte gilt dann nicht mehr.
+--  2. Anfrage per exaktem Benutzernamen (oder an jemanden, den man schon kennt), die
+--     angenommen werden muss. Keine Suche: Ob es einen Benutzernamen gibt, erfährt niemand,
+--     eine Anfrage an einen unbekannten Namen „wartet“ einfach. Abgelehnte Anfragen sieht der
+--     Absender weiter als wartend.
+-- Freunde sehen sich gegenseitig (Name, Wünsche nach Freigabe, Steckbrief nach Regeln).
+-- Dazu Spitznamen: eigene Bezeichnung für andere, nur für mich sichtbar.
+-- Tabellen friendships und wish_friends stehen oben (werden für die Sichtbarkeit gebraucht).
+-- =====================================================================
+
+create table if not exists public.friend_codes (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  code text not null unique,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.friend_requests (
+  id uuid primary key default gen_random_uuid(),
+  from_user uuid not null references auth.users(id) on delete cascade,
+  to_user uuid references auth.users(id) on delete cascade,      -- null = Benutzername gibt es nicht
+  to_name text check (to_name is null or char_length(to_name) <= 24),  -- eingegebener Benutzername
+  created_at timestamptz not null default now(),
+  declined_at timestamptz,
+  check (to_user is not null or to_name is not null),
+  check (to_user is distinct from from_user)
+);
+create unique index if not exists friend_requests_uniq on public.friend_requests
+  (from_user, coalesce(to_name, ''), coalesce(to_user, '00000000-0000-0000-0000-000000000000'::uuid));
+create index if not exists friend_requests_to_idx on public.friend_requests(to_user);
+
+create table if not exists public.nicknames (
+  owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  nick text not null check (char_length(btrim(nick)) between 1 and 40),
+  created_at timestamptz not null default now(),
+  primary key (owner, user_id),
+  check (owner <> user_id)
+);
+
+-- ---------- Prüfungen ----------
+
+-- Spitznamen nur für Leute, die ich sehe; höchstens 500
+create or replace function public.nicknames_check() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'UPDATE' and (new.owner <> old.owner or new.user_id <> old.user_id) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if tg_op = 'INSERT' then
+    if not public.profile_visible(new.user_id) then
+      raise exception 'Diese Person kennst du nicht' using errcode = '42501';
+    end if;
+    if (select count(*) from public.nicknames where owner = new.owner) >= 500 then
+      raise exception 'Höchstens 500 Spitznamen' using errcode = '54000';
+    end if;
+  end if;
+  new.nick := btrim(new.nick);
+  return new;
+end $$;
+drop trigger if exists nicknames_check on public.nicknames;
+create trigger nicknames_check before insert or update on public.nicknames
+  for each row execute function public.nicknames_check();
+
+-- ---------- interne Hilfen ----------
+
+-- Befreunden (beide Richtungen, Anfragen zwischen beiden fallen weg). true = neu befreundet.
+create or replace function public.friend_make(x uuid, y uuid) returns boolean
+language plpgsql security definer set search_path = '' as $$
+declare n int;
+begin
+  if x is null or y is null or x = y then raise exception 'Das bist du' using errcode = '22023'; end if;
+  delete from public.friend_requests
+    where (from_user = x and to_user = y) or (from_user = y and to_user = x);
+  if public.are_friends(x, y) then return false; end if;
+  if (select count(*) from public.friendships where a = x or b = x) >= 500
+     or (select count(*) from public.friendships where a = y or b = y) >= 500 then
+    raise exception 'Zu viele Freunde' using errcode = '54000';
+  end if;
+  insert into public.friendships (a, b) values (least(x, y), greatest(x, y)) on conflict do nothing;
+  get diagnostics n = row_count;
+  return n > 0;
+end $$;
+
+-- Benachrichtigung „ihr seid befreundet“ an u (actor = die andere Person)
+create or replace function public.friend_notify_ok(u uuid, actor uuid) returns void
+language sql security definer set search_path = '' as $$
+  insert into public.push_outbox (user_id, kind, ref, tag, actor)
+    select u, 'friend', 'ok:' || actor, 'friend-ok-' || actor, actor
+    where public.push_wants(u, 'friend')
+    on conflict (user_id, kind, ref) do update set sent_at = null, created_at = now()
+      where public.push_outbox.sent_at < now() - interval '1 day';
+$$;
+
+-- ---------- Aktionen der App ----------
+
+-- Eigener Freundes-Code (legt ihn beim ersten Mal an; p_new = neuen erzeugen, alter gilt nicht mehr)
+create or replace function public.friend_code(p_new boolean default false) returns text
+language plpgsql security definer set search_path = '' as $$
+declare c text;
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet'; end if;
+  if not coalesce(p_new, false) then
+    select code into c from public.friend_codes where user_id = auth.uid();
+    if c is not null then return c; end if;
+  end if;
+  loop
+    c := left(public.random_code(), 12);
+    exit when not exists (select 1 from public.friend_codes where code = c);
+  end loop;
+  insert into public.friend_codes (user_id, code) values (auth.uid(), c)
+    on conflict (user_id) do update set code = excluded.code, created_at = now();
+  return c;
+end $$;
+
+-- Wem gehört der Code? (für die Bestätigungsseite) null = gibt es nicht
+create or replace function public.friend_peek(p_code text) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare u uuid;
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet'; end if;
+  select user_id into u from public.friend_codes where code = public.norm_code(p_code);
+  if u is null then return null; end if;
+  return jsonb_build_object('user', u, 'name', coalesce(nullif((select name from public.profiles where id = u), ''), 'Jemand'),
+    'self', u = auth.uid(), 'friends', public.are_friends(u, auth.uid()));
+end $$;
+
+-- Freundes-Link bestätigen: sofort befreundet
+create or replace function public.friend_accept_code(p_code text) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare u uuid;
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet'; end if;
+  select user_id into u from public.friend_codes where code = public.norm_code(p_code);
+  if u is null then raise exception 'Freundes-Code nicht gefunden' using errcode = 'P0002'; end if;
+  if u = auth.uid() then raise exception 'Das bist du' using errcode = '22023'; end if;
+  if public.friend_make(u, auth.uid()) then perform public.friend_notify_ok(u, auth.uid()); end if;
+  return u;
+end $$;
+
+-- Anfrage stellen (gemeinsamer Teil). Ergebnis: 'sent', 'friends' (schon befreundet), 'accepted' (Gegenanfrage lag vor)
+create or replace function public.friend_ask(p_to uuid, p_name text) returns text
+language plpgsql security definer set search_path = '' as $$
+declare
+  me uuid := auth.uid();
+  rid uuid;
+begin
+  if p_to = me then raise exception 'Das bist du' using errcode = '22023'; end if;
+  if p_to is not null and public.are_friends(me, p_to) then return 'friends'; end if;
+  -- Hat die Person mich schon gefragt (und nicht abgelehnt)? Dann gleich befreundet.
+  if p_to is not null and exists (select 1 from public.friend_requests
+       where from_user = p_to and to_user = me and declined_at is null) then
+    perform public.friend_make(me, p_to);
+    perform public.friend_notify_ok(p_to, me);
+    return 'accepted';
+  end if;
+  if exists (select 1 from public.friend_requests where from_user = me
+       and coalesce(to_name, '') = coalesce(p_name, '') and to_user is not distinct from p_to) then
+    return 'sent';
+  end if;
+  if (select count(*) from public.friend_requests where from_user = me and created_at > now() - interval '1 day') >= 20
+     or (select count(*) from public.friend_requests where from_user = me) >= 100 then
+    raise exception 'Zu viele Anfragen' using errcode = '54000';
+  end if;
+  insert into public.friend_requests (from_user, to_user, to_name) values (me, p_to, p_name) returning id into rid;
+  if p_to is not null and public.push_wants(p_to, 'friend') then
+    insert into public.push_outbox (user_id, kind, ref, tag, actor)
+      values (p_to, 'friend', 'req:' || rid, 'friend-req', me) on conflict do nothing;
+  end if;
+  return 'sent';
+end $$;
+
+-- Anfrage per Benutzername (genau, ohne Suche; verrät nicht, ob es ihn gibt)
+create or replace function public.friend_request(p_username text) returns text
+language plpgsql security definer set search_path = '' as $$
+declare
+  n text := lower(btrim(regexp_replace(coalesce(p_username, ''), '^@', '')));
+  u uuid;
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet'; end if;
+  if n !~ '^[a-z0-9][a-z0-9._-]{2,23}$' then raise exception 'Benutzername ungültig' using errcode = '22023'; end if;
+  select user_id into u from public.accounts where username = n;
+  return public.friend_ask(u, n);
+end $$;
+
+-- Anfrage an jemanden, den ich schon sehe (z. B. aus einer Gruppe)
+create or replace function public.friend_request_user(p_user uuid) returns text
+language plpgsql security definer set search_path = '' as $$
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet'; end if;
+  if p_user is null or not public.profile_visible(p_user) then raise exception 'Keine Berechtigung' using errcode = '42501'; end if;
+  return public.friend_ask(p_user, null);
+end $$;
+
+-- Anfrage annehmen oder ablehnen (nur wer gefragt wurde)
+create or replace function public.friend_answer(p_id uuid, p_accept boolean) returns void
+language plpgsql security definer set search_path = '' as $$
+declare r public.friend_requests;
+begin
+  select * into r from public.friend_requests where id = p_id and to_user = auth.uid();
+  if not found then raise exception 'Anfrage nicht gefunden' using errcode = 'P0002'; end if;
+  if p_accept then
+    if public.friend_make(r.from_user, auth.uid()) then perform public.friend_notify_ok(r.from_user, auth.uid()); end if;
+  else
+    update public.friend_requests set declined_at = now() where id = p_id;
+  end if;
+end $$;
+
+-- Eigene Anfrage zurückziehen
+create or replace function public.friend_withdraw(p_id uuid) returns void
+language sql security definer set search_path = '' as $$
+  delete from public.friend_requests where id = p_id and from_user = auth.uid();
+$$;
+
+-- Freundschaft beenden: auch die Einzel-Freigaben von Wünschen in beide Richtungen fallen weg
+create or replace function public.friend_remove(p_user uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+declare me uuid := auth.uid();
+begin
+  if me is null then raise exception 'Nicht angemeldet'; end if;
+  delete from public.friendships where a = least(me, p_user) and b = greatest(me, p_user);
+  delete from public.wish_friends wf using public.wishes w
+    where wf.wish_id = w.id and ((w.owner = me and wf.user_id = p_user) or (w.owner = p_user and wf.user_id = me));
+  delete from public.friend_requests
+    where (from_user = me and to_user = p_user) or (from_user = p_user and to_user = me);
+end $$;
+
+-- Offene Anfragen: an mich (mit Absender) und von mir (Benutzername bzw. Person, die ich schon kannte)
+create or replace function public.friend_requests_list() returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select jsonb_build_object(
+    'in', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'user', r.from_user, 'at', r.created_at) order by r.created_at desc)
+      from public.friend_requests r where r.to_user = auth.uid() and r.declined_at is null), '[]'::jsonb),
+    'out', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'name', r.to_name,
+        'user', case when r.to_name is null then r.to_user end, 'at', r.created_at) order by r.created_at desc)
+      from public.friend_requests r where r.from_user = auth.uid()), '[]'::jsonb));
+$$;
+
+-- Text der Benachrichtigung (beim Versand)
+create or replace function public.friend_message(p_user uuid, p_tag text, p_delta int) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  names text[];
+  n int;
+  who uuid;
+begin
+  if p_tag = 'friend-req' then
+    select array_agg(public.push_name(o.actor, p_user) order by o.id), count(*)
+      into names, n
+      from public.push_outbox o
+      where o.user_id = p_user and o.tag = p_tag and o.kind = 'friend' and o.sent_at is not null
+        and o.created_at > now() - interval '1 hour'
+        and exists (select 1 from public.friend_requests r
+                    where r.from_user = o.actor and r.to_user = p_user and r.declined_at is null);
+    if coalesce(n, 0) = 0 then return null; end if;
+    return jsonb_build_object('kind', 'friend', 'tag', p_tag, 'badge', p_delta,
+      'title', case when n = 1 then 'Freundschaftsanfrage' else n || ' Freundschaftsanfragen' end,
+      'body', case when n = 1 then names[1] || ' möchte mit dir befreundet sein.' else public.push_list(names) end,
+      'url', '#/freunde');
+  end if;
+  select o.actor into who from public.push_outbox o
+    where o.user_id = p_user and o.tag = p_tag and o.kind = 'friend' order by o.id desc limit 1;
+  if who is null or not public.are_friends(who, p_user) then return null; end if;
+  return jsonb_build_object('kind', 'friend', 'tag', p_tag, 'badge', 0,
+    'title', 'Neu befreundet: ' || public.push_name(who, p_user),
+    'body', 'Ihr seht jetzt gegenseitig eure Wünsche.',
+    'url', '#/f/u:' || who);
+end $$;
+
+-- Wen ich bei einem gemeinsamen Geschenk fragen kann: Leute, die ich kenne und die den Wunsch auch sehen
+-- (auch Freunde der beschenkten Person aus meinen Gruppen, die ich selbst nicht über die Gruppe sehe)
+create or replace function public.pool_candidates(p_wish uuid) returns uuid[]
+language sql stable security definer set search_path = '' as $$
+  select coalesce(array_agg(u), '{}')
+  from public.pool_audience(p_wish, true, null) u
+  where public.wish_visible_to(p_wish, auth.uid()) and u <> auth.uid() and public.knows(u);
+$$;
+
+-- ---------- Zugriffsregeln ----------
+
+alter table public.friend_codes enable row level security;
+alter table public.friend_requests enable row level security;
+alter table public.nicknames enable row level security;
+
+drop policy if exists "eigener freundes-code" on public.friend_codes;
+create policy "eigener freundes-code" on public.friend_codes for select to authenticated
+  using (user_id = auth.uid());
+-- friend_requests: absichtlich keine Regeln, nur über friend_requests_list()
+
+drop policy if exists "spitznamen lesen" on public.nicknames;
+drop policy if exists "spitzname anlegen" on public.nicknames;
+drop policy if exists "spitzname ändern" on public.nicknames;
+drop policy if exists "spitzname löschen" on public.nicknames;
+create policy "spitznamen lesen" on public.nicknames for select to authenticated
+  using (owner = auth.uid());
+create policy "spitzname anlegen" on public.nicknames for insert to authenticated
+  with check (owner = auth.uid());
+create policy "spitzname ändern" on public.nicknames for update to authenticated
+  using (owner = auth.uid()) with check (owner = auth.uid());
+create policy "spitzname löschen" on public.nicknames for delete to authenticated
+  using (owner = auth.uid());
+
+revoke all on public.friend_codes, public.friend_requests, public.nicknames from anon, authenticated;
+grant select on public.friend_codes to authenticated;
+grant select, insert, update, delete on public.nicknames to authenticated;
+
+revoke execute on function public.nicknames_check(), public.friend_make(uuid, uuid), public.friend_notify_ok(uuid, uuid),
+  public.friend_code(boolean), public.friend_peek(text), public.friend_accept_code(text), public.friend_ask(uuid, text),
+  public.friend_request(text), public.friend_request_user(uuid), public.friend_answer(uuid, boolean),
+  public.friend_withdraw(uuid), public.friend_remove(uuid), public.friend_requests_list(),
+  public.friend_message(uuid, text, int), public.pool_candidates(uuid) from public, anon, authenticated;
+grant execute on function public.friend_code(boolean), public.friend_peek(text), public.friend_accept_code(text),
+  public.friend_request(text), public.friend_request_user(uuid), public.friend_answer(uuid, boolean),
+  public.friend_withdraw(uuid), public.friend_remove(uuid), public.friend_requests_list(),
+  public.pool_candidates(uuid) to authenticated;
