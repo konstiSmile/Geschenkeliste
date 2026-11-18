@@ -102,18 +102,17 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.14: Direkte Freundschaft“ (A–D)
   - Tests: 391 RLS-Prüfungen, 306 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.14“: A schema.sql ausführen (enthält 1.13.1), B neu laden (Version 1.14), C Freundes-Link an jemanden schicken, D Spitzname vergeben
-- [ ] **Paket 7 – 1.15 Chats Teil 1** (M) [Claude], schema.sql – **als Nächstes**
-  - Chat pro Geschenk + Plattform-Abfrage (WhatsApp, Signal, …, ausgegraut wenn gewählt)
-- [ ] **Paket 8 – 1.16 Chats Teil 2** (S) [Claude]
-  - Gruppenchat und „ohne X“-Chats, Push bei neuer Nachricht
+- ~~Paket 7 und 8 – Chats~~ **gestrichen (Nutzer 18.11.)**. Absprachen laufen über WhatsApp und Co.
+- [ ] **Paket 9 – 1.15 Anlässe und Geburtstage** (L) [Claude], schema.sql – **als Nächstes** (vorgezogen, Details unten in Phase 3)
 
 ## Phase 3: Nach Weihnachten – Umbau zur Wunschlisten-App für alle Anlässe
 
-- [ ] **Paket 9 – 2.0 Anlässe** (L) [Claude], schema.sql
+- [ ] **Paket 9 – 1.15 Anlässe und Geburtstage** (L) [Claude], schema.sql – **vorgezogen, kommt als Nächstes**
   - Anlass pro Gruppe (Weihnachten, Geburtstag, Hochzeit, …), Geburtstage im Profil, Countdown allgemein, Erinnerungen (Push-Erinnerung ist bis dahin fest auf Heiligabend), neutrales App-Symbol (dann auch Kurzbefehl-Symbole und Screenshots neu)
   - Idee des Nutzers (18.11.): **Geburtstag im Profil**, die anderen (Gruppen, Freunde) werden vorher erinnert
   - Idee des Nutzers (18.11.): **Geburtstagsgruppe für jemanden**, ohne dass die Person etwas mitbekommt. Die Mitglieder sehen Wünsche und Steckbrief der Person, als wäre sie in der Gruppe (deutlich markiert: „Geburtstag von X am …“), und können reservieren und gemeinsam schenken
-  - Zu klären: Welche Wünsche sieht die Geburtstagsgruppe (nur was jedes Mitglied ohnehin sieht, oder alles, was die Person für Gruppen/Freunde freigibt)? Darf die Person solche Gruppen erlauben/verbieten? Was passiert nach dem Geburtstag (Gruppe archivieren, im nächsten Jahr wieder nutzen)?
+  - **Entschieden 18.11.:** Die Geburtstagsgruppe sieht **alles, was die Person für Gruppen oder Freunde freigibt** (Wünsche, Steckbrief), auch Mitglieder, die sie sonst nicht sehen würden. Die Person kann das unter Konto erlauben oder verbieten (Standard noch klären). **Nach dem Geburtstag entscheidet, wer die Gruppe erstellt hat: archivieren oder löschen.**
+  - Noch zu klären: Standard für „Geburtstagsgruppen für mich erlaubt“ (an/aus), wer eine Geburtstagsgruppe anlegen darf (nur Leute, die die Person kennen?), Wiederverwenden im nächsten Jahr aus dem Archiv
 - [ ] **[Du]** Vorher festlegen: Wie sieht das Standarddesign aus, welche zwei Zusatzthemen (Namen, Stimmung)?
 - [ ] **Paket 10 – 2.1 Farbthemen** (S) [Claude], schema.sql – größtenteils mit 1.10 erledigt
   - Rest: weitere Themen, Wahl im Profil speichern (geräteübergreifend), Thema pro Anlass
@@ -130,8 +129,8 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - Erst muss die Anmeldung für die Familie klappen, sonst nützt nichts anderes. Ohne Mail gibt es kein Versandlimit und keine Einrichtung beim Mailanbieter.
 - Wichteln hat eine feste Frist (Auslosung Anfang Dezember).
 - Paket 3b vor dem Einladen der Familie: Wer die App gleich richtig installiert, hat weniger Probleme (getrennter Speicher Safari/Home-Bildschirm).
-- Preis kommt vor „gemeinsam schenken“, Push kommt vor Chats und „gemeinsam schenken“, damit die überhaupt Sinn ergeben.
+- Preis kommt vor „gemeinsam schenken“, Push kommt vor „gemeinsam schenken“, damit es überhaupt Sinn ergibt. Chats sind gestrichen (18.11.), deshalb kommen die Anlässe vorgezogen direkt nach 1.14.
 - Anlässe kommen vor Farbthemen, weil dabei das fest eingebaute Weihnachten verschwindet.
 - Öffnen für Freunde erst, wenn Datenschutz und Schutz vor Spam stehen.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan. Version 1.14 (Direkte Freundschaft) ist gebaut. Jetzt besprechen und bauen wir Paket 7 (Chats Teil 1).“
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan. Version 1.14 (Direkte Freundschaft) ist gebaut. Jetzt besprechen und bauen wir Paket 9 (Anlässe und Geburtstage, 1.15).“
