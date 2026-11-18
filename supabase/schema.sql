@@ -1,4 +1,4 @@
--- Geschenkeliste – Datenbank, Stand Version 1.12 (Steckbrief)
+-- Geschenkeliste – Datenbank, Stand Version 1.13 (Gemeinsam schenken)
 -- Im Supabase SQL Editor komplett einfügen und „Run“ drücken.
 -- Das Skript darf mehrfach ausgeführt werden (bestehende Daten bleiben erhalten).
 
@@ -756,6 +756,7 @@ create table if not exists public.push_prefs (
   remind boolean not null default true,   -- Erinnerung vor Heiligabend
   have boolean not null default true      -- „Hab ich schon“ bei etwas, das ich reserviert habe
 );
+alter table public.push_prefs add column if not exists pool boolean not null default true;  -- gemeinsam schenken (1.13)
 
 -- Schlüssel und Adresse der Edge Function (eine Zeile, legt der Admin in der App an; für die App nicht lesbar)
 create table if not exists public.push_config (
@@ -774,7 +775,7 @@ create table if not exists public.push_config (
 create table if not exists public.push_outbox (
   id bigserial primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
-  kind text not null check (kind in ('wish', 'member', 'draw', 'have', 'remind', 'test')),
+  kind text not null,
   ref text not null,
   tag text not null,
   group_id uuid,
@@ -785,6 +786,11 @@ create table if not exists public.push_outbox (
   sent_at timestamptz,
   unique (user_id, kind, ref)
 );
+-- seit 1.13: Art „pool“ (gemeinsam schenken) und info (Angaben, die beim Versand nicht mehr da sein könnten)
+alter table public.push_outbox add column if not exists info jsonb;
+alter table public.push_outbox drop constraint if exists push_outbox_kind_check;
+alter table public.push_outbox add constraint push_outbox_kind_check
+  check (kind in ('wish', 'member', 'draw', 'have', 'remind', 'test', 'pool'));
 create index if not exists push_outbox_pending_idx on public.push_outbox(id) where sent_at is null;
 create index if not exists push_outbox_tag_idx on public.push_outbox(user_id, tag, created_at);
 
@@ -795,7 +801,7 @@ create or replace function public.push_wants(u uuid, k text) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.push_subs s where s.user_id = u)
      and coalesce((select case k when 'wish' then p.wish when 'member' then p.member when 'draw' then p.draw
-                                 when 'remind' then p.remind when 'have' then p.have else true end
+                                 when 'remind' then p.remind when 'have' then p.have when 'pool' then p.pool else true end
                    from public.push_prefs p where p.user_id = u), true);
 $$;
 
@@ -853,6 +859,13 @@ begin
       from public.reservations r
       where r.wish_id = new.id and r.user_id <> new.owner and public.push_wants(r.user_id, 'have')
       on conflict do nothing;
+    -- und an alle, die beim gemeinsamen Geschenk mitmachen (1.13; Tabelle gibt es erst weiter unten)
+    if to_regclass('public.gift_shares') is not null then
+      execute 'insert into public.push_outbox (user_id, kind, ref, tag, actor, wish_id)
+        select s.user_id, ''have'', $1::text, ''have-'' || $1, $2, $1
+        from public.gift_shares s where s.wish_id = $1 and s.user_id <> $2 and public.push_wants(s.user_id, ''have'')
+        on conflict do nothing' using new.id, new.owner;
+    end if;
   end if;
   return null;
 end $$;
@@ -937,16 +950,21 @@ language plpgsql security definer set search_path = '' as $$
 declare
   today date := coalesce(p_today, (now() at time zone 'Europe/Berlin')::date);
   d int := make_date(extract(year from today)::int, 12, 24) - today;
-  n int;
+  n int := 0;
+  k int := 0;
 begin
-  if d not in (14, 7, 1) then return 0; end if;
+  -- Gemeinsam schenken (1.13): Frist gestern abgelaufen, zu wenige dabei → an den Käufer
+  if to_regclass('public.gift_pools') is not null then
+    execute 'select public.pool_due($1)' into k using today;
+  end if;
+  if d not in (14, 7, 1) then return coalesce(k, 0); end if;
   insert into public.push_outbox (user_id, kind, ref, tag, extra)
     select distinct m.user_id, 'remind', extract(year from today)::int || '-' || d, 'remind', d::text
     from public.members m
     where public.push_wants(m.user_id, 'remind')
     on conflict do nothing;
   get diagnostics n = row_count;
-  return n;
+  return n + coalesce(k, 0);
 end $$;
 
 do $$ begin
@@ -1016,10 +1034,17 @@ begin
   elsif p_kind = 'have' then
     select o.wish_id into wid from public.push_outbox o
       where o.user_id = p_user and o.tag = p_tag and o.kind = 'have' order by o.id desc limit 1;
-    select w.title, w.owner, r.status into ex, who, gname
-      from public.wishes w join public.reservations r on r.wish_id = w.id and r.user_id = p_user
-      where w.id = wid and w.have_at is not null;
+    select w.title, w.owner, r.status, r.user_id into ex, who, gname, gid
+      from public.wishes w join public.reservations r on r.wish_id = w.id
+      where w.id = wid and w.have_at is not null
+        and (r.user_id = p_user or public.pool_member(w.id, p_user));
     if ex is null then return null; end if;
+    if gid <> p_user then
+      return jsonb_build_object('kind', 'have', 'tag', p_tag, 'badge', 0,
+        'title', public.push_name(who) || ' hat „' || ex || '“ schon',
+        'body', 'Ihr wolltet es gemeinsam schenken. Sprich dich mit ' || public.push_name(gid) || ' ab.',
+        'url', '#/gemeinsam/' || wid);
+    end if;
     return jsonb_build_object('kind', 'have', 'tag', p_tag, 'badge', 0,
       'title', public.push_name(who) || ' hat „' || ex || '“ schon',
       'body', case when gname = 'gekauft' then 'Du hast es schon gekauft. Vielleicht lässt es sich umtauschen.'
@@ -1039,6 +1064,8 @@ begin
           then 'Deine Wunschliste ist noch leer. Trag ein, worüber du dich freuen würdest.'
         else 'Schau nach, ob deine Wunschliste vollständig ist.' end,
       'url', '#/');
+  elsif p_kind = 'pool' then
+    return public.pool_message(p_user, p_tag, p_delta);
   elsif p_kind = 'test' then
     return jsonb_build_object('kind', 'test', 'tag', p_tag, 'badge', 0,
       'title', 'Benachrichtigungen sind eingeschaltet',
@@ -1535,3 +1562,422 @@ revoke execute on function public.profile_cards_check(), public.profile_card_vis
   public.card_allowed(uuid, uuid, text), public.card_list(), public.card_put(text, jsonb)
   from public, anon, authenticated;
 grant execute on function public.card_list(), public.card_put(text, jsonb) to authenticated;
+
+-- =====================================================================
+-- Gemeinsam schenken (Version 1.13)
+-- Mehrere legen für einen Wunsch zusammen. Wer startet, reserviert den Wunsch und kauft
+-- (die Rolle lässt sich an jemanden abgeben, der mitmacht). Die beschenkte Person sieht nichts davon.
+-- Aufteilung: equal = gleich, budget = jeder nennt einen Höchstbetrag, custom = jeder seinen Betrag.
+-- Betrag leer = flexibel (bei budget ohne Grenze, bei custom teilen sich alle Flexiblen den Rest).
+-- Optional Mindestzahl und Frist: Danach entscheidet der Käufer (trotzdem, verlängern, absagen).
+-- Ändern nur über die Funktionen unten, lesen dürfen nur Eingeladene und Beteiligte.
+-- =====================================================================
+
+create table if not exists public.gift_pools (
+  wish_id uuid primary key references public.reservations(wish_id) on delete cascade,
+  buyer uuid not null references auth.users(id) on delete cascade,   -- kauft und streckt vor (= Reservierung)
+  created_by uuid references auth.users(id) on delete set null,
+  total numeric(9,2) not null check (total > 0 and total <= 1000000),
+  split text not null default 'equal' check (split in ('equal', 'budget', 'custom')),
+  open boolean not null default true,          -- true: alle, die den Wunsch sehen; false: nur invited
+  invited uuid[] not null default '{}' check (cardinality(invited) <= 60),
+  min_people smallint check (min_people is null or min_people between 2 and 30),
+  deadline date,
+  note text check (note is null or char_length(note) <= 300),
+  created_at timestamptz not null default now()
+);
+create index if not exists gift_pools_buyer_idx on public.gift_pools(buyer);
+
+create table if not exists public.gift_shares (
+  wish_id uuid not null references public.gift_pools(wish_id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  amount numeric(9,2) check (amount is null or (amount > 0 and amount <= 1000000)),
+  paid_at timestamptz,
+  joined_at timestamptz not null default now(),
+  primary key (wish_id, user_id)
+);
+create index if not exists gift_shares_user_idx on public.gift_shares(user_id);
+
+-- ---------- Hilfen ----------
+
+-- Sieht u den Wunsch w (und ist nicht selbst die beschenkte Person)?
+create or replace function public.wish_visible_to(w uuid, u uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (
+    select 1 from public.wishes x
+    join public.members mo on mo.user_id = x.owner
+    join public.members m on m.group_id = mo.group_id and m.user_id = u
+    where x.id = w and x.owner <> u
+      and (x.all_groups or exists (
+        select 1 from public.wish_groups wg where wg.wish_id = x.id and wg.group_id = mo.group_id)));
+$$;
+
+create or replace function public.pool_member(w uuid, u uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.gift_shares where wish_id = w and user_id = u);
+$$;
+
+-- Darf u das gemeinsame Geschenk sehen? Nur wer den Wunsch sieht und gefragt ist (offen, eingeladen, dabei, Käufer)
+create or replace function public.pool_visible_to(w uuid, u uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (
+    select 1 from public.gift_pools p
+    where p.wish_id = w and public.wish_visible_to(w, u)
+      and (p.open or p.buyer = u or u = any(p.invited) or public.pool_member(w, u)));
+$$;
+
+create or replace function public.pool_visible(w uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select public.pool_visible_to(w, auth.uid());
+$$;
+
+-- Wer gefragt wird: offen = alle, die den Wunsch sehen; sonst nur die Eingeladenen (die ihn auch sehen)
+create or replace function public.pool_audience(w uuid, p_open boolean, p_invited uuid[]) returns setof uuid
+language sql stable security definer set search_path = '' as $$
+  select distinct m.user_id
+  from public.wishes x
+  join public.members mo on mo.user_id = x.owner
+  join public.members m on m.group_id = mo.group_id
+  where x.id = w and m.user_id <> x.owner
+    and (x.all_groups or exists (select 1 from public.wish_groups wg where wg.wish_id = x.id and wg.group_id = mo.group_id))
+    and (p_open or m.user_id = any(coalesce(p_invited, '{}')));
+$$;
+
+create or replace function public.pool_today() returns date
+language sql stable set search_path = '' as $$
+  select (now() at time zone 'Europe/Berlin')::date;
+$$;
+
+-- Eingeladene bereinigen und prüfen (ohne Doppelte, ohne mich und die beschenkte Person)
+create or replace function public.pool_clean_invited(w uuid, p uuid[]) returns uuid[]
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  res uuid[];
+begin
+  select coalesce(array_agg(distinct u), '{}') into res from unnest(coalesce(p, '{}')) u
+    where u is not null and u <> auth.uid();
+  if cardinality(res) > 60 then raise exception 'Zu viele Eingeladene' using errcode = '54000'; end if;
+  if exists (select 1 from unnest(res) u where not public.wish_visible_to(w, u)) then
+    raise exception 'Person sieht den Wunsch nicht' using errcode = '22023';
+  end if;
+  return res;
+end $$;
+
+create or replace function public.pool_check(p_split text, p_min int, p_deadline date, p_open boolean, p_invited uuid[]) returns void
+language plpgsql stable set search_path = '' as $$
+begin
+  if p_split is null or p_split not in ('equal', 'budget', 'custom') then raise exception 'Aufteilung ungültig' using errcode = '22023'; end if;
+  if p_min is not null and p_min <> 0 and p_min not between 2 and 30 then raise exception 'Mindestzahl ungültig' using errcode = '22023'; end if;
+  if p_deadline is not null and (p_deadline < public.pool_today() or p_deadline > public.pool_today() + 366) then
+    raise exception 'Frist ungültig' using errcode = '22023';
+  end if;
+  if p_open is false and cardinality(coalesce(p_invited, '{}')) = 0 then raise exception 'Niemand ausgewählt' using errcode = '22023'; end if;
+end $$;
+
+-- ---------- Aktionen der App ----------
+
+-- Starten: reserviert den Wunsch (oder übernimmt die eigene Reservierung) und macht selbst mit
+create or replace function public.pool_start(p_wish uuid, p_total numeric, p_split text, p_amount numeric,
+  p_open boolean, p_invited uuid[], p_min int, p_deadline date, p_note text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  holder uuid;
+  inv uuid[];
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet' using errcode = '42501'; end if;
+  if not public.wish_visible_to(p_wish, auth.uid()) then raise exception 'Keine Berechtigung' using errcode = '42501'; end if;
+  if not public.wish_open(p_wish) then raise exception 'Hat die Person schon' using errcode = '22023'; end if;
+  if exists (select 1 from public.gift_pools where wish_id = p_wish) then raise exception 'Läuft schon' using errcode = '23505'; end if;
+  if (select count(*) from public.gift_pools where buyer = auth.uid()) >= 50 then raise exception 'Zu viele gemeinsame Geschenke' using errcode = '54000'; end if;
+  inv := public.pool_clean_invited(p_wish, p_invited);
+  perform public.pool_check(p_split, p_min, p_deadline, p_open, inv);
+  select user_id into holder from public.reservations where wish_id = p_wish for update;
+  if holder is not null and holder <> auth.uid() then raise exception 'Schon reserviert' using errcode = '23505'; end if;
+  if holder is null then insert into public.reservations (wish_id, user_id) values (p_wish, auth.uid()); end if;
+  insert into public.gift_pools (wish_id, buyer, created_by, total, split, open, invited, min_people, deadline, note)
+    values (p_wish, auth.uid(), auth.uid(), p_total, p_split, coalesce(p_open, true), inv,
+            nullif(p_min, 0), p_deadline, nullif(btrim(coalesce(p_note, '')), ''));
+  insert into public.gift_shares (wish_id, user_id, amount) values (p_wish, auth.uid(), p_amount);
+end $$;
+
+-- Ändern (nur der Käufer): Betrag, Aufteilung, wer gefragt ist, Mindestzahl, Frist, Notiz
+create or replace function public.pool_update(p_wish uuid, p_total numeric, p_split text,
+  p_open boolean, p_invited uuid[], p_min int, p_deadline date, p_note text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  inv uuid[];
+  old_deadline date;
+begin
+  select deadline into old_deadline from public.gift_pools where wish_id = p_wish and buyer = auth.uid();
+  if not found then raise exception 'Keine Berechtigung' using errcode = '42501'; end if;
+  inv := public.pool_clean_invited(p_wish, p_invited);
+  -- eine schon abgelaufene Frist darf stehen bleiben
+  perform public.pool_check(p_split, p_min, case when p_deadline = old_deadline then null else p_deadline end, p_open, inv);
+  update public.gift_pools set total = p_total, split = p_split, open = coalesce(p_open, true), invited = inv,
+    min_people = nullif(p_min, 0), deadline = p_deadline, note = nullif(btrim(coalesce(p_note, '')), '')
+  where wish_id = p_wish;
+end $$;
+
+-- Mitmachen oder eigenen Betrag ändern (Betrag leer = flexibel)
+create or replace function public.pool_join(p_wish uuid, p_amount numeric) returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  p public.gift_pools;
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet' using errcode = '42501'; end if;
+  select * into p from public.gift_pools where wish_id = p_wish;
+  if not found or not public.pool_visible(p_wish) then raise exception 'Keine Berechtigung' using errcode = '42501'; end if;
+  if public.pool_member(p_wish, auth.uid()) then
+    update public.gift_shares set amount = p_amount where wish_id = p_wish and user_id = auth.uid();
+    return;
+  end if;
+  if p.deadline is not null and p.deadline < public.pool_today() then raise exception 'Frist abgelaufen' using errcode = '22023'; end if;
+  if (select count(*) from public.gift_shares where wish_id = p_wish) >= 30 then raise exception 'Gemeinsam voll' using errcode = '54000'; end if;
+  insert into public.gift_shares (wish_id, user_id, amount) values (p_wish, auth.uid(), p_amount);
+end $$;
+
+create or replace function public.pool_leave(p_wish uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if exists (select 1 from public.gift_pools where wish_id = p_wish and buyer = auth.uid()) then
+    raise exception 'Käufer kann nicht austreten' using errcode = '22023';
+  end if;
+  delete from public.gift_shares where wish_id = p_wish and user_id = auth.uid();
+end $$;
+
+-- „Bezahlt“ abhaken: für sich selbst oder als Käufer für alle
+create or replace function public.pool_paid(p_wish uuid, p_user uuid, p_on boolean) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not (p_user = auth.uid() or exists (select 1 from public.gift_pools where wish_id = p_wish and buyer = auth.uid())) then
+    raise exception 'Keine Berechtigung' using errcode = '42501';
+  end if;
+  update public.gift_shares set paid_at = case when p_on then coalesce(paid_at, now()) end
+    where wish_id = p_wish and user_id = p_user;
+  if not found then raise exception 'Keine Berechtigung' using errcode = '42501'; end if;
+end $$;
+
+-- Käufer-Rolle abgeben (an jemanden, der mitmacht); die Reservierung wandert mit
+create or replace function public.pool_handover(p_wish uuid, p_user uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not exists (select 1 from public.gift_pools where wish_id = p_wish and buyer = auth.uid()) then
+    raise exception 'Keine Berechtigung' using errcode = '42501';
+  end if;
+  if p_user = auth.uid() or not public.pool_member(p_wish, p_user) or not public.wish_visible_to(p_wish, p_user) then
+    raise exception 'Macht nicht mit' using errcode = '22023';
+  end if;
+  update public.reservations set user_id = p_user where wish_id = p_wish;
+  update public.gift_pools set buyer = p_user where wish_id = p_wish;
+end $$;
+
+-- Absagen (nur der Käufer): Reservierung weg, Wunsch wieder frei
+create or replace function public.pool_cancel(p_wish uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not exists (select 1 from public.gift_pools where wish_id = p_wish and buyer = auth.uid()) then
+    raise exception 'Keine Berechtigung' using errcode = '42501';
+  end if;
+  delete from public.reservations where wish_id = p_wish;
+end $$;
+
+-- ---------- Benachrichtigungen ----------
+
+-- Gefragt werden (beim Start, beim Öffnen für alle, für neu Eingeladene)
+create or replace function public.push_on_pool() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'UPDATE' and new.open is not distinct from old.open and new.invited is not distinct from old.invited then
+    return null;
+  end if;
+  insert into public.push_outbox (user_id, kind, ref, tag, actor, wish_id, extra)
+    select u, 'pool', new.wish_id || ':ask:' || floor(extract(epoch from new.created_at)), 'pool-ask-' || new.wish_id,
+           new.buyer, new.wish_id, 'ask'
+    from public.pool_audience(new.wish_id, new.open, new.invited) u
+    where u <> new.buyer and not public.pool_member(new.wish_id, u)
+      and (tg_op = 'INSERT' or u not in (select public.pool_audience(old.wish_id, old.open, old.invited)))
+      and public.push_wants(u, 'pool')
+    on conflict do nothing;
+  return null;
+end $$;
+drop trigger if exists push_pool on public.gift_pools;
+create trigger push_pool after insert or update of open, invited on public.gift_pools
+  for each row execute function public.push_on_pool();
+
+-- Jemand macht mit → an den Käufer (gebündelt)
+create or replace function public.push_on_share() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  insert into public.push_outbox (user_id, kind, ref, tag, actor, wish_id, extra)
+    select p.buyer, 'pool', new.wish_id || ':join:' || new.user_id || ':' || floor(extract(epoch from p.created_at)),
+           'pool-join-' || new.wish_id, new.user_id, new.wish_id, 'join'
+    from public.gift_pools p
+    where p.wish_id = new.wish_id and p.buyer <> new.user_id and public.push_wants(p.buyer, 'pool')
+    on conflict do nothing;
+  return null;
+end $$;
+drop trigger if exists push_share on public.gift_shares;
+create trigger push_share after insert on public.gift_shares
+  for each row execute function public.push_on_share();
+
+-- Gekauft (an alle, die mitmachen) und Käufer gewechselt (an den neuen)
+create or replace function public.push_on_pool_res() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.status = 'gekauft' and old.status is distinct from 'gekauft' then
+    insert into public.push_outbox (user_id, kind, ref, tag, actor, wish_id, extra)
+      select s.user_id, 'pool', new.wish_id || ':bought:' || floor(extract(epoch from p.created_at)),
+             'pool-bought-' || new.wish_id, new.user_id, new.wish_id, 'bought'
+      from public.gift_pools p join public.gift_shares s on s.wish_id = p.wish_id
+      where p.wish_id = new.wish_id and s.user_id <> new.user_id and public.push_wants(s.user_id, 'pool')
+      on conflict do nothing;
+  end if;
+  if new.user_id is distinct from old.user_id then
+    insert into public.push_outbox (user_id, kind, ref, tag, actor, wish_id, extra)
+      select new.user_id, 'pool', new.wish_id || ':buyer:' || new.user_id || ':' || floor(extract(epoch from now())),
+             'pool-buyer-' || new.wish_id, old.user_id, new.wish_id, 'buyer'
+      from public.gift_pools p
+      where p.wish_id = new.wish_id and public.push_wants(new.user_id, 'pool')
+      on conflict do nothing;
+  end if;
+  return null;
+end $$;
+drop trigger if exists push_pool_res on public.reservations;
+create trigger push_pool_res after update of status, user_id on public.reservations
+  for each row execute function public.push_on_pool_res();
+
+-- Abgesagt (oder der Wunsch ist weg) → an alle, die mitmachen, außer wer es auslöst.
+-- Titel und Namen werden jetzt gemerkt, weil Wunsch und Gemeinschaft beim Versand nicht mehr da sind.
+create or replace function public.push_on_pool_end() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare
+  info jsonb;
+begin
+  select jsonb_build_object('t', w.title, 'o', public.push_name(w.owner), 'b', public.push_name(old.buyer))
+    into info from public.wishes w where w.id = old.wish_id;
+  insert into public.push_outbox (user_id, kind, ref, tag, actor, wish_id, extra, info)
+    select s.user_id, 'pool', old.wish_id || ':cancel:' || floor(extract(epoch from old.created_at)),
+           'pool-cancel-' || old.wish_id, auth.uid(), old.wish_id, case when info is null then 'gone' else 'cancel' end, info
+    from public.gift_shares s
+    where s.wish_id = old.wish_id and s.user_id is distinct from auth.uid() and public.push_wants(s.user_id, 'pool')
+    on conflict do nothing;
+  return old;
+end $$;
+drop trigger if exists push_pool_end on public.gift_pools;
+create trigger push_pool_end before delete on public.gift_pools
+  for each row execute function public.push_on_pool_end();
+
+-- Täglich (aus push_daily): Frist gestern abgelaufen und zu wenige dabei → an den Käufer
+create or replace function public.pool_due(p_today date) returns int
+language plpgsql security definer set search_path = '' as $$
+declare
+  n int;
+begin
+  insert into public.push_outbox (user_id, kind, ref, tag, wish_id, extra)
+    select p.buyer, 'pool', p.wish_id || ':due:' || p.deadline, 'pool-due-' || p.wish_id, p.wish_id, 'due'
+    from public.gift_pools p
+    where p.deadline = p_today - 1 and p.min_people is not null
+      and (select count(*) from public.gift_shares s where s.wish_id = p.wish_id) < p.min_people
+      and public.push_wants(p.buyer, 'pool')
+    on conflict do nothing;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+-- Text zum Zeitpunkt des Versands (null = nichts mehr zu sagen)
+create or replace function public.pool_message(p_user uuid, p_tag text, p_delta int) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  o public.push_outbox;
+  p public.gift_pools;
+  t text;
+  owner uuid;
+  n int;
+  names text[];
+  url text;
+begin
+  select * into o from public.push_outbox x
+    where x.user_id = p_user and x.tag = p_tag and x.kind = 'pool' order by x.id desc limit 1;
+  if not found then return null; end if;
+  if o.extra in ('cancel', 'gone') then
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
+      'title', 'Gemeinsames Geschenk abgesagt',
+      'body', case when o.extra = 'gone' then 'Der Wunsch steht nicht mehr auf der Liste.'
+                   else '„' || (o.info ->> 't') || '“ für ' || (o.info ->> 'o') || '. Abgesagt von ' || (o.info ->> 'b') || '.' end,
+      'url', '#/');
+  end if;
+  select * into p from public.gift_pools where wish_id = o.wish_id;
+  if not found or not public.pool_visible_to(o.wish_id, p_user) then return null; end if;
+  select w.title, w.owner into t, owner from public.wishes w where w.id = o.wish_id;
+  select count(*) into n from public.gift_shares where wish_id = o.wish_id;
+  url := '#/gemeinsam/' || o.wish_id;
+  if o.extra = 'ask' then
+    if public.pool_member(o.wish_id, p_user) then return null; end if;
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 1,
+      'title', public.push_name(p.buyer) || ' fragt, ob du mitmachst',
+      'body', '„' || t || '“ gemeinsam für ' || public.push_name(owner) || ' schenken',
+      'url', url);
+  elsif o.extra = 'join' then
+    if p.buyer <> p_user then return null; end if;
+    select array_agg(public.push_name(x.actor) order by x.id) into names
+      from public.push_outbox x
+      where x.user_id = p_user and x.tag = p_tag and x.sent_at is not null and x.created_at > now() - interval '1 hour'
+        and public.pool_member(o.wish_id, x.actor);
+    if coalesce(cardinality(names), 0) = 0 then return null; end if;
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
+      'title', case when cardinality(names) = 1 then names[1] || ' macht mit' else public.push_list(names) || ' machen mit' end,
+      'body', '„' || t || '“ für ' || public.push_name(owner) || ' · ' || n || ' dabei',
+      'url', url);
+  elsif o.extra = 'bought' then
+    if not public.pool_member(o.wish_id, p_user) or p.buyer = p_user then return null; end if;
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
+      'title', public.push_name(p.buyer) || ' hat „' || t || '“ gekauft',
+      'body', 'Gemeinsames Geschenk für ' || public.push_name(owner) || '. Denk an deinen Anteil.',
+      'url', url);
+  elsif o.extra = 'buyer' then
+    if p.buyer <> p_user then return null; end if;
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
+      'title', 'Du kaufst jetzt „' || t || '“',
+      'body', public.push_name(o.actor) || ' hat dir das gemeinsame Geschenk für ' || public.push_name(owner) || ' übergeben.',
+      'url', url);
+  elsif o.extra = 'due' then
+    if p.buyer <> p_user or p.min_people is null or n >= p.min_people then return null; end if;
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
+      'title', 'Frist für „' || t || '“ ist um',
+      'body', n || ' von ' || p.min_people || ' dabei. Entscheide, wie es weitergeht.',
+      'url', url);
+  end if;
+  return null;
+end $$;
+
+-- ---------- Zugriffsregeln ----------
+
+alter table public.gift_pools enable row level security;
+alter table public.gift_shares enable row level security;
+
+drop policy if exists "gemeinsam lesen" on public.gift_pools;
+drop policy if exists "anteile lesen" on public.gift_shares;
+create policy "gemeinsam lesen" on public.gift_pools for select to authenticated
+  using (public.pool_visible(wish_id));
+create policy "anteile lesen" on public.gift_shares for select to authenticated
+  using (public.pool_visible(wish_id));
+-- Schreiben nur über die Funktionen oben
+
+revoke all on public.gift_pools, public.gift_shares from anon, authenticated;
+grant select on public.gift_pools, public.gift_shares to authenticated;
+
+revoke execute on function public.wish_visible_to(uuid, uuid), public.pool_member(uuid, uuid),
+  public.pool_visible_to(uuid, uuid), public.pool_visible(uuid), public.pool_audience(uuid, boolean, uuid[]),
+  public.pool_today(), public.pool_clean_invited(uuid, uuid[]), public.pool_check(text, int, date, boolean, uuid[]),
+  public.pool_start(uuid, numeric, text, numeric, boolean, uuid[], int, date, text),
+  public.pool_update(uuid, numeric, text, boolean, uuid[], int, date, text),
+  public.pool_join(uuid, numeric), public.pool_leave(uuid), public.pool_paid(uuid, uuid, boolean),
+  public.pool_handover(uuid, uuid), public.pool_cancel(uuid),
+  public.push_on_pool(), public.push_on_share(), public.push_on_pool_res(), public.push_on_pool_end(),
+  public.pool_due(date), public.pool_message(uuid, text, int)
+  from public, anon, authenticated;
+grant execute on function public.pool_visible(uuid),
+  public.pool_start(uuid, numeric, text, numeric, boolean, uuid[], int, date, text),
+  public.pool_update(uuid, numeric, text, boolean, uuid[], int, date, text),
+  public.pool_join(uuid, numeric), public.pool_leave(uuid), public.pool_paid(uuid, uuid, boolean),
+  public.pool_handover(uuid, uuid), public.pool_cancel(uuid) to authenticated;

@@ -661,3 +661,40 @@ label.check small { display: block; font-size: 13px; color: var(--text-3); font-
 .sblink.inlist { margin-top: 22px; }
 .sbhint { margin-top: 12px; }
 .hero-early { margin-top: 4px; }
+
+/* Gemeinsam schenken (1.13) */
+.tag.ok { background: var(--res-bg); color: var(--res); }
+.row-meta .tag { margin-right: 6px; }
+.card.poolwish { margin-bottom: 14px; }
+.poolsum { padding: 16px; margin-top: 14px; }
+.poolbig { display: flex; align-items: baseline; gap: 8px; }
+.poolbig b { font: 600 30px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.poolbig span { color: var(--text-2); font-weight: 700; }
+.poolsum progress { margin: 14px 0 2px; }
+.poolgap { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; font-size: 14px; font-weight: 800; color: var(--text-2); }
+.poolgap.warn { color: var(--danger); }
+.poolgap .ic { width: 16px; height: 16px; }
+.poolsum .facts { margin-top: 12px; }
+.poolamt { flex: none; font: 600 17px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.poolme { padding: 16px; }
+.poolmine { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0; }
+.poolmine span { color: var(--text-2); font-weight: 700; }
+.poolmine b { font: 600 26px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.poolme .muted { margin: 8px 0 0; font-size: 14px; line-height: 1.4; }
+.poolme > label { margin-top: 0; }
+.poolme > .primary { margin-top: 14px; }
+.poolamtform { align-items: flex-end; margin-top: 12px; }
+.poolamtform label { flex: 1; min-width: 0; }
+.poolbtns { margin-top: 12px; }
+.poolchoice { margin: -4px 0 14px; }
+.poolconv { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 4px 0; font-size: 14px; }
+.poolconv .ic { width: 17px; height: 17px; }
+.fhelp { font-size: 13.5px; font-weight: 600; margin: 8px 0 0; line-height: 1.4; }
+.poolhand { padding: 8px 14px 12px; }
+.poolhand > .muted { margin: 8px 0 4px; font-weight: 700; }
+.plainbtn { width: 100%; min-height: 0; padding: 10px 0; background: none; border: 0; box-shadow: none; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.plainbtn + .plainbtn { border-top: 2px solid var(--line); }
+.poolhand .ghost { margin-top: 6px; }
+.poolask .link { flex: none; font-size: 14px; }
+.acts .withicon .ic { width: 17px; height: 17px; }
+.acts { flex-wrap: wrap; justify-content: flex-end; }

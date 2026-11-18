@@ -778,5 +778,197 @@ _, c2, _ = run(f"select count(*) from public.profile_card_vis where owner = '{P}
 check('Steckbrief: Konto löschen löscht Steckbrief und Regeln', c == '0' and c2 == '0')
 
 
+# ---------- Gemeinsam schenken (1.13) ----------
+VE, WI, XE, YA, ZO = (str(uuid.uuid4()) for _ in range(5))
+run('truncate public.push_outbox, net.calls;')
+for u, n in ((VE, 'Vera'), (WI, 'Wim'), (XE, 'Xenia'), (YA, 'Yann'), (ZO, 'Zoe')):
+    run(f"insert into auth.users (id, email) values ('{u}', '{n.lower()}@x.de');")
+    as_exec(u, f"insert into public.profiles (id, name) values ('{u}', '{n}')")
+    rpc(u, f"public.push_subscribe('{ep('pool-' + n)}', '{P256}', '{AUTH}')")
+ok, r = as_user(VE, "select * from public.create_group('Geschwister')")
+gg = r[0]
+for u in (WI, XE, YA):
+    as_user(u, f"select public.join_group('{gg['code']}') as g")
+ok, r = as_user(ZO, "select * from public.create_group('Zoes')")
+as_user(WI, f"select public.join_group('{r[0]['code']}') as g")
+TODAY = "((now() at time zone 'Europe/Berlin')::date)"
+
+
+def mkwish(title, price='60'):
+    ok, r = as_user(VE, f"insert into public.wishes (title, price) values ('{title}', {price}) returning id")
+    return r[0]['id']
+
+
+def start(u, w, total='60', split='equal', amount='null', open_='true', invited="'{}'::uuid[]", mn='null', dl='null', note="'Zusammen'"):
+    return rpc(u, f"public.pool_start('{w}', {total}, '{split}', {amount}, {open_}, {invited}, {mn}, {dl}, {note})")
+
+
+def pools(u):
+    ok, r = as_user(u, 'select wish_id, buyer, split, total from public.gift_pools')
+    return {x['wish_id']: x for x in r} if ok else r
+
+
+def shares(u, w):
+    ok, r = as_user(u, f"select user_id, amount, paid_at from public.gift_shares where wish_id = '{w}'")
+    return {x['user_id']: x for x in r} if ok else r
+
+
+def res_of(w):
+    _, out, _ = run(f"select coalesce(user_id::text, '') || ':' || status from public.reservations where wish_id = '{w}'")
+    return out
+
+
+def pool_out(extra, w):
+    return {o['user_id'] for o in outbox(f"kind = 'pool' and extra = '{extra}' and wish_id = '{w}'")}
+
+
+vw = mkwish('Kamera', '300')
+ok, _ = start(VE, vw)
+check('Gemeinsam: nicht für den eigenen Wunsch', not ok)
+ok, _ = start(ZO, vw)
+check('Gemeinsam: nur wer den Wunsch sieht', not ok)
+ok, _ = start(WI, vw, split='alles')
+ok2, _ = start(WI, vw, mn='1')
+ok3, _ = start(WI, vw, dl=f'{TODAY} - 1')
+ok4, _ = start(WI, vw, open_='false')
+ok5, _ = start(WI, vw, total='0')
+check('Gemeinsam: ungültige Angaben abgelehnt', not (ok or ok2 or ok3 or ok4 or ok5))
+check('Gemeinsam: nach Fehlern keine Reservierung', res_of(vw) == '')
+ok, _ = start(WI, vw, total='300', mn='3', dl=f'{TODAY} + 5')
+check('Gemeinsam: Wim startet', ok)
+check('Gemeinsam: Wunsch ist sofort reserviert', res_of(vw) == f'{WI}:reserviert')
+check('Gemeinsam: Wim macht selbst mit', set(shares(WI, vw)) == {WI})
+ok, _ = start(XE, vw)
+check('Gemeinsam: zweimal starten geht nicht', not ok)
+check('Gemeinsam: Vera sieht nichts', pools(VE) == {} and shares(VE, vw) == {})
+check('Gemeinsam: Xenia und Yann sehen es', vw in pools(XE) and vw in pools(YA))
+check('Gemeinsam: Zoe sieht es nicht', pools(ZO) == {})
+check('Gemeinsam: Anfrage an Xenia und Yann, nicht an Vera', pool_out('ask', vw) == {XE, YA})
+ok, _ = as_exec(YA, f"insert into public.reservations (wish_id) values ('{vw}')")
+check('Gemeinsam: allein reservieren geht nicht mehr', not ok)
+ok, _ = as_exec(YA, f"insert into public.gift_shares (wish_id, user_id) values ('{vw}', '{YA}')")
+ok2, _ = as_exec(YA, f"update public.gift_pools set total = 1 where wish_id = '{vw}'")
+_, t, _ = run(f"select total from public.gift_pools where wish_id = '{vw}'")
+check('Gemeinsam: kein direktes Schreiben', not ok and t == '300.00')
+ok, _ = rpc(VE, f"public.pool_join('{vw}', null)")
+check('Gemeinsam: Vera kann nicht mitmachen', not ok)
+ok, _ = rpc(XE, f"public.pool_join('{vw}', 0)")
+check('Gemeinsam: Betrag 0 abgelehnt', not ok)
+ok, _ = rpc(XE, f"public.pool_join('{vw}', 80)")
+check('Gemeinsam: Xenia macht mit', ok and float(shares(WI, vw)[XE]['amount']) == 80)
+ok, _ = rpc(XE, f"public.pool_join('{vw}', null)")
+check('Gemeinsam: Betrag ändern (leer = flexibel)', ok and shares(WI, vw)[XE]['amount'] is None)
+check('Gemeinsam: Wim bekommt „macht mit“', pool_out('join', vw) == {WI})
+ok, _ = rpc(XE, f"public.pool_update('{vw}', 200, 'equal', true, '{{}}'::uuid[], null, null, null)")
+ok2, _ = rpc(XE, f"public.pool_cancel('{vw}')")
+ok3, _ = rpc(XE, f"public.pool_paid('{vw}', '{WI}', true)")
+check('Gemeinsam: nur der Käufer ändert, sagt ab und hakt für andere ab', not (ok or ok2 or ok3))
+ok, _ = rpc(XE, f"public.pool_paid('{vw}', '{XE}', true)")
+check('Gemeinsam: selbst „bezahlt“ abhaken', ok and shares(WI, vw)[XE]['paid_at'])
+ok, _ = rpc(WI, f"public.pool_paid('{vw}', '{XE}', false)")
+check('Gemeinsam: Käufer nimmt „bezahlt“ zurück', ok and not shares(WI, vw)[XE]['paid_at'])
+ok, _ = rpc(WI, f"public.pool_paid('{vw}', '{YA}', true)")
+check('Gemeinsam: abhaken nur für Beteiligte', not ok)
+ok, _ = rpc(WI, f"public.pool_leave('{vw}')")
+check('Gemeinsam: Käufer kann nicht austreten', not ok)
+ok, _ = rpc(WI, f"public.pool_update('{vw}', 240, 'budget', true, '{{}}'::uuid[], 3, {TODAY} + 5, 'Neu')")
+_, t, _ = run(f"select total || split from public.gift_pools where wish_id = '{vw}'")
+check('Gemeinsam: Käufer ändert Betrag und Aufteilung', ok and t == '240.00budget')
+
+# Nur bestimmte Leute
+vw2 = mkwish('Lampe')
+ok, _ = start(XE, vw2, invited=f"array['{ZO}']::uuid[]", open_='false')
+ok2, _ = start(XE, vw2, invited=f"array['{VE}']::uuid[]", open_='false')
+check('Gemeinsam: nur Leute einladen, die den Wunsch sehen (nicht Vera)', not ok and not ok2)
+ok, _ = start(XE, vw2, invited=f"array['{YA}']::uuid[]", open_='false')
+check('Gemeinsam: Xenia fragt nur Yann', ok)
+check('Gemeinsam: Wim sieht die Anfrage nicht', vw2 not in pools(WI) and res_of(vw2).startswith(XE))
+check('Gemeinsam: Yann sieht sie', vw2 in pools(YA))
+check('Gemeinsam: Anfrage nur an Yann', pool_out('ask', vw2) == {YA})
+ok, _ = rpc(WI, f"public.pool_join('{vw2}', null)")
+check('Gemeinsam: ohne Einladung nicht mitmachen', not ok)
+ok, _ = rpc(XE, f"public.pool_update('{vw2}', 60, 'equal', false, array['{YA}', '{WI}']::uuid[], null, null, null)")
+check('Gemeinsam: Wim dazu eingeladen, nur er wird neu gefragt', ok and pool_out('ask', vw2) == {YA, WI}
+      and len(outbox(f"kind = 'pool' and extra = 'ask' and wish_id = '{vw2}'")) == 2)
+rpc(YA, f"public.pool_join('{vw2}', null)")
+ok, _ = rpc(YA, f"public.pool_leave('{vw2}')")
+check('Gemeinsam: Yann tritt wieder aus', ok and YA not in shares(XE, vw2))
+ok, _ = rpc(WI, f"public.pool_join('{vw2}', 20)")
+ok2, _ = rpc(XE, f"public.pool_update('{vw2}', 60, 'equal', false, array['{YA}']::uuid[], null, null, null)")
+check('Gemeinsam: wer mitmacht, sieht es weiter, auch ohne Einladung', ok and ok2 and vw2 in pools(WI))
+
+# Käufer wechseln, gekauft, „Hab ich schon“
+ok, _ = rpc(WI, f"public.pool_handover('{vw}', '{YA}')")
+check('Gemeinsam: abgeben nur an Beteiligte', not ok)
+ok, _ = rpc(WI, f"public.pool_handover('{vw}', '{XE}')")
+check('Gemeinsam: Wim gibt an Xenia ab', ok and res_of(vw) == f'{XE}:reserviert' and pools(WI)[vw]['buyer'] == XE)
+check('Gemeinsam: Xenia bekommt „Du kaufst jetzt“', pool_out('buyer', vw) == {XE})
+ok, _ = as_exec(WI, f"update public.reservations set status = 'gekauft' where wish_id = '{vw}'")
+check('Gemeinsam: Wim kann nicht mehr als gekauft markieren', res_of(vw).endswith('reserviert'))
+ok, _ = as_exec(XE, f"update public.reservations set status = 'gekauft' where wish_id = '{vw}'")
+check('Gemeinsam: gekauft geht an Wim, nicht an Xenia', ok and pool_out('bought', vw) == {WI})
+as_exec(VE, f"update public.wishes set have_at = now() where id = '{vw}'")
+check('Gemeinsam: „Hab ich schon“ an Käuferin und Beteiligte',
+      {o['user_id'] for o in outbox(f"kind = 'have' and wish_id = '{vw}'")} == {WI, XE})
+
+# Eigene Reservierung umwandeln, fremde nicht
+vw4 = mkwish('Rucksack')
+as_exec(YA, f"insert into public.reservations (wish_id) values ('{vw4}')")
+ok, _ = start(WI, vw4)
+ok2, _ = start(YA, vw4, split='custom', amount='25')
+check('Gemeinsam: fremde Reservierung nicht übernehmen, eigene umwandeln', not ok and ok2 and vw4 in pools(WI))
+
+# Frist
+vw3 = mkwish('Theater')
+start(WI, vw3, mn='3', dl=TODAY)
+run(f"update public.gift_pools set deadline = {TODAY} - 2 where wish_id = '{vw3}'")
+ok, _ = rpc(YA, f"public.pool_join('{vw3}', null)")
+check('Gemeinsam: nach der Frist nicht mehr beitreten', not ok)
+ok, _ = rpc(WI, f"public.pool_update('{vw3}', 60, 'equal', true, '{{}}'::uuid[], null, {TODAY} - 2, null)")
+check('Gemeinsam: trotzdem schenken (Frist bleibt stehen)', ok)
+ok, _ = rpc(WI, f"public.pool_update('{vw3}', 60, 'equal', true, '{{}}'::uuid[], 3, {TODAY} - 1, null)")
+check('Gemeinsam: neue Frist in der Vergangenheit abgelehnt', not ok)
+ok, _ = rpc(WI, f"public.pool_update('{vw3}', 60, 'equal', true, '{{}}'::uuid[], 3, {TODAY} + 3, null)")
+ok2, _ = rpc(YA, f"public.pool_join('{vw3}', null)")
+check('Gemeinsam: Frist verlängert, Yann macht mit', ok and ok2)
+run(f"update public.gift_pools set deadline = {TODAY} - 1 where wish_id = '{vw3}'")
+ok, n = rpc(None, f"public.pool_due({TODAY})", role='postgres')
+check('Gemeinsam: Frist um, zu wenige → Hinweis an Wim', ok and n == 1 and pool_out('due', vw3) == {WI})
+ok, n = rpc(None, f"public.pool_due({TODAY})", role='postgres')
+check('Gemeinsam: Fristhinweis nur einmal', n == 0)
+
+# Texte beim Versand
+ok, r = as_user(None, 'select public.push_claim(500) as r', role='service_role')
+msgs = r[0]['r']['items'] if ok else []
+pv = lambda: {s['endpoint']: m['message'] for m in msgs for s in m['subs']}
+mm = pv()
+check('Gemeinsam: keine Nachricht an Vera', not any(m['message']['kind'] in ('pool', 'have') for m in msgs
+                                                  if any(x['endpoint'] == ep('pool-Vera') for x in m['subs'])))
+txt = json.dumps([m['message'] for m in msgs], ensure_ascii=False)
+check('Gemeinsam: Texte für Anfrage, Mitmachen, Käufer, gekauft, Frist',
+      'Xenia fragt, ob du mitmachst' in txt and 'Wim macht mit' in txt and 'Du kaufst jetzt „Kamera“' in txt
+      and 'Xenia hat „Kamera“ gekauft' in txt and 'Frist für „Theater“ ist um' in txt)
+check('Gemeinsam: Teilnehmer bekommt „schon“ mit Hinweis auf Käuferin', 'Sprich dich mit Xenia ab' in txt)
+check('Gemeinsam: Links führen zur Seite des Geschenks', f'#/gemeinsam/{vw}' in txt)
+
+# Absagen und Wunsch gelöscht
+run('truncate public.push_outbox, net.calls;')
+ok, _ = rpc(XE, f"public.pool_cancel('{vw2}')")
+check('Gemeinsam: Xenia sagt ab, Wunsch wieder frei', ok and res_of(vw2) == '' and vw2 not in pools(WI))
+check('Gemeinsam: Absage an Wim', pool_out('cancel', vw2) == {WI})
+as_exec(VE, f"delete from public.wishes where id = '{vw3}'")
+check('Gemeinsam: Wunsch gelöscht → Hinweis an Beteiligte', pool_out('gone', vw3) == {WI, YA})
+as_exec(YA, f"delete from public.reservations where wish_id = '{vw4}'")
+check('Gemeinsam: Reservierung freigeben löst auch die Gemeinschaft auf', vw4 not in pools(WI))
+ok, r = as_user(None, 'select public.push_claim(500) as r', role='service_role')
+txt = json.dumps([m['message'] for m in r[0]['r']['items']], ensure_ascii=False)
+check('Gemeinsam: Absage-Texte', 'Abgesagt von Xenia' in txt and 'nicht mehr auf der Liste' in txt)
+ok, _ = as_exec(WI, "update public.push_prefs set pool = false")
+as_exec(WI, "insert into public.push_prefs (pool) values (false) on conflict (user_id) do update set pool = false")
+vw5 = mkwish('Tasse')
+start(XE, vw5)
+check('Gemeinsam: Einstellung aus = keine Anfrage', pool_out('ask', vw5) == {YA})
+
+
 print('\nAlle Tests grün' if not fails else f'\n{fails} Fehler')
 sys.exit(1 if fails else 0)

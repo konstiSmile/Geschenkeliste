@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.12';
+const VERSION = '1.13';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -19,7 +19,7 @@ let sbPending = 0;         // laufende Speichervorgänge im Steckbrief
 let fresh = null;         // neu erzeugter Wiederherstellungscode {code, username, reason}, nur im Speicher
 
 function emptyData() {
-  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], pp: null, ps: null, ip: [], ideas: [], card: null, cardVis: [], cards: {}, at: 0, loaded: false };
+  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], pp: null, ps: null, ip: [], ideas: [], card: null, cardVis: [], cards: {}, pools: [], shares: [], at: 0, loaded: false };
 }
 function loadState() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; }
@@ -170,6 +170,17 @@ function errText(j, status) {
   if (/Push-Adresse ungültig/.test(m)) return 'Dieser Browser wird für Benachrichtigungen nicht unterstützt.';
   if (/Schlüssel ungültig|Adresse ungültig|Absender ungültig/.test(m)) return 'Die Schlüssel ließen sich nicht speichern.';
   if (/Code nicht gefunden/.test(m)) return 'Diesen Gruppen-Code gibt es nicht.';
+  if (/Frist abgelaufen/.test(m)) return 'Die Frist zum Mitmachen ist abgelaufen.';
+  if (/Frist ungültig/.test(m)) return 'Die Frist muss heute oder später sein, höchstens ein Jahr.';
+  if (/Niemand ausgewählt/.test(m)) return 'Wähle mindestens eine Person aus.';
+  if (/Person sieht den Wunsch nicht/.test(m)) return 'Eine ausgewählte Person sieht diesen Wunsch nicht.';
+  if (/Käufer kann nicht austreten/.test(m)) return 'Wer kauft, kann nicht austreten. Gib das Kaufen vorher ab oder sag ab.';
+  if (/Macht nicht mit/.test(m)) return 'Diese Person macht nicht mit.';
+  if (/Gemeinsam voll/.test(m)) return 'Mehr als 30 Leute gehen nicht.';
+  if (/Zu viele Eingeladene/.test(m)) return 'Höchstens 60 Personen.';
+  if (/Zu viele gemeinsame/.test(m)) return 'Du kaufst schon 50 gemeinsame Geschenke.';
+  if (/Hat die Person schon/.test(m)) return 'Das hat die Person schon.';
+  if (/Aufteilung ungültig|Mindestzahl ungültig/.test(m)) return 'Bitte die Angaben prüfen.';
   if (/Zu viele Gruppen/.test(m)) return 'Du hast schon 20 Gruppen angelegt.';
   if (/anonymous/i.test(m) && /disabled/i.test(m)) return 'Start ohne Mail ist in Supabase noch nicht eingeschaltet.';
   return m ? 'Fehler: ' + m : 'Fehler (' + status + ')';
@@ -271,7 +282,7 @@ async function passwordLogin(username, password) {
 async function sync(quiet) {
   if (!S.session) return;
   try {
-    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards] = await Promise.all([
+    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards, pools, shares] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
       sb('/rest/v1/groups?select=id,name,code,created_by,created_at&order=created_at'),
       sb('/rest/v1/members?select=group_id,user_id,joined_at&order=joined_at'),
@@ -289,14 +300,18 @@ async function sync(quiet) {
       sb('/rest/v1/wichtel_exclusions?select=group_id,a,b,created_at&order=created_at').catch(() => []),
       sb('/rest/v1/wichtel_out?select=group_id,user_id').catch(() => []),
       // Benachrichtigungen ab 1.9
-      sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have').catch(() => null),
+      sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have,pool')
+        .catch(() => sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have')).catch(() => null),
       // Private Ideenliste ab 1.11 (nur eigene Zeilen)
       sb('/rest/v1/idea_people?select=id,name,linked_user,created_at&order=created_at').catch(() => null),
       sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at&order=created_at.desc').catch(() => null),
       // Steckbrief ab 1.12: eigener (Tabelle), Sichtbarkeit, die der anderen (gefiltert über card_list)
       sb('/rest/v1/profile_cards?select=data,stamps').catch(() => null),
       sb('/rest/v1/profile_card_vis?select=item,mode,users,groups').catch(() => null),
-      sb('/rest/v1/rpc/card_list', { method: 'POST', body: {} }).catch(() => null)
+      sb('/rest/v1/rpc/card_list', { method: 'POST', body: {} }).catch(() => null),
+      // Gemeinsam schenken ab 1.13 (nur was ich sehen darf)
+      sb('/rest/v1/gift_pools?select=wish_id,buyer,created_by,total,split,open,invited,min_people,deadline,note,created_at').catch(() => null),
+      sb('/rest/v1/gift_shares?select=wish_id,user_id,amount,paid_at,joined_at&order=joined_at').catch(() => null)
     ]);
     const ps = admin === true ? await sb('/rest/v1/rpc/push_status', { method: 'POST', body: {} }).catch(() => null) : null;
     if (!S.session) return;
@@ -305,7 +320,8 @@ async function sync(quiet) {
       ip: ip || [], ideas: ideas || [], ideasOk: !!(ip && ideas),
       // Während ein Feld gespeichert wird, bleibt der lokale Stand (sonst springt die Auswahl kurz zurück)
       card: sbPending ? D.card : (card && card[0] ? card[0] : null), cardVis: cardVis || [], cardOk: !!(card && cardVis),
-      cards: cards && typeof cards === 'object' ? cards : {}, cardsOk: !!cards, at: Date.now(), loaded: true };
+      cards: cards && typeof cards === 'object' ? cards : {}, cardsOk: !!cards,
+      pools: pools || [], shares: shares || [], poolsOk: !!(pools && shares), at: Date.now(), loaded: true };
     S.cache = { uid: me(), D };
     saveState();
     seenSync();
@@ -722,6 +738,7 @@ const PREFS = [
   ['member', 'Neue Mitglieder', 'Wenn jemand beitritt'],
   ['draw', 'Wichteln', 'Wenn ausgelost wurde'],
   ['have', 'Schon vorhanden', 'Bei etwas, das du reserviert hast'],
+  ['pool', 'Gemeinsam schenken', 'Anfragen, wer mitmacht, gekauft'],
   ['remind', 'Erinnerung vor Heiligabend', '14, 7 und 1 Tag vorher']
 ];
 const PUSH_OFF = 'geschenkeliste-push-aus';   // auf diesem Gerät bewusst ausgeschaltet
@@ -1033,6 +1050,14 @@ function viewHome() {
   const errHtml = nErr ? `${haveWarn}<ul class="rows">${errands.map(({ r, w }) => {
     const g = groupFor(w);
     const done = r.status === 'gekauft';
+    const pool = poolOf(w.id);
+    if (pool) {
+      return `<li class="row-item ${done ? 'done' : ''}">
+        <button class="tick ${done ? 'on' : ''}" data-act="resstatus" data-id="${w.id}" data-s="${done ? 'reserviert' : 'gekauft'}" aria-label="${done ? 'Doch nicht gekauft' : 'Als gekauft markieren'}">${icon('check')}</button>
+        <a class="row-main" href="#/gemeinsam/${w.id}"><span class="row-title">${esc(w.title)}</span><span class="row-meta ${w.have_at ? 'warn' : ''}">für ${esc(nameOf(w.owner))} · ${w.have_at ? `hat ${esc(nameOf(w.owner))} schon` : `gemeinsam, ${sharesOf(w.id).length} dabei${done ? ' · gekauft' : ''}`}</span></a>
+        ${avatar(w.owner, 'sm')}
+      </li>`;
+    }
     return `<li class="row-item ${done ? 'done' : ''}">
         <button class="tick ${done ? 'on' : ''}" data-act="resstatus" data-id="${w.id}" data-s="${done ? 'reserviert' : 'gekauft'}" aria-label="${done ? 'Doch nicht gekauft' : 'Als gekauft markieren'}">${icon('check')}</button>
         <a class="row-main" href="${g ? `#/g/${g}/p/${w.owner}` : '#/'}"><span class="row-title">${esc(w.title)}</span><span class="row-meta ${w.have_at ? 'warn' : ''}">für ${esc(nameOf(w.owner))} · ${w.have_at ? `hat ${esc(nameOf(w.owner))} schon` : (done ? 'gekauft' : 'reserviert')}</span></a>
@@ -1073,7 +1098,7 @@ function viewHome() {
       : `<p class="empty-line">Sobald jemand aus deinen Gruppen etwas einträgt, erscheint es hier.</p>`;
   }
 
-  return shell('Hallo ' + myName(), `${secure}${notifyBanner()}${hero}${stats}${wichtelHtml}
+  return shell('Hallo ' + myName(), `${secure}${notifyBanner()}${hero}${stats}${wichtelHtml}${poolHome()}
     <h2>Deine Besorgungen</h2>${errHtml}
     ${feedHead}${feedHtml}`, { tab: 'home', eyebrow: today });
 }
@@ -1278,6 +1303,7 @@ function viewFriend(key) {
     const status = w => {
       const r = resOf(w.id);
       if (!r) return 'offen';
+      if (poolOf(w.id)) return inPool(w.id) ? 'gemeinsam, du bist dabei' : 'gemeinsames Geschenk';
       if (r.user_id === me()) return r.status === 'gekauft' ? 'von dir gekauft' : 'von dir reserviert';
       return 'vergeben';
     };
@@ -1368,6 +1394,327 @@ function personIdeas(gid, uid) {
     ${list.length ? `<ul class="rows plain">${list.map(i => ideaRow(i, ret)).join('')}</ul>` : ''}
     <a class="secondary withicon addidea" href="#/i/neu/${key}?r=${ret}">${icon('bulb')}Idee für ${esc(nameOf(uid))} notieren</a>
     ${privacyFoot(nameOf(uid))}`;
+}
+
+/* ---------- Gemeinsam schenken (1.13) ----------
+   Wer startet, reserviert den Wunsch, kauft und streckt vor (Rolle lässt sich abgeben).
+   Aufteilung gleich, nach Budget (Höchstbetrag) oder individuell; Betrag leer = flexibel.
+   Optional Mindestzahl und Frist; danach entscheidet, wer kauft. Die beschenkte Person sieht nichts. */
+const SPLITS = [
+  ['equal', 'Gleich', 'Alle zahlen gleich viel. Kommt jemand dazu, wird es für alle weniger.'],
+  ['budget', 'Budget', 'Jeder nennt, wie viel er höchstens gibt. Die App verteilt so gleichmäßig wie möglich.'],
+  ['custom', 'Individuell', 'Jeder trägt seinen Betrag ein. Wer nichts einträgt, teilt sich den Rest.']];
+const splitName = k => (SPLITS.find(x => x[0] === k) || SPLITS[0])[1];
+const poolOf = wid => D.poolsOk ? (D.pools || []).find(p => p.wish_id === wid) || null : null;
+const sharesOf = wid => (D.shares || []).filter(s => s.wish_id === wid);
+const inPool = (wid, uid = me()) => sharesOf(wid).some(s => s.user_id === uid);
+const pad2 = n => String(n).padStart(2, '0');
+const isoDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const todayIso = () => isoDay(new Date());
+const fmtDl = d => fmtDay(d + 'T12:00:00');
+const poolClosed = p => !!(p.deadline && p.deadline < todayIso());
+const poolShort = p => !!(p.min_people && sharesOf(p.wish_id).length < p.min_people);
+const fmtCents = c => fmtPrice(Math.round(c) / 100);
+const cents = v => v == null ? null : Math.round(Number(v) * 100);
+const POOL_NO = 'geschenkeliste-gemeinsam-nein';
+function poolNo() { try { return JSON.parse(localStorage.getItem(POOL_NO)) || {}; } catch (e) { return {}; } }
+
+/* Anteile in Cent: {per: {uid: cent}, total, missing (positiv = fehlt, negativ = zu viel)} */
+function poolCalc(p, ss) {
+  const total = cents(p.total);
+  const per = {};
+  const order = ss.slice().sort((a, b) => (a.user_id === p.buyer ? -1 : (b.user_id === p.buyer ? 1 : 0)));
+  // gleichmäßig verteilen, übrige Cent an die ersten (wer kauft, zuerst)
+  const spread = (users, sum) => {
+    if (!users.length) return;
+    const base = Math.floor(sum / users.length);
+    let rest = sum - base * users.length;
+    users.forEach(u => { per[u] = (per[u] || 0) + base + (rest-- > 0 ? 1 : 0); });
+  };
+  if (p.split === 'custom') {
+    let fixed = 0;
+    const flex = [];
+    order.forEach(s => { const a = cents(s.amount); if (a == null) flex.push(s.user_id); else { per[s.user_id] = a; fixed += a; } });
+    flex.forEach(u => { per[u] = 0; });
+    spread(flex, Math.max(0, total - fixed));
+  } else if (p.split === 'budget') {
+    // Wer wenig geben kann, gibt sein Budget; der Rest verteilt sich gleichmäßig auf die anderen
+    const srt = order.map(s => ({ u: s.user_id, cap: cents(s.amount) }))
+      .sort((a, b) => (a.cap == null ? Infinity : a.cap) - (b.cap == null ? Infinity : b.cap));
+    srt.forEach(x => { per[x.u] = 0; });
+    let left = total;
+    for (let i = 0; i < srt.length; i++) {
+      const n = srt.length - i;
+      if (srt[i].cap != null && srt[i].cap * n < left) { per[srt[i].u] = srt[i].cap; left -= srt[i].cap; }
+      else { spread(srt.slice(i).map(x => x.u), left); left = 0; break; }
+    }
+  } else {
+    spread(order.map(s => s.user_id), total);
+  }
+  const sum = Object.values(per).reduce((a, b) => a + b, 0);
+  return { per, total, missing: total - sum };
+}
+/* Was hieße es für mich, wenn ich (mit Betrag a) dazukomme? */
+function poolPreview(p, a) {
+  const ss = sharesOf(p.wish_id).filter(s => s.user_id !== me()).concat([{ user_id: me(), amount: a }]);
+  return poolCalc(p, ss);
+}
+function poolBack(w) {
+  const r = backParam();
+  if (r) return [r, 'Zurück'];
+  const g = groupFor(w);
+  return g ? ['#/g/' + g + '/p/' + w.owner, nameOf(w.owner)] : ['#/', 'Start'];
+}
+const poolRet = () => (backParam() ? '?r=' + backParam().slice(2) : '');
+
+function poolMissing(w) {
+  return shell('Gemeinsam schenken', `<div class="banner warn">${icon('shield')}<span><b>Noch nicht eingerichtet</b><small>Die Datenbank ist noch nicht aktualisiert (schema.sql ausführen).</small></span></div>`,
+    { tab: 'groups', back: w ? poolBack(w) : ['#/', 'Start'] });
+}
+
+// Kurztext für Listen: „Gemeinsam · 3 dabei“
+function poolLabel(p) { return `Gemeinsam · ${sharesOf(p.wish_id).length} dabei`; }
+
+function viewPool(wid) {
+  const w = D.wishes.find(x => x.id === wid && x.owner !== me());
+  const p = poolOf(wid);
+  if (!D.poolsOk) return poolMissing(w);
+  if (!w || !p) {
+    return shell('Gemeinsam schenken', emptyState('people', 'Nicht verfügbar', 'Dieses gemeinsame Geschenk gibt es nicht mehr oder du bist nicht gefragt.'),
+      { tab: 'groups', back: w ? poolBack(w) : ['#/', 'Start'] });
+  }
+  const r = resOf(wid);
+  const ss = sharesOf(wid);
+  const c = poolCalc(p, ss);
+  const buyer = p.buyer === me();
+  const member = inPool(wid);
+  const owner = nameOf(w.owner);
+  const closed = poolClosed(p);
+  const short = poolShort(p);
+  const ret = 'gemeinsam/' + wid + poolRet();
+  const bought = r && r.status === 'gekauft';
+
+  const link = w.url ? `<a class="link-out" href="${esc(w.url)}" target="_blank" rel="noopener noreferrer">${icon('link')}${esc(domain(w.url) || 'Link')}</a>` : '';
+  const head = `<div class="card wish poolwish"><div class="wish-head">${tile(w)}<div class="row-main"><h3>${esc(w.title)}</h3>
+      <p class="wmeta"><span>für ${esc(owner)}${w.price != null ? ' · ' + esc(fmtPrice(w.price)) : ''}</span></p>${link}</div></div>
+      ${p.note ? `<p class="wnote">${esc(p.note)}</p>` : ''}</div>`;
+
+  // Hinweise
+  let notes = '';
+  if (w.have_at) notes += `<div class="banner warn">${icon('gift')}<span><b>${esc(owner)} hat es schon</b><small>${buyer ? 'Sag ab, falls du es noch nicht gekauft hast.' : `Sprich dich mit ${esc(nameOf(p.buyer))} ab.`}</small></span></div>`;
+  if (closed && short && buyer) {
+    notes += `<div class="banner warn pooldue">${icon('calendar')}<span><b>Die Frist ist um</b><small>${ss.length} von ${p.min_people} dabei. Wie soll es weitergehen?</small></span></div>
+      <div class="btnrow poolchoice"><button class="primary sm" data-act="pooltrotz" data-id="${wid}">Trotzdem schenken</button><a class="secondary sm" href="#/gemeinsam/${wid}/bearbeiten?r=${ret}">Frist verlängern</a></div>`;
+  } else if (closed && !member) {
+    notes += `<div class="banner">${icon('calendar')}<span><b>Mitmachen ging bis ${esc(fmtDl(p.deadline))}</b><small>Frag ${esc(nameOf(p.buyer))}, ob noch Platz ist.</small></span></div>`;
+  }
+
+  // Überblick
+  const each = p.split === 'equal' && ss.length ? fmtCents(c.total / ss.length) : '';
+  const sumRows = [
+    ['Gesamt', fmtCents(c.total)],
+    ['Aufteilung', splitName(p.split) + (each ? ` · je ca. ${each}` : '')],
+    ['Kauft und streckt vor', buyer ? 'Du' : nameOf(p.buyer)],
+    p.min_people ? ['Mindestens', `${p.min_people} Leute${short ? ` · noch ${p.min_people - ss.length}` : ' · erreicht'}`] : null,
+    p.deadline ? ['Mitmachen bis', fmtDl(p.deadline) + (closed ? ' · vorbei' : '')] : null,
+    ['Gefragt', p.open ? 'Alle, die die Liste sehen' : (p.invited || []).map(nameOf).join(', ') || 'Niemand'],
+    bought ? ['Stand', 'Gekauft'] : null
+  ].filter(Boolean);
+  const covered = c.total - Math.max(0, c.missing);
+  const gap = c.missing > 0 ? `<p class="poolgap warn">${icon('ban')}Es fehlen noch ${esc(fmtCents(c.missing))}</p>`
+    : (c.missing < 0 ? `<p class="poolgap">${icon('check')}${esc(fmtCents(-c.missing))} mehr als nötig</p>` : '');
+  const summary = `<div class="card poolsum"><div class="poolbig"><b>${ss.length}</b><span>${ss.length === 1 ? 'Person' : 'Personen'} dabei</span></div>
+      ${p.split !== 'equal' ? `<progress max="${c.total}" value="${covered}" aria-label="gedeckt"></progress>${gap}` : ''}
+      <ul class="facts">${sumRows.map(([k, v]) => `<li><span>${esc(k)}</span><b>${esc(v)}</b></li>`).join('')}</ul></div>`;
+
+  // Teilnehmer
+  const paidOthers = ss.filter(s => s.user_id !== p.buyer);
+  const owed = paidOthers.reduce((a, s) => a + (c.per[s.user_id] || 0), 0);
+  const got = paidOthers.filter(s => s.paid_at).reduce((a, s) => a + (c.per[s.user_id] || 0), 0);
+  const row = s => {
+    const isBuyer = s.user_id === p.buyer;
+    const amt = c.per[s.user_id] || 0;
+    const hint = p.split === 'budget' ? (s.amount == null ? 'ohne Grenze' : 'höchstens ' + fmtPrice(s.amount))
+      : (p.split === 'custom' ? (s.amount == null ? 'teilt den Rest' : 'fester Betrag') : '');
+    const state = isBuyer ? 'streckt vor' : (s.paid_at ? 'bezahlt' : 'noch offen');
+    const tick = !isBuyer && buyer
+      ? `<button class="tick ${s.paid_at ? 'on' : ''}" data-act="poolpaid" data-id="${wid}" data-u="${s.user_id}" data-on="${s.paid_at ? '0' : '1'}" aria-label="${s.paid_at ? 'Doch nicht bezahlt' : 'Als bezahlt markieren'}">${icon('check')}</button>` : '';
+    return `<li class="row-item ${s.paid_at ? 'paid' : ''}">${tick}${avatar(s.user_id)}
+        <span class="row-main"><span class="row-title">${esc(nameOf(s.user_id))}</span><span class="row-meta">${isBuyer ? '<span class="tag hi">kauft</span>' : (s.paid_at ? '<span class="tag ok">bezahlt</span>' : '')}${esc([hint, isBuyer || s.paid_at ? '' : state].filter(Boolean).join(' · '))}</span></span>
+        <b class="poolamt">${esc(fmtCents(amt))}</b></li>`;
+  };
+  const waiting = p.open ? [] : (p.invited || []).filter(u => !ss.some(s => s.user_id === u));
+  const people = `<div class="sechead"><h2>Wer mitmacht</h2>${owed ? `<span class="muted">${esc(fmtCents(got))} von ${esc(fmtCents(owed))} bezahlt</span>` : ''}</div>
+    <ul class="rows plain poolrows">${ss.map(row).join('')}</ul>
+    ${waiting.length ? `<p class="empty-line">Gefragt, noch nicht dabei: ${esc(waiting.map(nameOf).join(', '))}</p>` : ''}`;
+
+  // Was ich tun kann
+  let mine = '';
+  const amtField = (val, label) => `<label>${label}<span class="money"><input name="amount" inputmode="decimal" autocomplete="off" maxlength="12" value="${esc(priceInput(val))}" placeholder="${p.split === 'budget' ? 'ohne Grenze' : 'Rest teilen'}"><span>€</span></span></label>`;
+  if (buyer) {
+    const others = ss.filter(s => s.user_id !== me());
+    const hand = ui.handover === wid
+      ? `<div class="card options poolhand"><p class="muted">Wer kauft stattdessen?</p>${others.map(s => `<button class="row-item plainbtn" data-act="poolhandto" data-id="${wid}" data-u="${s.user_id}">${avatar(s.user_id, 'sm')}<span class="row-main"><span class="row-title">${esc(nameOf(s.user_id))}</span></span>${icon('chev', 'chev')}</button>`).join('')}
+         <button class="ghost sm" data-act="poolnoconfirm">Abbrechen</button></div>` : '';
+    const cancel = ui.confirmPool === wid
+      ? `<button class="danger" data-act="poolcancel" data-id="${wid}">Wirklich absagen</button><button class="ghost" data-act="poolnoconfirm">Doch nicht</button>`
+      : `<button class="ghost danger-text" data-act="askpoolcancel" data-id="${wid}">Absagen und freigeben</button>`;
+    mine = `<h2>Du kaufst</h2>
+      <div class="card fields poolme">
+        <p class="poolmine"><span>Dein Anteil</span><b>${esc(fmtCents(c.per[me()] || 0))}</b></p>
+        ${p.split !== 'equal' ? `<form data-form="pooljoin" data-id="${wid}" class="inline poolamtform">${amtField((ss.find(s => s.user_id === me()) || {}).amount, p.split === 'budget' ? 'Dein Höchstbetrag' : 'Dein Betrag')}<button class="secondary sm" type="submit">Ändern</button></form>` : ''}
+      </div>
+      <div class="stack poolbtns">
+        ${bought ? `<button class="secondary" data-act="resstatus" data-id="${wid}" data-s="reserviert">Doch nicht gekauft</button>`
+          : `<button class="primary withicon" data-act="resstatus" data-id="${wid}" data-s="gekauft">${icon('check')}Als gekauft markieren</button>`}
+        <a class="secondary" href="#/gemeinsam/${wid}/bearbeiten?r=${ret}">Bearbeiten</a>
+        ${others.length && !hand ? `<button class="ghost" data-act="poolhand" data-id="${wid}">Kaufen abgeben</button>` : ''}
+        ${hand}
+        ${cancel}
+      </div>`;
+  } else if (member) {
+    const me_ = ss.find(s => s.user_id === me());
+    const leave = ui.confirmPool === wid
+      ? `<button class="danger" data-act="poolleave" data-id="${wid}">Wirklich aussteigen</button><button class="ghost" data-act="poolnoconfirm">Doch nicht</button>`
+      : `<button class="ghost danger-text" data-act="askpoolcancel" data-id="${wid}">Nicht mehr mitmachen</button>`;
+    mine = `<h2>Du machst mit</h2>
+      <div class="card fields poolme">
+        <p class="poolmine"><span>Dein Anteil${bought ? '' : ' (Stand jetzt)'}</span><b>${esc(fmtCents(c.per[me()] || 0))}</b></p>
+        <p class="muted">${me_.paid_at ? `Bezahlt am ${esc(fmtDay(me_.paid_at))}.` : `Zahl den Betrag an ${esc(nameOf(p.buyer))} und hak es dann ab.`}</p>
+        ${p.split !== 'equal' ? `<form data-form="pooljoin" data-id="${wid}" class="inline poolamtform">${amtField(me_.amount, p.split === 'budget' ? 'Dein Höchstbetrag' : 'Dein Betrag')}<button class="secondary sm" type="submit">Ändern</button></form>` : ''}
+      </div>
+      <div class="stack poolbtns">
+        ${me_.paid_at ? `<button class="secondary" data-act="poolpaid" data-id="${wid}" data-u="${me()}" data-on="0">Doch nicht bezahlt</button>`
+          : `<button class="primary withicon" data-act="poolpaid" data-id="${wid}" data-u="${me()}" data-on="1">${icon('check')}Ich habe bezahlt</button>`}
+        ${leave}
+      </div>`;
+  } else if (!closed && !w.have_at) {
+    const pre = p.split === 'equal' ? poolPreview(p, null).per[me()] : null;
+    mine = `<h2>Machst du mit?</h2>
+      <form data-form="pooljoin" data-id="${wid}" class="card fields poolme">
+        ${p.split === 'equal' ? `<p class="poolmine"><span>Dein Anteil wäre</span><b>${esc(fmtCents(pre))}</b></p>`
+          : amtField(null, p.split === 'budget' ? 'Wie viel gibst du höchstens?' : 'Wie viel gibst du?')}
+        <p class="muted">${esc(SPLITS.find(x => x[0] === p.split)[2])}</p>
+        <button class="primary" type="submit">Ich mache mit</button>
+      </form>`;
+  }
+
+  return shell('Gemeinsam schenken', `${notes}${head}${summary}${mine}${people}
+    <p class="foot">${icon('eyeoff')}<span>${esc(owner)} sieht nichts davon. Gefragt sind nur die Leute oben.</span></p>`,
+    { tab: 'groups', back: poolBack(w) });
+}
+
+// Leute, die den Wunsch sehen (aus meinen Gruppen), ohne die beschenkte Person und mich
+function poolCandidates(w) {
+  const out = [];
+  myGroups().filter(g => visibleIn(w, g.id) && membersOf(g.id).some(m => m.user_id === w.owner))
+    .forEach(g => membersOf(g.id).forEach(m => { if (m.user_id !== w.owner && m.user_id !== me() && !out.includes(m.user_id)) out.push(m.user_id); }));
+  return out.sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'de'));
+}
+
+function viewPoolForm(wid, mode) {
+  const w = D.wishes.find(x => x.id === wid && x.owner !== me());
+  if (!D.poolsOk) return poolMissing(w);
+  const edit = mode === 'bearbeiten';
+  const p = poolOf(wid);
+  const r = resOf(wid);
+  const back = w ? (edit ? [backParam() || '#/gemeinsam/' + wid, 'Zurück'] : poolBack(w)) : ['#/', 'Start'];
+  if (!w) return shell('Gemeinsam schenken', emptyState('gift', 'Nicht gefunden', 'Diesen Wunsch gibt es nicht mehr.'), { tab: 'groups', back });
+  if (edit && (!p || p.buyer !== me())) return shell('Gemeinsam schenken', emptyState('people', 'Nicht verfügbar', 'Ändern kann nur, wer kauft.'), { tab: 'groups', back });
+  if (!edit && p) return viewPool(wid);
+  if (!edit && (w.have_at || (r && r.user_id !== me()))) {
+    return shell('Gemeinsam schenken', emptyState('lock', 'Schon vergeben', 'Diesen Wunsch hat schon jemand reserviert.'), { tab: 'groups', back });
+  }
+  const x = edit ? p : { total: w.price, split: 'equal', open: true, invited: [], min_people: null, deadline: null, note: '' };
+  const cands = poolCandidates(w);
+  (x.invited || []).forEach(u => { if (!cands.includes(u)) cands.push(u); });
+  const owner = nameOf(w.owner);
+  const splits = SPLITS.map(([v, n]) => `<label><input type="radio" name="split" value="${v}" ${x.split === v ? 'checked' : ''}><span>${n}</span></label>`).join('');
+  const help = SPLITS.find(s => s[0] === x.split)[2];
+  const boxes = cands.map(u => `<label class="check"><input type="checkbox" name="pu" value="${u}" ${(x.invited || []).includes(u) ? 'checked' : ''}><span>${esc(nameOf(u))}</span></label>`).join('');
+  const mins = '<option value="">Keine</option>' + [2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 20].map(n => `<option value="${n}" ${x.min_people === n ? 'selected' : ''}>${n}</option>`).join('');
+  const minDay = x.deadline && x.deadline < todayIso() ? x.deadline : todayIso();
+  const own = edit ? '' : `<label id="myamt" class="${x.split === 'equal' ? 'hide' : ''}"><span id="myamtlabel">${x.split === 'budget' ? 'Dein Höchstbetrag' : 'Dein Betrag'}</span><span class="money"><input name="amount" inputmode="decimal" autocomplete="off" maxlength="12" placeholder="leer = flexibel"><span>€</span></span></label>`;
+  return shell(edit ? 'Gemeinsam bearbeiten' : 'Gemeinsam schenken', `
+    <div class="card wish poolwish"><div class="wish-head">${tile(w)}<div class="row-main"><h3>${esc(w.title)}</h3><p class="wmeta"><span>für ${esc(owner)}${w.price != null ? ' · ' + esc(fmtPrice(w.price)) : ''}</span></p></div></div></div>
+    <form data-form="${edit ? 'pooledit' : 'poolstart'}" data-id="${wid}" class="stack">
+      <div class="card fields">
+        <label>Was kostet es insgesamt?<span class="money"><input name="total" inputmode="decimal" autocomplete="off" maxlength="12" required value="${esc(priceInput(x.total))}" placeholder="z. B. 120"><span>€</span></span></label>
+        <div class="field"><span class="flabel">Wie wird aufgeteilt?</span><div class="seg">${splits}</div><p class="muted fhelp" id="splithelp">${esc(help)}</p></div>
+        ${own}
+      </div>
+      <h2>Wen fragst du?</h2>
+      <div class="card options">
+        <label class="check"><input type="radio" name="who" value="all" ${x.open ? 'checked' : ''}><span>Alle, die die Liste sehen<small>Jeder kann mitmachen, ${esc(owner)} ausgenommen</small></span></label>
+        <label class="check"><input type="radio" name="who" value="some" ${x.open ? '' : 'checked'}><span>Nur bestimmte Leute</span></label>
+        <div class="sub ${x.open ? 'hide' : ''}" id="ppick">${boxes || '<p class="muted">In deinen Gruppen sieht sonst niemand diesen Wunsch.</p>'}</div>
+      </div>
+      <h2>Wenn zu wenige mitmachen</h2>
+      <div class="card fields">
+        <div class="two"><label>Mindestens dabei<select name="min">${mins}</select></label>
+          <label>Mitmachen bis<input type="date" name="deadline" min="${minDay}" value="${esc(x.deadline || '')}"></label></div>
+        <p class="muted fhelp">Ist die Frist um und es sind zu wenige, entscheidest du: trotzdem schenken, verlängern oder absagen.</p>
+        <label>Notiz für alle<textarea name="note" maxlength="300" rows="2" placeholder="z. B. Ich bestelle am Freitag">${esc(x.note || '')}</textarea></label>
+      </div>
+      <button class="primary" type="submit">${edit ? 'Speichern' : 'Starten und fragen'}</button>
+    </form>
+    <p class="foot">${icon('eyeoff')}<span>${edit ? '' : 'Du reservierst den Wunsch, kaufst und streckst das Geld vor. '}${esc(owner)} sieht nichts davon.</span></p>`,
+    { tab: 'groups', back });
+}
+
+// Formular lesen (Start und Bearbeiten)
+function poolFormData(f) {
+  const total = parsePrice(f.total.value);
+  if (!total) throw new Error('Gib den Gesamtbetrag ein.');
+  const split = (f.querySelector('input[name="split"]:checked') || {}).value || 'equal';
+  const open = ((f.querySelector('input[name="who"]:checked') || {}).value || 'all') === 'all';
+  const invited = open ? [] : [...f.querySelectorAll('input[name="pu"]:checked')].map(x => x.value);
+  if (!open && !invited.length) throw new Error('Wähle mindestens eine Person aus.');
+  const min = f.min.value ? Number(f.min.value) : null;
+  const deadline = f.deadline.value || null;
+  return { p_total: total, p_split: split, p_open: open, p_invited: invited, p_min: min, p_deadline: deadline, p_note: f.note.value.trim() || null };
+}
+function amountOf(f) {
+  if (!f.amount) return null;
+  const a = parsePrice(f.amount.value);
+  if (a === false || a === 0) throw new Error('Den Betrag verstehe ich nicht.');
+  return a;
+}
+// Ändern mit den bisherigen Werten (z. B. „Trotzdem schenken“)
+function poolUpdate(p, ch) {
+  const body = Object.assign({ p_wish: p.wish_id, p_total: Number(p.total), p_split: p.split, p_open: p.open, p_invited: p.invited || [],
+    p_min: p.min_people, p_deadline: p.deadline, p_note: p.note }, ch);
+  return sb('/rest/v1/rpc/pool_update', { method: 'POST', body });
+}
+
+// Startseite: Anfragen, Beteiligungen und fällige Entscheidungen
+function poolHome() {
+  if (!D.poolsOk) return '';
+  const no = poolNo();
+  const rows = [];
+  const due = [];
+  (D.pools || []).forEach(p => {
+    const w = D.wishes.find(x => x.id === p.wish_id);
+    if (!w || w.owner === me()) return;
+    const href = `#/gemeinsam/${p.wish_id}`;
+    if (p.buyer === me()) {
+      if (poolClosed(p) && poolShort(p)) due.push(`<a class="banner warn tap" href="${href}">${icon('calendar')}<span><b>Frist für „${esc(w.title)}“ ist um</b><small>${sharesOf(p.wish_id).length} von ${p.min_people} dabei. Entscheide, wie es weitergeht.</small></span>${icon('chev', 'chev')}</a>`);
+      return;
+    }
+    const s = sharesOf(p.wish_id).find(x => x.user_id === me());
+    if (s) {
+      const c = poolCalc(p, sharesOf(p.wish_id));
+      const bought = (resOf(p.wish_id) || {}).status === 'gekauft';
+      rows.push(`<li><a class="row-item" href="${href}">${avatar(w.owner)}<span class="row-main"><span class="row-title">${esc(w.title)}</span>
+        <span class="row-meta">${s.paid_at ? '<span class="tag ok">bezahlt</span>' : ''}für ${esc(nameOf(w.owner))} · dein Anteil ${esc(fmtCents(c.per[me()] || 0))}${bought ? ' · gekauft' : ''}</span></span>${icon('chev', 'chev')}</a></li>`);
+    } else if (!w.have_at && !poolClosed(p) && !no[p.wish_id] && (p.open || (p.invited || []).includes(me()))) {
+      rows.unshift(`<li class="row-item poolask"><a class="row-main" href="${href}"><span class="row-title">${esc(nameOf(p.buyer))} fragt: „${esc(w.title)}“</span>
+        <span class="row-meta"><span class="tag new">Anfrage</span>für ${esc(nameOf(w.owner))} · ${sharesOf(p.wish_id).length} dabei</span></a>
+        <button class="link" data-act="pooldecline" data-id="${p.wish_id}">Nein danke</button></li>`);
+    }
+  });
+  if (!rows.length && !due.length) return '';
+  return `${due.join('')}${rows.length ? `<h2>Gemeinsam schenken</h2><ul class="rows">${rows.join('')}</ul>` : ''}`;
 }
 
 function viewWishForm(id) {
@@ -1494,24 +1841,34 @@ function viewPerson(gid, uid) {
   // Beim Ansehen der Liste gilt alles darauf als gesehen; die Markierung bleibt, bis du die Seite verlässt
   if (isNewMember(gid, uid)) markSeen('m', mkey(gid, uid));
   ws.filter(isNewWish).forEach(w => markSeen('w', w.id));
+  const ret = `?r=g/${gid}/p/${uid}`;
   const card = w => {
     const r = resOf(w.id);
-    let pill = '', acts = '', warn = '';
+    const pool = r ? poolOf(w.id) : null;
+    let pill = '', acts = '', warn = '', extra = '';
     if (w.have_at) {
       pill = `<span class="pill">Hat ${esc(name)} schon</span>`;
       if (r && r.user_id === me()) {
         warn = `<p class="wwarn">${r.status === 'gekauft' ? 'Du hast es schon gekauft. Vielleicht lässt es sich umtauschen.' : 'Du hattest es reserviert. Gib es frei, falls du es noch nicht gekauft hast.'}</p>`;
         acts = `<button class="${r.status === 'gekauft' ? 'ghost' : 'primary'} sm" data-act="unreserve" data-id="${w.id}">Freigeben</button>`;
       }
+      if (pool && inPool(w.id)) acts = `<a class="secondary sm" href="#/gemeinsam/${w.id}${ret}">Gemeinsames Geschenk</a>`;
     } else if (!r) {
       pill = '<span class="pill open">Offen</span>';
-      acts = `<button class="primary sm" data-act="reserve" data-id="${w.id}">Reservieren</button>`;
+      acts = `<button class="primary sm" data-act="reserve" data-id="${w.id}">Reservieren</button>`
+        + (D.poolsOk ? `<a class="secondary sm withicon" href="#/gemeinsam/${w.id}/neu${ret}">${icon('people')}Gemeinsam</a>` : '');
+    } else if (pool) {
+      const mine = inPool(w.id);
+      const can = mine || (!poolClosed(pool) && (pool.open || (pool.invited || []).includes(me())));
+      pill = `<span class="pill ${mine ? 'green' : 'gold'}">${icon('people')}${esc(poolLabel(pool))}</span>`;
+      acts = `<a class="${mine || !can ? 'secondary' : 'primary'} sm" href="#/gemeinsam/${w.id}${ret}">${mine || !can ? 'Ansehen' : 'Mitmachen'}</a>`;
     } else if (r.user_id === me()) {
       pill = `<span class="pill green">${icon(r.status === 'gekauft' ? 'check' : 'lock')}${r.status === 'gekauft' ? 'Von dir gekauft' : 'Von dir reserviert'}</span>`;
       acts = (r.status === 'gekauft'
         ? `<button class="secondary sm" data-act="resstatus" data-id="${w.id}" data-s="reserviert">Doch nicht gekauft</button>`
         : `<button class="primary sm" data-act="resstatus" data-id="${w.id}" data-s="gekauft">Als gekauft markieren</button>`)
         + `<button class="ghost sm" data-act="unreserve" data-id="${w.id}">Freigeben</button>`;
+      if (r.status !== 'gekauft' && D.poolsOk) extra = `<a class="link withicon poolconv" href="#/gemeinsam/${w.id}/neu${ret}">${icon('people')}Mit anderen zusammenlegen</a>`;
     } else {
       pill = `<span class="pill gold">${icon(r.status === 'gekauft' ? 'check' : 'lock')}${r.status === 'gekauft' ? 'Gekauft' : 'Reserviert'} von ${esc(nameOf(r.user_id))}</span>`;
     }
@@ -1524,6 +1881,7 @@ function viewPerson(gid, uid) {
       ${w.note ? `<p class="wnote">${esc(w.note)}</p>` : ''}
       ${warn}
       ${pill || acts ? `<div class="wish-foot">${pill}${acts ? `<div class="acts">${acts}</div>` : ''}</div>` : ''}
+      ${extra}
     </li>`;
   };
 
@@ -2000,6 +2358,7 @@ function viewAccount() {
     ${fold('privacy', 'lock', 't1', 'Datenschutz', 'Was gespeichert wird und wer was sieht', `    <div class="card prose">
       <p>Name, Benutzername, Gruppen, Wünsche und Reservierungen liegen in einer Datenbank bei Supabase in der EU. Passwort und Wiederherstellungscode werden nur verschlüsselt gespeichert.</p>
       <p>Andere sehen deinen Namen und die Wünsche, die du für ihre Gruppe freigibst. Reservierungen sieht der Beschenkte nie.</p>
+      <p>Bei gemeinsamen Geschenken sehen nur die Gefragten und wer mitmacht, wer dabei ist, wie viel jeder gibt und wer bezahlt hat. Die beschenkte Person sieht nichts davon.</p>
       <p>Deinen Steckbrief sehen alle aus deinen Gruppen. Unter Steckbrief kannst du ihn ganz oder teilweise für bestimmte Gruppen oder Personen verbergen.</p>
       <p>Für Benachrichtigungen wird eine Adresse des Push-Dienstes deines Geräts gespeichert (Apple, Google oder Mozilla). Die Nachrichten sind verschlüsselt.</p>
       <p>Auf dem Gerät bleiben nur die Anmeldung und eine Kopie der Listen, damit die App schnell startet.</p>
@@ -2047,6 +2406,7 @@ function render() {
   else if (parts[0] === 'liste') html = viewList();
   else if (parts[0] === 'konto' || parts[0] === 'mehr') html = viewAccount();
   else if (parts[0] === 'steckbrief') html = viewCard(parts);
+  else if (parts[0] === 'gemeinsam' && parts[1]) html = parts[2] ? viewPoolForm(parts[1], parts[2]) : viewPool(parts[1]);
   else html = viewHome();
   const y = render.lastKey === location.hash ? window.scrollY : 0;
   app.innerHTML = html;
@@ -2109,6 +2469,27 @@ async function sbChoose(el) {
 }
 
 const forms = {
+  async poolstart(f) {
+    const body = Object.assign({ p_wish: f.dataset.id, p_amount: amountOf(f) }, poolFormData(f));
+    await sb('/rest/v1/rpc/pool_start', { method: 'POST', body });
+    await sync(true);
+    toast(body.p_open ? 'Gestartet. Alle, die die Liste sehen, können mitmachen.' : 'Gestartet. Die Ausgewählten werden gefragt.');
+    location.replace('#/gemeinsam/' + f.dataset.id + poolRet());
+  },
+  async pooledit(f) {
+    await sb('/rest/v1/rpc/pool_update', { method: 'POST', body: Object.assign({ p_wish: f.dataset.id }, poolFormData(f)) });
+    await sync(true);
+    toast('Gespeichert.');
+    go(backParam() || '#/gemeinsam/' + f.dataset.id);
+  },
+  async pooljoin(f) {
+    const was = inPool(f.dataset.id);
+    await sb('/rest/v1/rpc/pool_join', { method: 'POST', body: { p_wish: f.dataset.id, p_amount: amountOf(f) } });
+    const n = poolNo();
+    if (n[f.dataset.id]) { delete n[f.dataset.id]; try { localStorage.setItem(POOL_NO, JSON.stringify(n)); } catch (e) { /* egal */ } }
+    await sync(true);
+    toast(was ? 'Betrag geändert.' : 'Du machst mit.');
+  },
   async sbown(f) {
     const k = f.dataset.k, v = f.v.value.trim().replace(/\s+/g, ' ').slice(0, 40);
     if (!v) return;
@@ -2557,6 +2938,46 @@ const acts = {
     toast('Steckbrief gelöscht.');
     go('#/konto');
   },
+  // Gemeinsam schenken (1.13)
+  poolpaid: async el => {
+    await sb('/rest/v1/rpc/pool_paid', { method: 'POST', body: { p_wish: el.dataset.id, p_user: el.dataset.u, p_on: el.dataset.on === '1' } });
+    await sync(true);
+    if (el.dataset.on === '1') toast(el.dataset.u === me() ? 'Danke, ist abgehakt.' : 'Als bezahlt markiert.');
+  },
+  askpoolcancel: async el => { ui.confirmPool = el.dataset.id; render(); },
+  poolnoconfirm: async () => { delete ui.confirmPool; delete ui.handover; render(); },
+  poolcancel: async el => {
+    await sb('/rest/v1/rpc/pool_cancel', { method: 'POST', body: { p_wish: el.dataset.id } });
+    const w = D.wishes.find(x => x.id === el.dataset.id);
+    ui = {};
+    await sync(true);
+    toast('Abgesagt. Der Wunsch ist wieder frei.');
+    go(w ? poolBack(w)[0] : '#/');
+  },
+  poolleave: async el => {
+    await sb('/rest/v1/rpc/pool_leave', { method: 'POST', body: { p_wish: el.dataset.id } });
+    ui = {};
+    await sync(true);
+    toast('Du machst nicht mehr mit.');
+  },
+  pooltrotz: async el => {
+    await poolUpdate(poolOf(el.dataset.id), { p_min: null });
+    await sync(true);
+    toast('Ihr schenkt es trotzdem.');
+  },
+  poolhand: async el => { ui.handover = el.dataset.id; render(); },
+  poolhandto: async el => {
+    await sb('/rest/v1/rpc/pool_handover', { method: 'POST', body: { p_wish: el.dataset.id, p_user: el.dataset.u } });
+    ui = {};
+    await sync(true);
+    toast(nameOf(el.dataset.u) + ' kauft jetzt.');
+  },
+  pooldecline: async el => {
+    const n = poolNo();
+    n[el.dataset.id] = 1;
+    try { localStorage.setItem(POOL_NO, JSON.stringify(n)); } catch (e) { /* egal */ }
+    render();
+  },
   unreserve: async el => {
     await sb('/rest/v1/reservations?wish_id=eq.' + el.dataset.id, { method: 'DELETE' });
     await sync(true);
@@ -2624,6 +3045,18 @@ document.addEventListener('change', e => {
     const box = $('#vispick'), help = $('#vishelp');
     if (box) box.classList.toggle('hide', e.target.value === 'all');
     if (help) help.textContent = e.target.value === 'only' ? 'Nur wen du hier auswählst, sieht es.' : 'Wer in einer anderen deiner Gruppen ist, sieht es trotzdem. Einzelne Personen kannst du direkt auswählen.';
+  }
+  if (e.target.name === 'split' && e.target.form) {
+    const v = e.target.value, f = e.target.form;
+    const h = $('#splithelp'), a = $('#myamt'), l = $('#myamtlabel');
+    if (h) h.textContent = SPLITS.find(x => x[0] === v)[2];
+    if (a) a.classList.toggle('hide', v === 'equal');
+    if (l) l.textContent = v === 'budget' ? 'Dein Höchstbetrag' : 'Dein Betrag';
+    if (v === 'equal' && f.amount) f.amount.value = '';
+  }
+  if (e.target.name === 'who') {
+    const box = $('#ppick');
+    if (box) box.classList.toggle('hide', e.target.value === 'all');
   }
   if (e.target.name === 'vis') {
     const sub = $('#gsel');
