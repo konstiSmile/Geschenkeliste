@@ -1,6 +1,6 @@
 # Geschenkeliste – Übergabe (Stand 18. November 2026, Version 1.10.4)
 
-Maßgeblich für die Geschenkeliste (Abschnitt D der großen Übergabe verweist hierher). **Reihenfolge der nächsten Schritte: siehe `claude/geschenkeliste-fahrplan.md`. Pakete 1, 2, 3, 3b, 4, 5 und 5b sind gebaut. Nächstes Paket: Paket 6 – 1.11 Gemeinsam schenken** (vorher klären: wer kauft und streckt vor, was bei zu wenig Beteiligung).
+Maßgeblich für die Geschenkeliste (Abschnitt D der großen Übergabe verweist hierher). **Reihenfolge der nächsten Schritte: siehe `claude/geschenkeliste-fahrplan.md`. Pakete 1, 2, 3, 3b, 4, 5 und 5b sind gebaut. Nutzer-Entscheidung 18.11.: Paket 12 (Private Ideenliste) und danach Paket 11 (Steckbrief + Früh dran) werden vorgezogen, jeweils in einem neuen Chat. Nächstes Paket: Paket 12.** Paket 6 (Gemeinsam schenken) kommt danach.
 
 ## Stand
 - **Version 1.10.4 gepusht** (18.11., Commit `d3c008b`): **Weihnachten dunkel** neu nach Vorlage „Weihnachten · Dark“: Tannennacht `#0D1F17` (Grund, Karten `#14281E`), Cranberry `#C42B3A` (Aktionen, Hero), Gold `#E0B85C` (Variable `--gold`, nur Icons/Akzente: Hero-Deko, Hero-Schatten, Feature-Icons), Salbei `#A9BDB0` (`--text-2`), Creme `#F6F1E4` (Text, `--on-accent`), Konturen gedämpftes Creme `#CDC6B2`, Schatten `#03100A`. Status: Reserviert Salbeigrün auf Dunkelgrün, Offen Gold auf Dunkelbraun. theme-color dunkel Weihnachten `#0D1F17`. Farbmuster und Beschreibung der Design-Karte wechseln im Dunkelmodus. **Konto: Design und Datenschutz als Klappbereiche** (`fold(id, icon, tint, titel, untertitel, inhalt)` → `details.fold`, anfangs zu, Zustand in `folds[id]` über `toggle`-Ereignis, bleibt beim Neuzeichnen). Zusammenfassung zeigt aktuelle Wahl („Weihnachten · Hell/Dunkel wie Gerät“). Cache v17, `?v=17`. Tests: 179 Playwright (neu: zugeklappt, aufklappen, bleibt offen, Tannennacht/Cranberry, Statusleiste), Datenschutz-Warten jetzt auf `#privacy`.
@@ -71,7 +71,18 @@ Keine Mails. Benutzername in `accounts` (nur selbst lesbar). Tabellen `recovery_
 ## Farbthemen (größtenteils mit 1.10 erledigt)
 - Mit 1.10 gibt es Ganzjährig + Weihnachten. Offen für später: weitere Themen, Wahl ins Profil statt nur auf dem Gerät. Ursprüngliche Idee: Allgemeines Standardthema, Weihnachten wählbar, plus zwei weitere Designs. Nur Farben und kleine Animationen. Technik: `data-theme` am `<html>`, CSS-Variablen pro Thema hell/dunkel, Auswahl unter Konto mit Vorschau, localStorage + Profil, früh setzen per externer Skriptdatei, `meta theme-color` mitziehen, `prefers-reduced-motion`. Offen: Namen/Farben.
 
-## Gemeinsam schenken (Idee vom 17.11., nächstes Paket)
+## Paket 12 – Private Ideenliste (vorgezogen, nächstes Paket, Entscheidungen 18.11.)
+- Ideen für andere notieren, **nur ich sehe sie** (RLS: nur eigene Zeilen, auch nicht der Admin über die App).
+- **Für wen:** Person aus meinen Gruppen auswählen **oder** eigene Person mit freiem Namen anlegen (Leute ohne App). Eine selbst angelegte Person lässt sich später **mit einem echten Konto verknüpfen**, wenn sie beitritt (Ideen wandern mit, freier Name bleibt als Rückfall).
+- Pro Idee mindestens Titel, Link, Preis, Notiz (Kategorie-Icons/Kacheln wie bei Wünschen wiederverwenden). Im neuen Chat kurz klären: wo in der App (eigener Bereich unter Wunschliste oder auf der Personenseite, beides?), Idee abhaken/„besorgt“, Idee in Reservierung umwandeln, wenn die Person sich das wünscht.
+- schema.sql: neue Tabellen (z. B. `idea_people` mit `owner`, `name`, `linked_user` null; `ideas` mit `owner`, `person` bzw. `user_id`, …), RLS-Tests in `test_rls.py`, Playwright-Block.
+
+## Paket 11 – Steckbrief + „Früh dran“ (danach, Entscheidungen 18.11.)
+- **Steckbrief-Inhalte:** Größen (Kleidung, Schuhe, Ring), Lieblingsdinge (Farben, Marken, Essen, Hobbys), „Lieber nicht“ (mag ich nicht, Allergien, habe genug), Freitext „Das freut mich immer“.
+- **Wichtig für den Nutzer:** nicht überfordernd, sondern so, dass das Ausfüllen **Spaß macht** und der Steckbrief etwas aussagt. **Im neuen Chat zuerst Ideen dazu durchsprechen, noch nicht bauen** (z. B. kurze Fragen nacheinander statt Formular, Auswahl-Chips statt Freitext, „Diese oder jene“-Fragen, Fortschritt dezent, Felder überspringbar, später ergänzen).
+- **„Früh dran“:** dezentes Lob nur für mich, sowohl wenn alle eigenen Besorgungen früh erledigt sind als auch schon für **einzelne Besorgungen** (z. B. beim Abhaken „gekauft“ früh im Advent). Keine Abzeichen für andere sichtbar. Texte zurückhaltend, keine Emoji.
+
+## Gemeinsam schenken (Idee vom 17.11., Paket 6, nach Paket 12 und 11)
 - „Gemeinsam schenken anfragen“ an bestimmte Leute oder offen; Aufteilung fair/Budget/individuell; nutzt den Preis seit 1.7. Beschenkte Person sieht nichts. Offen: wer kauft und streckt vor, „bezahlt“ abhaken, zu wenig Beteiligung. Benachrichtigung: neue `kind` in `push_outbox` (Check-Regel erweitern), Text in `push_message`, Einstellung in `push_prefs` + `PREFS`.
 
 ## Chats (Idee vom 17.11., noch nicht bauen)
@@ -103,6 +114,8 @@ Keine Mails. Benutzername in `accounts` (nur selbst lesbar). Tabellen `recovery_
 `VERSION` in app.js, `?v=` in index.html und sw.js, `CACHE` in sw.js erhöhen; alle vier Tests laufen lassen (`test_rls.py`, `test_app.py`, `node tests/test_push_fn.mjs`, `node tests/test_sw.mjs`); Screenshots ansehen; Commit mit Co-Author- und Session-Zeile; pushen; Anleitung und diese Übergabe anpassen; im Fahrplan abhaken. Ändert sich die Edge Function, muss der Nutzer sie im Dashboard neu einfügen und deployen.
 
 ## Danach
-Reihenfolge im **Fahrplan** `claude/geschenkeliste-fahrplan.md`: Paket 6 gemeinsam schenken (1.11), dann Chats (1.12, 1.13), Phase 3 nach Weihnachten Anlässe / Farbthemen / Steckbrief / Ideenliste / Öffnen für Freunde / Fotos. Ein Paket pro Chat.
+Reihenfolge im **Fahrplan** `claude/geschenkeliste-fahrplan.md`: **Paket 12 Private Ideenliste, dann Paket 11 Steckbrief + Früh dran** (vorgezogen), dann Paket 6 gemeinsam schenken, Chats, Phase 3 nach Weihnachten Anlässe / Farbthemen / Steckbrief / Ideenliste / Öffnen für Freunde / Fotos. Ein Paket pro Chat.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann bauen wir Paket 6 (Gemeinsam schenken).“
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann bauen wir Paket 12 (Private Ideenliste).“
+Danach im übernächsten Chat: „… dann besprechen und bauen wir Paket 11 (Steckbrief + Früh dran).“
+Versionsnummern: Paket 12 wird 1.11, Paket 11 wird 1.12 (Paket 6 verschiebt sich auf 1.13, Chats danach).

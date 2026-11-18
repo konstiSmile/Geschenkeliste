@@ -1,4 +1,4 @@
-# Geschenkeliste – Fahrplan (Stand 17. November 2026)
+# Geschenkeliste – Fahrplan (Stand 18. November 2026)
 
 Reihenfolge der Features in kleinen Paketen. **Ein Paket = ein Chat** (Übergabe lesen, Paket bauen, testen, pushen, Übergabe aktualisieren). Jedes Paket ist für sich nutzbar, die Familie merkt nie eine halbe Baustelle.
 
@@ -64,13 +64,18 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Themen Ganzjährig (Violett, Koralle, Sonnengelb) und Weihnachten (Zuckerstange, Minze, Vanille), je hell und dunkel, Standard automatisch nach Datum (1.11. bis 6.1. Weihnachten), unter Konto → Design umschaltbar
   - Keine schema.sql. Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.10: Pop-Design“ (A–D)
   - Tests: 171 RLS-Prüfungen, 165 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
+- [x] **1.10.1–1.10.4** (18.11.): Hell/Dunkel fest wählbar, Tab-Leiste als schwebende Kapsel, Weihnachten dunkel neu (Tannennacht, Cranberry, Gold, Salbei, Creme), Design und Datenschutz unter Konto aufklappbar (anfangs zu)
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.10“: A neu laden, B Konto → Design ausprobieren, C Dunkelmodus ansehen, D iPhone-App: Statusleiste oben lesbar? (Rückmeldung an Claude)
+- [ ] **Paket 12 – 1.11 Private Ideenliste** (S–M) [Claude], schema.sql – **vorgezogen (18.11.), als Nächstes**
+  - Ideen für Leute aus meinen Gruppen oder für selbst angelegte Personen (ohne App), später mit echtem Konto verknüpfbar. Nur ich sehe sie. Details in der Übergabe
+- [ ] **Paket 11 – 1.12 Steckbrief + „Früh dran“** (M) [Claude], schema.sql – **vorgezogen (18.11.), danach**
+  - Erst Ideen besprechen, wie der Steckbrief Spaß macht statt zu überfordern; Inhalte Größen, Lieblingsdinge, Lieber nicht, Freitext. „Früh dran“: dezentes Lob nur für mich, auch für einzelne Besorgungen
 - [ ] **[Du]** Vorher klären für Paket 6: Wer kauft und streckt vor? Was, wenn zu wenige mitmachen?
-- [ ] **Paket 6 – 1.11 Gemeinsam schenken** (M) [Claude], schema.sql – **als Nächstes**
+- [ ] **Paket 6 – 1.13 Gemeinsam schenken** (M) [Claude], schema.sql – nach Paket 12 und 11
   - Anfrage an bestimmte Leute oder offen, Aufteilung fair/Budget/individuell, „bezahlt“ abhaken, Benachrichtigung (Preis am Wunsch gibt es seit 1.7, Push seit 1.9)
-- [ ] **Paket 7 – 1.12 Chats Teil 1** (M) [Claude], schema.sql
+- [ ] **Paket 7 – 1.14 Chats Teil 1** (M) [Claude], schema.sql
   - Chat pro Geschenk + Plattform-Abfrage (WhatsApp, Signal, …, ausgegraut wenn gewählt)
-- [ ] **Paket 8 – 1.13 Chats Teil 2** (S) [Claude]
+- [ ] **Paket 8 – 1.15 Chats Teil 2** (S) [Claude]
   - Gruppenchat und „ohne X“-Chats, Push bei neuer Nachricht
 
 ## Phase 3: Nach Weihnachten – Umbau zur Wunschlisten-App für alle Anlässe
@@ -80,8 +85,7 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - [ ] **[Du]** Vorher festlegen: Wie sieht das Standarddesign aus, welche zwei Zusatzthemen (Namen, Stimmung)?
 - [ ] **Paket 10 – 2.1 Farbthemen** (S) [Claude], schema.sql – größtenteils mit 1.10 erledigt
   - Rest: weitere Themen, Wahl im Profil speichern (geräteübergreifend), Thema pro Anlass
-- [ ] **Paket 11 – 2.2 Steckbrief + „Früh dran“** (M) [Claude], schema.sql
-- [ ] **Paket 12 – 2.3 Private Ideenliste** (S) [Claude], schema.sql
+- Pakete 11 und 12 sind nach Phase 2 vorgezogen (siehe oben).
 - [ ] **Paket 13 – 2.4 Öffnen für Freunde** (M) [Claude + Du]
   - [Claude] Datenschutz-Seite, Captcha für anonyme Anmeldungen und Registrierung, Benutzernamen-Regeln (verbotene Namen), Benutzername ändern
   - Optional: freiwillige echte Mail als zusätzlicher Rettungsweg → dann **[Du]** eigene Domain + SMTP (Brevo/Resend), Rate Limits erhöhen
@@ -98,4 +102,4 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - Anlässe kommen vor Farbthemen, weil dabei das fest eingebaute Weihnachten verschwindet.
 - Öffnen für Freunde erst, wenn Datenschutz und Schutz vor Spam stehen.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann bauen wir Paket 6 (Gemeinsam schenken).“
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann bauen wir Paket 12 (Private Ideenliste).“
