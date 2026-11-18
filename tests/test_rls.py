@@ -574,5 +574,107 @@ ok, _ = rpc(D, f"public.push_setup('C{'x' * 86}', '{PRIV}', 'https://example.org
 _, out, _ = run('select count(*) from public.push_subs')
 check('Push: neue Schlüssel melden alle Geräte ab', ok and out == '0')
 
+# ---------- Private Ideenliste (1.11) ----------
+L, M, N, O = (str(uuid.uuid4()) for _ in range(4))
+for u, n in ((L, 'Lea'), (M, 'Max'), (N, 'Nora'), (O, 'Olli')):
+    run(f"insert into auth.users values ('{u}', '{n.lower()}@x.de');")
+    as_exec(u, f"insert into public.profiles (id, name) values ('{u}', '{n}')")
+ok, r = as_user(L, "select * from public.create_group('Ideen')")
+ig = r[0]
+as_user(M, f"select public.join_group('{ig['code']}') as g")
+as_user(N, f"select public.join_group('{ig['code']}') as g")
+
+ok, r = as_user(L, f"insert into public.idea_people (name, linked_user) values ('Max', '{M}') returning id")
+check('Ideen: Person aus eigener Gruppe anlegen', ok)
+pm = r[0]['id'] if ok else None
+ok, _ = as_user(L, f"insert into public.idea_people (name, linked_user) values ('Max 2', '{M}') returning id")
+check('Ideen: dieselbe Person nicht doppelt', not ok)
+ok, _ = as_user(L, f"insert into public.idea_people (name, linked_user) values ('Olli', '{O}') returning id")
+check('Ideen: Person außerhalb der Gruppen nicht verknüpfbar', not ok)
+ok, _ = as_user(L, f"insert into public.idea_people (name, linked_user) values ('Ich', '{L}') returning id")
+check('Ideen: sich selbst nicht', not ok)
+ok, r = as_user(L, "insert into public.idea_people (name) values ('Oma Ruth') returning id")
+check('Ideen: freie Person ohne App anlegen', ok)
+po = r[0]['id']
+ok, _ = as_user(L, "insert into public.idea_people (name) values ('') returning id")
+check('Ideen: Name darf nicht leer sein', not ok)
+ok, _ = as_user(L, f"insert into public.idea_people (name, owner) values ('X', '{M}') returning id")
+check('Ideen: Person für andere anlegen verboten', not ok)
+
+ok, r = as_user(L, f"insert into public.ideas (person, title, url, price, category) values ('{pm}', 'Kopfhörer', 'https://example.org/k', 59.9, 'technik') returning id")
+check('Ideen: Idee anlegen', ok)
+i1 = r[0]['id']
+ok, r = as_user(L, f"insert into public.ideas (person, title) values ('{po}', 'Fotobuch') returning id")
+i2 = r[0]['id']
+ok, _ = as_user(L, f"insert into public.ideas (person, title, url) values ('{po}', 'X', 'javascript:alert(1)') returning id")
+check('Ideen: nur http(s)-Links', not ok)
+ok, r = as_user(M, "insert into public.idea_people (name) values ('Fremd') returning id")
+pmx = r[0]['id']
+ok, _ = as_user(L, f"insert into public.ideas (person, title) values ('{pmx}', 'X') returning id")
+check('Ideen: nicht für fremde Person-Einträge', not ok)
+ok, _ = as_user(M, f"insert into public.ideas (person, title, owner) values ('{pmx}', 'X', '{L}') returning id")
+check('Ideen: nicht im Namen anderer', not ok)
+
+ok, r = as_user(M, 'select id from public.ideas')
+check('Ideen: Max sieht Ideen für sich nicht', ok and r == [])
+ok, r = as_user(M, 'select id from public.idea_people')
+check('Ideen: Max sieht nur eigene Personen', ok and [x['id'] for x in r] == [pmx])
+ok, r = as_user(N, 'select id from public.ideas union all select id from public.idea_people')
+check('Ideen: andere Gruppenmitglieder sehen nichts', ok and r == [])
+ok, r = as_user(L, 'select id from public.ideas')
+check('Ideen: Lea sieht beide eigenen', ok and {x['id'] for x in r} == {i1, i2})
+ok, r = as_user(None, 'select id from public.ideas', role='anon')
+check('Ideen: ohne Anmeldung kein Zugriff', not ok or r == [])
+
+ok, out = as_exec(M, f"update public.ideas set title = 'gehackt' where id = '{i1}'")
+_, t, _ = run(f"select title from public.ideas where id = '{i1}'")
+check('Ideen: fremde Idee nicht änderbar', t == 'Kopfhörer')
+as_exec(M, f"delete from public.ideas where id = '{i1}'")
+_, c, _ = run(f"select count(*) from public.ideas where id = '{i1}'")
+check('Ideen: fremde Idee nicht löschbar', c == '1')
+ok, _ = as_exec(L, f"update public.ideas set done_at = now() where id = '{i1}'")
+check('Ideen: als besorgt abhaken', ok)
+ok, _ = as_exec(L, f"update public.ideas set person = '{pmx}' where id = '{i1}'")
+check('Ideen: nicht zu fremder Person verschieben', not ok)
+ok, _ = as_exec(L, f"update public.idea_people set owner = '{M}' where id = '{po}'")
+_, c, _ = run(f"select owner from public.idea_people where id = '{po}'")
+check('Ideen: Besitzer nicht änderbar', c == L)
+
+# Verknüpfen: Oma Ruth tritt bei, ein zweiter Eintrag für Nora wird zusammengeführt
+ok, r = as_user(L, f"insert into public.idea_people (name, linked_user) values ('Nora', '{N}') returning id")
+pn = r[0]['id']
+as_user(L, f"insert into public.ideas (person, title) values ('{pn}', 'Schal') returning id")
+ok, _ = as_user(L, f"select public.idea_link('{po}', '{O}') as r")
+check('Ideen: Verknüpfen nur mit Leuten aus den Gruppen', not ok)
+ok, _ = as_user(M, f"select public.idea_link('{po}', '{N}') as r")
+check('Ideen: fremde Person nicht verknüpfbar', not ok)
+ok, _ = as_user(L, f"select public.idea_link('{po}', '{N}') as r")
+_, out, _ = run(f"select string_agg(title, ',' order by title) from public.ideas where person = '{po}'")
+_, gone, _ = run(f"select count(*) from public.idea_people where id = '{pn}'")
+_, ln, _ = run(f"select linked_user || '/' || name from public.idea_people where id = '{po}'")
+check('Ideen: Verknüpfen führt doppelte Einträge zusammen', ok and out == 'Fotobuch,Schal' and gone == '0' and ln == f'{N}/Oma Ruth')
+ok, _ = as_user(L, f"select public.idea_link('{po}', null) as r")
+_, ln, _ = run(f"select coalesce(linked_user::text, '-') || '/' || name from public.idea_people where id = '{po}'")
+check('Ideen: Verknüpfung lösen, Name bleibt', ok and ln == '-/Oma Ruth')
+as_user(L, f"select public.idea_link('{po}', '{N}') as r")
+
+# Nora verlässt die Gruppe: Eintrag bleibt, Name ändern geht weiter, neu verknüpfen nicht
+as_user(N, f"select public.leave_group('{ig['id']}') as r")
+ok, _ = as_exec(L, f"update public.idea_people set name = 'Oma' where id = '{po}'")
+check('Ideen: Name ändern auch nach Verlassen der Gruppe', ok)
+ok, _ = as_user(L, f"insert into public.idea_people (name, linked_user) values ('Nora', '{N}') returning id")
+check('Ideen: nach Verlassen nicht neu verknüpfbar', not ok)
+
+ok, _ = as_exec(L, f"delete from public.idea_people where id = '{po}'")
+_, c, _ = run(f"select count(*) from public.ideas where person = '{po}'")
+check('Ideen: Person löschen löscht ihre Ideen', ok and c == '0')
+run(f"delete from auth.users where id = '{M}'")
+_, c, _ = run(f"select coalesce(linked_user::text, '-') from public.idea_people where id = '{pm}'")
+check('Ideen: gelöschtes Konto, Person bleibt mit Namen', c == '-')
+run(f"delete from auth.users where id = '{L}'")
+_, c, _ = run(f"select count(*) from public.ideas where owner = '{L}'")
+check('Ideen: Konto löschen löscht eigene Ideen', c == '0')
+
+
 print('\nAlle Tests grün' if not fails else f'\n{fails} Fehler')
 sys.exit(1 if fails else 0)

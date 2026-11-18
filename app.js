@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.10.4';
+const VERSION = '1.11';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -18,7 +18,7 @@ let ui = {};              // flüchtiger Zustand der Ansicht (offene Formulare, 
 let fresh = null;         // neu erzeugter Wiederherstellungscode {code, username, reason}, nur im Speicher
 
 function emptyData() {
-  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], pp: null, ps: null, at: 0, loaded: false };
+  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], pp: null, ps: null, ip: [], ideas: [], at: 0, loaded: false };
 }
 function loadState() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; }
@@ -270,7 +270,7 @@ async function passwordLogin(username, password) {
 async function sync(quiet) {
   if (!S.session) return;
   try {
-    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp] = await Promise.all([
+    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
       sb('/rest/v1/groups?select=id,name,code,created_by,created_at&order=created_at'),
       sb('/rest/v1/members?select=group_id,user_id,joined_at&order=joined_at'),
@@ -288,12 +288,16 @@ async function sync(quiet) {
       sb('/rest/v1/wichtel_exclusions?select=group_id,a,b,created_at&order=created_at').catch(() => []),
       sb('/rest/v1/wichtel_out?select=group_id,user_id').catch(() => []),
       // Benachrichtigungen ab 1.9
-      sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have').catch(() => null)
+      sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have').catch(() => null),
+      // Private Ideenliste ab 1.11 (nur eigene Zeilen)
+      sb('/rest/v1/idea_people?select=id,name,linked_user,created_at&order=created_at').catch(() => null),
+      sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at&order=created_at.desc').catch(() => null)
     ]);
     const ps = admin === true ? await sb('/rest/v1/rpc/push_status', { method: 'POST', body: {} }).catch(() => null) : null;
     if (!S.session) return;
     D = { profiles, groups, members, wishes, wg, res, account: acc && acc[0] ? acc[0] : null, admin: admin === true,
-      wd: wd || [], wp: wp || [], wx: wx || [], wo: wo || [], pp: pp && pp[0] ? pp[0] : null, ps, at: Date.now(), loaded: true };
+      wd: wd || [], wp: wp || [], wx: wx || [], wo: wo || [], pp: pp && pp[0] ? pp[0] : null, ps,
+      ip: ip || [], ideas: ideas || [], ideasOk: !!(ip && ideas), at: Date.now(), loaded: true };
     S.cache = { uid: me(), D };
     saveState();
     seenSync();
@@ -490,6 +494,7 @@ const I = {
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
   shield: '<path d="M12 3 5 6v5c0 4.5 3 8.4 7 10 4-1.6 7-5.5 7-10V6z"/>',
+  bulb: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.3 1.1 2.2h5c0-.9.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/>',
   heart: '<path d="M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 7.5 3c0 5.4-7.5 10-7.5 10z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3M14 9l2 2"/>',
   paste: '<rect x="6" y="4.5" width="12" height="16" rx="2"/><path d="M9.5 4.5V3.5h5v1M9 11h6M9 15h4"/>',
@@ -961,17 +966,19 @@ function viewHome() {
   const mine = openWishes(me());
   const errands = D.res.filter(r => r.user_id === me())
     .map(r => ({ r, w: D.wishes.find(w => w.id === r.wish_id) })).filter(x => x.w);
-  const bought = errands.filter(x => x.r.status === 'gekauft').length;
+  const ideasDone = (D.ideas || []).filter(i => i.done_at);
+  const bought = errands.filter(x => x.r.status === 'gekauft').length + ideasDone.length;
+  const nErr = errands.length + ideasDone.length;
   const days = daysToXmas();
   const today = new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
 
   const acc = D.account;
   const secure = needsSecure() ? `<a class="banner tap" href="#/konto">${icon('lock')}<span><b>Konto sichern</b><small>Mit Benutzername und Passwort kommst du auf jedem Gerät an deine Liste.</small></span>${icon('chev', 'chev')}</a>`
     : (acc && acc.reset_notice ? `<div class="banner notice">${icon('shield')}<span><b>Dein Zugang wurde am ${esc(fmtDay(acc.reset_at))} zurückgesetzt</b><small>Du hast jetzt ein neues Passwort und einen neuen Wiederherstellungscode.</small></span><button class="link" data-act="dismissreset">OK</button></div>` : '');
-  const hero = heroCard(days, errands.length, bought);
+  const hero = heroCard(days, nErr, bought);
   const stats = `<div class="stats">
       <a href="#/liste"><b>${mine.length}</b><span>${mine.length === 1 ? 'Wunsch' : 'Wünsche'}</span></a>
-      <div><b>${errands.length ? `${bought}<small>/${errands.length}</small>` : '0'}</b><span>besorgt</span></div>
+      <div><b>${nErr ? `${bought}<small>/${nErr}</small>` : '0'}</b><span>besorgt</span></div>
       <a href="#/gruppen"><b>${gs.length}</b><span>${gs.length === 1 ? 'Gruppe' : 'Gruppen'}</span></a>
     </div>`;
 
@@ -1000,7 +1007,15 @@ function viewHome() {
   // „Hab ich schon“: Hinweis an alle, die das noch nicht gekauft haben
   const haveWarn = errands.filter(x => x.w.have_at && x.r.status !== 'gekauft').map(({ w }) =>
     `<div class="banner warn">${icon('gift')}<span><b>${esc(nameOf(w.owner))} hat „${esc(w.title)}“ schon</b><small>Gib die Reservierung frei, falls du es noch nicht gekauft hast.</small></span><button class="link" data-act="unreserve" data-id="${w.id}">Freigeben</button></div>`).join('');
-  const errHtml = errands.length ? `${haveWarn}<ul class="rows">${errands.map(({ r, w }) => {
+  const ideaDoneRow = i => {
+    const p = ipById(i.person);
+    return `<li class="row-item done">
+        <button class="tick on" data-act="ideadone" data-id="${i.id}" aria-label="Doch nicht besorgt">${icon('check')}</button>
+        <a class="row-main" href="#/i/${i.id}?r="><span class="row-title">${esc(i.title)}</span><span class="row-meta">für ${esc(p ? ipName(p) : 'jemanden')} · eigene Idee</span></a>
+        ${p ? ipAvatar(p, 'sm') : ''}
+      </li>`;
+  };
+  const errHtml = nErr ? `${haveWarn}<ul class="rows">${errands.map(({ r, w }) => {
     const g = groupFor(w);
     const done = r.status === 'gekauft';
     return `<li class="row-item ${done ? 'done' : ''}">
@@ -1008,7 +1023,7 @@ function viewHome() {
         <a class="row-main" href="${g ? `#/g/${g}/p/${w.owner}` : '#/'}"><span class="row-title">${esc(w.title)}</span><span class="row-meta ${w.have_at ? 'warn' : ''}">für ${esc(nameOf(w.owner))} · ${w.have_at ? `hat ${esc(nameOf(w.owner))} schon` : (done ? 'gekauft' : 'reserviert')}</span></a>
         ${avatar(w.owner, 'sm')}
       </li>`;
-  }).join('')}</ul>`
+  }).join('')}${ideasDone.map(ideaDoneRow).join('')}</ul>`
     : `<p class="empty-line">Noch nichts reserviert. Öffne eine Liste in deinen Gruppen und tippe auf „Reservieren“.</p>`;
 
   // Neu seit dem letzten Besuch: erst neue Mitglieder, dann neue Wünsche (sonst die letzten 6)
@@ -1107,7 +1122,166 @@ function viewList() {
   const body = all.length
     ? `${add}${list.length ? `<ul class="cards">${list.map(row).join('')}</ul>` : '<p class="empty-line">Alles auf deiner Liste hast du schon.</p>'}${haveHtml}<p class="foot">${icon('eyeoff')}<span>Ob etwas reserviert ist, siehst du nicht. So bleibt es eine Überraschung.</span></p>`
     : emptyState('gift', 'Deine Liste ist noch leer', 'Trag ein, worüber du dich freuen würdest. Ein Link hilft den anderen, genau das Richtige zu finden.', add);
-  return shell('Meine Wunschliste', body, { tab: 'list', eyebrow: theme() === 'weihnachten' ? 'Weihnachten ' + xmasYear() : 'Alle Anlässe', sub: plural(list.length, 'Wunsch', 'Wünsche') });
+  return shell('Meine Wunschliste', listSwitch('w') + body, { tab: 'list', eyebrow: theme() === 'weihnachten' ? 'Weihnachten ' + xmasYear() : 'Alle Anlässe', sub: plural(list.length, 'Wunsch', 'Wünsche') });
+}
+
+/* ---------- Private Ideenliste (1.11) ----------
+   Ideen für andere, nur für mich sichtbar. Person = jemand aus meinen Gruppen (linked_user)
+   oder ein frei angelegter Name. Personen-Schlüssel im Formular: u:<uid> bzw. p:<idea_people.id>. */
+function listSwitch(on) {
+  const n = (D.ideas || []).filter(i => !i.done_at).length;
+  return `<nav class="subtabs" aria-label="Wunschliste oder Ideen"><a href="#/liste" class="${on === 'w' ? 'on' : ''}">Meine Wünsche</a>
+    <a href="#/ideen" class="${on === 'i' ? 'on' : ''}">Ideen für andere${n ? `<span class="subcount">${n}</span>` : ''}</a></nav>`;
+}
+const ipById = id => (D.ip || []).find(p => p.id === id);
+const ipFor = uid => (D.ip || []).find(p => p.linked_user === uid);
+const ideasFor = pid => (D.ideas || []).filter(i => i.person === pid);
+// Leute aus meinen Gruppen (ohne mich), nach Namen
+function groupPeople() {
+  const ids = new Set();
+  myGroups().forEach(g => membersOf(g.id).forEach(m => { if (m.user_id !== me()) ids.add(m.user_id); }));
+  return [...ids].sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'de'));
+}
+const inMyGroups = uid => groupPeople().includes(uid);
+function ipName(p) {
+  if (p.linked_user) {
+    const pr = D.profiles.find(x => x.id === p.linked_user);
+    if (pr && pr.name) return pr.name;
+  }
+  return p.name;
+}
+function ipAvatar(p, size = '') {
+  if (p.linked_user && inMyGroups(p.linked_user)) return avatar(p.linked_user, size);
+  return `<span class="av ${size} c${hueIdx(p.id)}">${esc(initials(p.name))}</span>`;
+}
+// Wohin „Zurück“ nach dem Speichern führt (?r=… im Hash, nur eigene Pfade)
+function backParam() {
+  const m = /[?&]r=([\w/:-]*)/.exec(location.hash);
+  return m ? '#/' + m[1] : '';
+}
+const byDone = (a, b) => (a.done_at ? 1 : 0) - (b.done_at ? 1 : 0);
+function ideaRow(i, ret) {
+  const done = !!i.done_at;
+  const meta = [wishMeta(i), i.url ? domain(i.url) : '', done ? 'besorgt' : ''].filter(Boolean).join(' · ');
+  return `<li class="row-item ${done ? 'done' : ''}">
+      <button class="tick ${done ? 'on' : ''}" data-act="ideadone" data-id="${i.id}" aria-label="${done ? 'Doch nicht besorgt' : 'Als besorgt markieren'}">${icon('check')}</button>
+      <a class="row-main" href="#/i/${i.id}${ret ? '?r=' + ret : ''}"><span class="row-title">${esc(i.title)}</span>${meta ? `<span class="row-meta">${esc(meta)}</span>` : ''}</a>
+      ${icon('chev', 'chev')}
+    </li>`;
+}
+const privacyFoot = who => `<p class="foot">${icon('eyeoff')}<span>Deine Ideen sieht niemand außer dir${who ? `, auch nicht ${esc(who)}` : ''}.</span></p>`;
+function ideasMissing() {
+  return emptyState('bulb', 'Noch nicht eingerichtet', 'Für die Ideenliste muss die Datenbank einmal aktualisiert werden (schema.sql ausführen).');
+}
+
+function viewIdeas() {
+  const opt = { tab: 'list', eyebrow: 'Nur für dich' };
+  if (!D.ideasOk) return shell('Ideen für andere', listSwitch('i') + ideasMissing(), opt);
+  const all = D.ideas;
+  const add = `<a class="primary withicon" href="#/i/neu">${icon('plus')}Idee notieren</a>`;
+  if (!all.length && !D.ip.some(p => !p.linked_user)) {
+    return shell('Ideen für andere', listSwitch('i') + emptyState('bulb', 'Noch keine Ideen', 'Notiere, was dir für andere einfällt, auch für Leute ohne App. Nur du siehst es.', add), opt);
+  }
+  // Personen mit offenen Ideen zuerst, dann nach Namen; frei angelegte ohne Ideen bleiben sichtbar
+  const people = D.ip.filter(p => ideasFor(p.id).length || !p.linked_user).map(p => {
+    const list = ideasFor(p.id).slice().sort(byDone);
+    return { p, list, open: list.filter(i => !i.done_at).length };
+  }).sort((a, b) => (b.open ? 1 : 0) - (a.open ? 1 : 0) || ipName(a.p).localeCompare(ipName(b.p), 'de'));
+  const sec = ({ p, list, open }) => `<div class="sechead ideahead"><a href="#/ideen/p/${p.id}" class="ideaperson">${ipAvatar(p, 'sm')}<h2>${esc(ipName(p))}</h2></a>
+      <span class="row-meta">${list.length ? (open ? plural(open, 'Idee', 'Ideen') : 'alles besorgt') : 'noch keine Ideen'}</span></div>
+      ${list.length ? `<ul class="rows plain">${list.map(i => ideaRow(i, 'ideen')).join('')}</ul>` : ''}`;
+  const open = all.filter(i => !i.done_at).length;
+  return shell('Ideen für andere', `${listSwitch('i')}${add}${people.map(sec).join('')}${privacyFoot('die Person selbst')}`,
+    Object.assign(opt, { sub: `${plural(open, 'offene Idee', 'offene Ideen')}${all.length - open ? ` · ${all.length - open} besorgt` : ''}` }));
+}
+
+function viewIdeaPerson(pid) {
+  const back = ['#/ideen', 'Ideen'];
+  const p = ipById(pid);
+  if (!p) return shell('Ideen', emptyState('bulb', 'Nicht gefunden', 'Diese Person gibt es in deiner Ideenliste nicht mehr.'), { tab: 'list', back });
+  const name = ipName(p);
+  const list = ideasFor(pid).slice().sort(byDone);
+  const linked = p.linked_user && inMyGroups(p.linked_user);
+  const gid = linked ? groupFor({ owner: p.linked_user, all_groups: true }) : null;
+  const head = `<section class="profile">${ipAvatar(p, 'lg')}<div class="profile-main">
+      <p class="row-meta">${linked ? 'Aus deinen Gruppen' : (p.linked_user ? 'Nicht mehr in deinen Gruppen' : 'Ohne App')}</p>
+      ${gid ? `<a class="link-out" href="#/g/${gid}/p/${p.linked_user}">${icon('gift')}Wunschliste ansehen</a>` : ''}</div></section>`;
+  const add = `<a class="primary withicon" href="#/i/neu/p:${pid}?r=ideen/p/${pid}">${icon('plus')}Idee notieren</a>`;
+  const ideas = list.length ? `<ul class="rows plain">${list.map(i => ideaRow(i, 'ideen/p/' + pid)).join('')}</ul>` : `<p class="empty-line">Noch keine Ideen für ${esc(name)}.</p>`;
+
+  // Verwalten: Namen ändern, mit Konto verknüpfen oder lösen, löschen
+  const cands = groupPeople().filter(u => u !== p.linked_user);
+  const opts = cands.map(u => `<option value="${u}">${esc(nameOf(u))}</option>`).join('');
+  const nameForm = !p.linked_user || !linked ? `<form data-form="ipname" data-id="${pid}" class="inline">
+      <input name="name" maxlength="40" required value="${esc(p.name)}" aria-label="Name"><button class="secondary sm" type="submit">Umbenennen</button></form>` : '';
+  const linkForm = !linked && cands.length ? `<form data-form="iplink" data-id="${pid}" class="stack tight">
+      <label>Ist ${esc(name)} inzwischen dabei?<select name="u" required><option value="">Person auswählen</option>${opts}</select></label>
+      <button class="secondary sm" type="submit">Verknüpfen</button></form>` : '';
+  const unlink = p.linked_user ? `<button class="ghost sm" data-act="ipunlink" data-id="${pid}">Verknüpfung lösen</button>` : '';
+  const del = ui.confirmDelIp === pid
+    ? `<button class="danger" data-act="delip" data-id="${pid}">${list.length ? `Mit ${plural(list.length, 'Idee', 'Ideen')} löschen` : 'Wirklich löschen'}</button>`
+    : `<button class="ghost danger-text" data-act="askdelip" data-id="${pid}">Person aus der Ideenliste löschen</button>`;
+  const manage = `<h2>Verwalten</h2><div class="card stack manage">${nameForm}${linkForm}${unlink}</div>${del}`;
+  return shell(name, `${head}${add}${ideas}${manage}${privacyFoot(name)}`, { tab: 'list', back: backParam() ? [backParam(), 'Zurück'] : back, eyebrow: 'Ideen für' });
+}
+
+function viewIdeaForm(id, key) {
+  const ret = backParam();
+  const neu = id === 'neu';
+  const i = neu ? { title: '', url: '', note: '' } : (D.ideas || []).find(x => x.id === id);
+  const back = [ret || '#/ideen', ret ? 'Zurück' : 'Ideen'];
+  if (!D.ideasOk) return shell('Idee', ideasMissing(), { tab: 'list', back });
+  if (!i) return shell('Idee', emptyState('bulb', 'Nicht gefunden', 'Diese Idee gibt es nicht mehr.'), { tab: 'list', back });
+  // Auswahl: Leute aus meinen Gruppen, dann frei angelegte (und solche, die nicht mehr in meinen Gruppen sind)
+  const gp = groupPeople();
+  const own = D.ip.filter(p => !p.linked_user || !gp.includes(p.linked_user));
+  let cur = '';
+  if (!neu) { const p = ipById(i.person); cur = p && p.linked_user && gp.includes(p.linked_user) ? 'u:' + p.linked_user : 'p:' + i.person; }
+  else if (key && /^[up]:[\w-]+$/.test(key)) cur = key.startsWith('p:') && ipById(key.slice(2)) && ipById(key.slice(2)).linked_user && gp.includes(ipById(key.slice(2)).linked_user) ? 'u:' + ipById(key.slice(2)).linked_user : key;
+  const o = (v, n) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${esc(n)}</option>`;
+  const sel = `<option value="" ${cur ? '' : 'selected'} disabled>Person auswählen</option>`
+    + (gp.length ? `<optgroup label="Aus deinen Gruppen">${gp.map(u => o('u:' + u, nameOf(u))).join('')}</optgroup>` : '')
+    + (own.length ? `<optgroup label="Ohne App">${own.map(p => o('p:' + p.id, ipName(p))).join('')}</optgroup>` : '')
+    + `<option value="new" ${cur === 'new' ? 'selected' : ''}>Neue Person …</option>`;
+  const cats = '<option value="">Keine</option>' + CATS.map(([k, n]) => `<option value="${k}" ${i.category === k ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  const done = neu ? '' : (i.done_at
+    ? `<button type="button" class="secondary" data-act="ideadone" data-id="${id}">Doch nicht besorgt</button>`
+    : `<button type="button" class="secondary withicon" data-act="ideadone" data-id="${id}">${icon('check')}Besorgt</button>`);
+  const del = neu ? '' : (ui.confirmDel === id
+    ? `<button type="button" class="danger" data-act="delidea" data-id="${id}">Wirklich löschen</button>`
+    : `<button type="button" class="ghost danger-text" data-act="askdel" data-id="${id}">Idee löschen</button>`);
+  const doneNote = i.done_at ? `<div class="banner">${icon('check')}<span><b>Besorgt am ${esc(fmtDay(i.done_at))}</b></span></div>` : '';
+  return shell(neu ? 'Neue Idee' : 'Idee bearbeiten', `${doneNote}
+    <form data-form="idea" data-id="${id}" class="stack">
+      <div class="card fields">
+        <label>Für wen?<select name="person" required>${sel}</select></label>
+        <label class="${cur === 'new' ? '' : 'hide'}" id="pnew">Name<input name="pname" maxlength="40" autocomplete="off" placeholder="z. B. Oma Ruth"></label>
+        <label>Was könnte passen?<input name="title" maxlength="120" required value="${esc(i.title)}" placeholder="z. B. Fotobuch vom Urlaub"></label>
+        <div class="field"><div class="fieldhead"><label for="f-url">Link</label><button type="button" class="link withicon" data-act="pasteurl">${icon('paste')}Einfügen</button></div>
+          <input id="f-url" name="url" inputmode="url" autocomplete="off" value="${esc(i.url || '')}" placeholder="https://"></div>
+        <div class="two">
+          <label>Preis<span class="money"><input name="price" inputmode="decimal" autocomplete="off" maxlength="12" value="${esc(priceInput(i.price))}" placeholder="ca."><span>€</span></span></label>
+          <label>Kategorie<select name="category">${cats}</select></label>
+        </div>
+        <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Wo gesehen, Größe, Farbe">${esc(i.note || '')}</textarea></label>
+      </div>
+      <button class="primary" type="submit">Speichern</button>
+      ${done}
+      ${del}
+    </form>${privacyFoot('die Person selbst')}`, { tab: 'list', back });
+}
+
+// Abschnitt auf der Seite einer Person in der Gruppe
+function personIdeas(gid, uid) {
+  if (!D.ideasOk) return '';
+  const p = ipFor(uid);
+  const list = p ? ideasFor(p.id).slice().sort(byDone) : [];
+  const ret = `g/${gid}/p/${uid}`;
+  const key = p ? 'p:' + p.id : 'u:' + uid;
+  return `<div class="sechead"><h2>Deine Ideen</h2>${p ? `<a class="link" href="#/ideen/p/${p.id}?r=${ret}">Alle</a>` : ''}</div>
+    ${list.length ? `<ul class="rows plain">${list.map(i => ideaRow(i, ret)).join('')}</ul>` : ''}
+    <a class="secondary withicon addidea" href="#/i/neu/${key}?r=${ret}">${icon('bulb')}Idee für ${esc(nameOf(uid))} notieren</a>
+    ${privacyFoot(nameOf(uid))}`;
 }
 
 function viewWishForm(id) {
@@ -1286,7 +1460,7 @@ function viewPerson(gid, uid) {
       ${ws.length ? `<progress max="${ws.length}" value="${taken}"></progress>` : ''}</div></section>
     <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert oder gekauft ist.</span></p>`;
   const body = ws.length || had.length ? filterBar + list + hadHtml : emptyState('gift', 'Noch leer', `${esc(name)} hat für diese Gruppe noch nichts eingetragen.`);
-  return shell(name, head + body, { tab: 'groups', back: ['#/g/' + gid, g.name] });
+  return shell(name, head + body + personIdeas(gid, uid), { tab: 'groups', back: ['#/g/' + gid, g.name] });
 }
 
 function viewWichteln(gid) {
@@ -1470,6 +1644,9 @@ function render() {
   if (!D.loaded) { app.innerHTML = '<p class="boot">Lädt …</p>'; return; }
   let html;
   if (parts[0] === 'w' && parts[1]) html = viewWishForm(parts[1]);
+  else if (parts[0] === 'i' && parts[1]) html = viewIdeaForm(parts[1], parts[2]);
+  else if (parts[0] === 'ideen' && parts[1] === 'p' && parts[2]) html = viewIdeaPerson(parts[2]);
+  else if (parts[0] === 'ideen') html = viewIdeas();
   else if (parts[0] === 'gruppen') html = viewGroups();
   else if (parts[0] === 'g' && parts[1] && parts[2] === 'p' && parts[3]) html = viewPerson(parts[1], parts[3]);
   else if (parts[0] === 'g' && parts[1] && parts[2] === 'wichteln') html = viewWichteln(parts[1]);
@@ -1616,6 +1793,43 @@ const forms = {
     toast('Gespeichert.');
     go('#/liste');
   },
+  async idea(f) {
+    const id = f.dataset.id;
+    const title = f.title.value.trim();
+    const url = normUrl(f.url.value);
+    if (url === false) throw new Error('Der Link sieht nicht richtig aus.');
+    const price = parsePrice(f.price.value);
+    if (price === false) throw new Error('Der Preis sieht nicht richtig aus, z. B. 24,99.');
+    const v = f.person.value;
+    let person;
+    if (v === 'new') {
+      const name = f.pname.value.trim();
+      if (!name) throw new Error('Gib einen Namen ein.');
+      person = (await sb('/rest/v1/idea_people', { method: 'POST', prefer: 'return=representation', body: { name } }))[0].id;
+    } else if (v.startsWith('u:')) {
+      const uid = v.slice(2);
+      const p = ipFor(uid);
+      person = p ? p.id : (await sb('/rest/v1/idea_people', { method: 'POST', prefer: 'return=representation', body: { name: nameOf(uid).slice(0, 40), linked_user: uid } }))[0].id;
+    } else if (v.startsWith('p:')) person = v.slice(2);
+    else throw new Error('Wähle aus, für wen die Idee ist.');
+    const row = { person, title, url, price, category: f.category.value || null, note: f.note.value.trim() || null };
+    if (id === 'neu') await sb('/rest/v1/ideas', { method: 'POST', prefer: 'return=minimal', body: row });
+    else await sb('/rest/v1/ideas?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: row });
+    await sync(true);
+    toast('Gespeichert. Nur du siehst diese Idee.');
+    go(backParam() || '#/ideen');
+  },
+  async ipname(f) {
+    await sb('/rest/v1/idea_people?id=eq.' + f.dataset.id, { method: 'PATCH', prefer: 'return=minimal', body: { name: f.name.value.trim() } });
+    await sync(true);
+    toast('Umbenannt.');
+  },
+  async iplink(f) {
+    if (!f.u.value) throw new Error('Wähle eine Person aus.');
+    await sb('/rest/v1/rpc/idea_link', { method: 'POST', body: { p_person: f.dataset.id, p_user: f.u.value } });
+    await sync(true);
+    toast('Verknüpft. Die Ideen bleiben privat.');
+  },
   async newgroup(f) {
     const g = await sb('/rest/v1/rpc/create_group', { method: 'POST', body: { p_name: f.name.value.trim() } });
     await sync(true);
@@ -1742,6 +1956,35 @@ const acts = {
     logout('Abgemeldet.');
   },
   askdel: async el => { ui.confirmDel = el.dataset.id; render(); },
+  ideadone: async el => {
+    const i = (D.ideas || []).find(x => x.id === el.dataset.id);
+    if (!i) return;
+    const at = i.done_at ? null : new Date().toISOString();
+    await sb('/rest/v1/ideas?id=eq.' + i.id, { method: 'PATCH', prefer: 'return=minimal', body: { done_at: at } });
+    i.done_at = at;
+    render();
+    sync(true);
+  },
+  delidea: async el => {
+    await sb('/rest/v1/ideas?id=eq.' + el.dataset.id, { method: 'DELETE' });
+    ui = {};
+    await sync(true);
+    toast('Gelöscht.');
+    go(backParam() || '#/ideen');
+  },
+  askdelip: async el => { ui.confirmDelIp = el.dataset.id; render(); },
+  delip: async el => {
+    await sb('/rest/v1/idea_people?id=eq.' + el.dataset.id, { method: 'DELETE' });
+    ui = {};
+    await sync(true);
+    toast('Gelöscht.');
+    go('#/ideen');
+  },
+  ipunlink: async el => {
+    await sb('/rest/v1/rpc/idea_link', { method: 'POST', body: { p_person: el.dataset.id, p_user: null } });
+    await sync(true);
+    toast('Verknüpfung gelöst.');
+  },
   delwish: async el => {
     await sb('/rest/v1/wishes?id=eq.' + el.dataset.id, { method: 'DELETE' });
     ui = {};
@@ -1883,11 +2126,15 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('paste', e => {
   const el = e.target;
-  if (!el || el.name !== 'url' || !el.form || el.form.dataset.form !== 'wish') return;
+  if (!el || el.name !== 'url' || !el.form || !['wish', 'idea'].includes(el.form.dataset.form)) return;
   const t = (e.clipboardData || window.clipboardData).getData('text');
   if (/\s/.test(t.trim()) && findUrl(t)) { e.preventDefault(); fillLink(el.form, t); }
 });
 document.addEventListener('change', e => {
+  if (e.target.name === 'person' && e.target.form && e.target.form.dataset.form === 'idea') {
+    const n = $('#pnew');
+    if (n) { n.classList.toggle('hide', e.target.value !== 'new'); if (e.target.value === 'new') n.querySelector('input').focus(); }
+  }
   if (e.target.name === 'vis') {
     const sub = $('#gsel');
     if (sub) sub.classList.toggle('hide', e.target.value === 'all');

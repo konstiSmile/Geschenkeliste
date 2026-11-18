@@ -1,4 +1,4 @@
-# Geschenkeliste – Fahrplan (Stand 18. November 2026)
+# Geschenkeliste – Fahrplan (Stand 18. November 2026, Version 1.11)
 
 Reihenfolge der Features in kleinen Paketen. **Ein Paket = ein Chat** (Übergabe lesen, Paket bauen, testen, pushen, Übergabe aktualisieren). Jedes Paket ist für sich nutzbar, die Familie merkt nie eine halbe Baustelle.
 
@@ -66,9 +66,13 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Tests: 171 RLS-Prüfungen, 165 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
 - [x] **1.10.1–1.10.4** (18.11.): Hell/Dunkel fest wählbar, Tab-Leiste als schwebende Kapsel, Weihnachten dunkel neu (Tannennacht, Cranberry, Gold, Salbei, Creme), Design und Datenschutz unter Konto aufklappbar (anfangs zu)
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.10“: A neu laden, B Konto → Design ausprobieren, C Dunkelmodus ansehen, D iPhone-App: Statusleiste oben lesbar? (Rückmeldung an Claude)
-- [ ] **Paket 12 – 1.11 Private Ideenliste** (S–M) [Claude], schema.sql – **vorgezogen (18.11.), als Nächstes**
-  - Ideen für Leute aus meinen Gruppen oder für selbst angelegte Personen (ohne App), später mit echtem Konto verknüpfbar. Nur ich sehe sie. Details in der Übergabe
-- [ ] **Paket 11 – 1.12 Steckbrief + „Früh dran“** (M) [Claude], schema.sql – **vorgezogen (18.11.), danach**
+- [x] **Paket 12 – 1.11 Private Ideenliste** (S–M) [Claude], schema.sql – **gebaut und gepusht 18.11.**
+  - Wunschliste hat zwei Reiter „Meine Wünsche | Ideen für andere“; Ideen für Leute aus den Gruppen oder für selbst angelegte Personen ohne App, später mit echtem Konto verknüpfbar (Ideen wandern mit); Titel, Link, Preis, Kategorie, Notiz; als besorgt abhaken (zählt bei den Besorgungen); Abschnitt „Deine Ideen“ auf der Personenseite. Nur ich sehe sie
+  - Später: Idee in Reservierung umwandeln
+  - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.11: Private Ideenliste“ (A–D)
+  - Tests: 201 RLS-Prüfungen, 194 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
+- [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.11“: A schema.sql ausführen, B neu laden (Version 1.11), C Idee für jemanden aus der Gruppe notieren, D Person ohne App anlegen
+- [ ] **Paket 11 – 1.12 Steckbrief + „Früh dran“** (M) [Claude], schema.sql – **vorgezogen (18.11.), als Nächstes**
   - Erst Ideen besprechen, wie der Steckbrief Spaß macht statt zu überfordern; Inhalte Größen, Lieblingsdinge, Lieber nicht, Freitext. „Früh dran“: dezentes Lob nur für mich, auch für einzelne Besorgungen
 - [ ] **[Du]** Vorher klären für Paket 6: Wer kauft und streckt vor? Was, wenn zu wenige mitmachen?
 - [ ] **Paket 6 – 1.13 Gemeinsam schenken** (M) [Claude], schema.sql – nach Paket 12 und 11
@@ -102,4 +106,4 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - Anlässe kommen vor Farbthemen, weil dabei das fest eingebaute Weihnachten verschwindet.
 - Öffnen für Freunde erst, wenn Datenschutz und Schutz vor Spam stehen.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann bauen wir Paket 12 (Private Ideenliste).“
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann besprechen und bauen wir Paket 11 (Steckbrief + Früh dran).“

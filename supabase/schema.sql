@@ -1,4 +1,4 @@
--- Geschenkeliste – Datenbank, Stand Version 1.9 (Benachrichtigungen)
+-- Geschenkeliste – Datenbank, Stand Version 1.11 (Private Ideenliste)
 -- Im Supabase SQL Editor komplett einfügen und „Run“ drücken.
 -- Das Skript darf mehrfach ausgeführt werden (bestehende Daten bleiben erhalten).
 
@@ -1224,3 +1224,142 @@ grant execute on function public.push_public_key(), public.push_subscribe(text, 
 do $$ begin
   grant execute on function public.push_claim(int), public.push_report(jsonb, text) to service_role;
 exception when undefined_object then raise notice 'Rolle service_role fehlt (nur in Tests)'; end $$;
+
+-- =====================================================================
+-- Private Ideenliste (Version 1.11)
+-- Geschenkideen für andere. Nur wer sie angelegt hat, sieht sie, niemand sonst
+-- (auch nicht die Person selbst, Gruppen-Gründer oder Admins).
+-- Eine Person ist entweder jemand aus den eigenen Gruppen (linked_user) oder
+-- ein frei angelegter Name für Leute ohne App. Der Name bleibt als Rückfall.
+-- =====================================================================
+
+create table if not exists public.idea_people (
+  id uuid primary key default gen_random_uuid(),
+  owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  name text not null check (char_length(name) between 1 and 40),
+  linked_user uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  check (linked_user is null or linked_user <> owner)
+);
+create unique index if not exists idea_people_link_idx on public.idea_people(owner, linked_user);
+create index if not exists idea_people_owner_idx on public.idea_people(owner);
+
+create table if not exists public.ideas (
+  id uuid primary key default gen_random_uuid(),
+  owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  person uuid not null references public.idea_people(id) on delete cascade,
+  title text not null check (char_length(title) between 1 and 120),
+  url text check (url is null or (char_length(url) <= 1000 and url ~* '^https?://')),
+  note text check (note is null or char_length(note) <= 1000),
+  price numeric(9,2) check (price is null or (price >= 0 and price <= 1000000)),
+  category text check (category is null or category ~ '^[a-z]{2,20}$'),
+  done_at timestamptz,   -- gesetzt = besorgt
+  created_at timestamptz not null default now()
+);
+create index if not exists ideas_owner_idx on public.ideas(owner);
+create index if not exists ideas_person_idx on public.ideas(person);
+
+-- ---------- Prüfungen ----------
+
+-- Verknüpfen nur mit Leuten aus den eigenen Gruppen (beim Anlegen oder Ändern der Verknüpfung),
+-- höchstens 200 Personen pro Konto
+create or replace function public.idea_people_check() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'UPDATE' and new.owner <> old.owner then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if new.linked_user is not null and (tg_op = 'INSERT' or new.linked_user is distinct from old.linked_user)
+     and not public.shares_group(new.linked_user) then
+    raise exception 'Diese Person ist in keiner deiner Gruppen' using errcode = '42501';
+  end if;
+  if tg_op = 'INSERT' and (select count(*) from public.idea_people where owner = new.owner) >= 200 then
+    raise exception 'Höchstens 200 Personen' using errcode = '54000';
+  end if;
+  return new;
+end $$;
+drop trigger if exists idea_people_check on public.idea_people;
+create trigger idea_people_check before insert or update on public.idea_people
+  for each row execute function public.idea_people_check();
+
+-- Ideen nur für eigene Personen, höchstens 1000 pro Konto
+create or replace function public.ideas_check() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if (tg_op = 'UPDATE' and new.owner <> old.owner)
+     or not exists (select 1 from public.idea_people p where p.id = new.person and p.owner = new.owner) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if tg_op = 'INSERT' and (select count(*) from public.ideas where owner = new.owner) >= 1000 then
+    raise exception 'Höchstens 1000 Ideen' using errcode = '54000';
+  end if;
+  return new;
+end $$;
+drop trigger if exists ideas_check on public.ideas;
+create trigger ideas_check before insert or update on public.ideas
+  for each row execute function public.ideas_check();
+
+-- ---------- Aktionen der App ----------
+
+-- Selbst angelegte Person mit einem Konto verknüpfen. Gibt es für dieses Konto schon
+-- eine Person, wandern deren Ideen mit und der doppelte Eintrag verschwindet.
+create or replace function public.idea_link(p_person uuid, p_user uuid) returns void
+language plpgsql security invoker set search_path = public as $$
+declare v_other uuid;
+begin
+  if not exists (select 1 from public.idea_people where id = p_person and owner = auth.uid()) then
+    raise exception 'Nicht gefunden' using errcode = 'P0002';
+  end if;
+  if p_user is null then
+    update public.idea_people set linked_user = null where id = p_person;
+    return;
+  end if;
+  if not public.shares_group(p_user) or p_user = auth.uid() then
+    raise exception 'Diese Person ist in keiner deiner Gruppen' using errcode = '42501';
+  end if;
+  select id into v_other from public.idea_people
+    where owner = auth.uid() and linked_user = p_user and id <> p_person;
+  if v_other is not null then
+    update public.ideas set person = p_person where person = v_other;
+    delete from public.idea_people where id = v_other;
+  end if;
+  update public.idea_people set linked_user = p_user where id = p_person;
+end $$;
+
+-- ---------- Zugriffsregeln ----------
+
+alter table public.idea_people enable row level security;
+alter table public.ideas enable row level security;
+
+drop policy if exists "ideen-personen lesen" on public.idea_people;
+drop policy if exists "ideen-person anlegen" on public.idea_people;
+drop policy if exists "ideen-person ändern" on public.idea_people;
+drop policy if exists "ideen-person löschen" on public.idea_people;
+create policy "ideen-personen lesen" on public.idea_people for select to authenticated
+  using (owner = auth.uid());
+create policy "ideen-person anlegen" on public.idea_people for insert to authenticated
+  with check (owner = auth.uid());
+create policy "ideen-person ändern" on public.idea_people for update to authenticated
+  using (owner = auth.uid()) with check (owner = auth.uid());
+create policy "ideen-person löschen" on public.idea_people for delete to authenticated
+  using (owner = auth.uid());
+
+drop policy if exists "ideen lesen" on public.ideas;
+drop policy if exists "idee anlegen" on public.ideas;
+drop policy if exists "idee ändern" on public.ideas;
+drop policy if exists "idee löschen" on public.ideas;
+create policy "ideen lesen" on public.ideas for select to authenticated
+  using (owner = auth.uid());
+create policy "idee anlegen" on public.ideas for insert to authenticated
+  with check (owner = auth.uid());
+create policy "idee ändern" on public.ideas for update to authenticated
+  using (owner = auth.uid()) with check (owner = auth.uid());
+create policy "idee löschen" on public.ideas for delete to authenticated
+  using (owner = auth.uid());
+
+revoke all on public.idea_people, public.ideas from anon, authenticated;
+grant select, insert, update, delete on public.idea_people, public.ideas to authenticated;
+
+revoke execute on function public.idea_people_check(), public.ideas_check(), public.idea_link(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.idea_link(uuid, uuid) to authenticated;
