@@ -16,10 +16,18 @@ fails = 0
 subprocess.run(mock.PSQL, input='truncate auth.users, public.login_attempts, public.push_config cascade;', capture_output=True, text=True)
 
 
+VERBOSE = bool(os.environ.get('GL_VERBOSE'))
+passed = 0
+
+
 def check(name, cond):
-    global fails
-    print(('ok   ' if cond else 'FAIL ') + name)
-    if not cond:
+    # Standard: nur Fehler ausgeben (GL_VERBOSE=1 zeigt jede Prüfung)
+    global fails, passed
+    if VERBOSE or not cond:
+        print(('ok   ' if cond else 'FAIL ') + name)
+    if cond:
+        passed += 1
+    else:
         fails += 1
 
 
@@ -1726,5 +1734,5 @@ with sync_playwright() as pw:
     check('Keine JS-Fehler ' + ('; '.join(real)[:300] if real else ''), not real)
     browser.close()
 
-print('\nAlle Tests grün' if not fails else f'\n{fails} Fehler')
+print(f'\n{passed} ok, ' + ('alle Tests grün' if not fails else f'{fails} Fehler'))
 sys.exit(1 if fails else 0)

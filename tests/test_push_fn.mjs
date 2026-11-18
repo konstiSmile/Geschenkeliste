@@ -14,7 +14,9 @@ const fn = await import(join(tmp, 'push.mjs'));
 const { b64u, unb64u } = fn;
 const enc = new TextEncoder(), dec = new TextDecoder();
 let fails = 0;
-const check = (name, cond) => { console.log((cond ? 'ok   ' : 'FAIL ') + name); if (!cond) fails++; };
+let passed = 0;
+const VERBOSE = !!process.env.GL_VERBOSE; // Standard: nur Fehler ausgeben
+const check = (name, cond) => { if (VERBOSE || !cond) console.log((cond ? 'ok   ' : 'FAIL ') + name); if (cond) passed++; else fails++; };
 const PSQL = ['-h', '/tmp', '-p', '5544', '-U', 'postgres', '-d', 'gl', '-tAq', '-v', 'ON_ERROR_STOP=1'];
 const sql = (s, role) => execFileSync('psql', PSQL, { input: (role ? `begin; set local role ${role};\n${s};\ncommit;` : s), encoding: 'utf8' }).trim();
 
@@ -133,5 +135,5 @@ const res4 = await fn.handler(new Request('https://x/', { method: 'POST' }), { u
 check('Funktion: Fehler beim Abholen wird gemeldet', res4.status === 500);
 sql(`delete from auth.users where id in ('${U}', '${V}'); truncate public.push_config, public.push_outbox;`);
 
-console.log(fails ? `\n${fails} Fehler` : '\nAlle Tests grün');
+console.log(`\n${passed} ok, ` + (fails ? `${fails} Fehler` : 'alle Tests grün'));
 process.exit(fails ? 1 : 0);

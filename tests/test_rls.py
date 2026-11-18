@@ -2,6 +2,7 @@
 
 Aufruf: python3 tests/test_rls.py   (Postgres auf Socket /tmp, Port 5544, Datenbank gl)
 """
+import os
 import json, subprocess, sys, uuid
 
 PSQL = ['psql', '-h', '/tmp', '-p', '5544', '-U', 'postgres', '-d', 'gl', '-tAq', '-v', 'ON_ERROR_STOP=1']
@@ -28,10 +29,18 @@ def as_exec(uid, sql):
     return code == 0, (err or out)
 
 
+VERBOSE = bool(os.environ.get('GL_VERBOSE'))
+passed = 0
+
+
 def check(name, cond):
-    global fails
-    print(('ok   ' if cond else 'FAIL ') + name)
-    if not cond:
+    # Standard: nur Fehler ausgeben (GL_VERBOSE=1 zeigt jede Prüfung)
+    global fails, passed
+    if VERBOSE or not cond:
+        print(('ok   ' if cond else 'FAIL ') + name)
+    if cond:
+        passed += 1
+    else:
         fails += 1
 
 
@@ -1236,5 +1245,5 @@ check('Neuer Link: alter gilt nicht mehr', not ok)
 ok, r = rpc(CE, f"public.friend_peek('{code}')")
 check('Neuer Link: alter zeigt nichts', ok and r is None)
 
-print('\nAlle Tests grün' if not fails else f'\n{fails} Fehler')
+print(f'\n{passed} ok, ' + ('alle Tests grün' if not fails else f'{fails} Fehler'))
 sys.exit(1 if fails else 0)

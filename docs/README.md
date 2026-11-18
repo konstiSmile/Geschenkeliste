@@ -1,9 +1,8 @@
 # Unterlagen für Claude
 
-Kopien der Projekt-Dokumente aus claude.ai („Apps (Ansätze)“), damit jeder Chat mit Zugriff auf dieses Repo sie findet:
+Hauptquelle für alle Unterlagen zur Geschenkeliste (seit 18.11.2026). Im claude.ai-Projekt liegt nur eine Kopie von `uebergabe.md`.
 
-- `geschenkeliste-uebergabe.md`: Stand, Aufbau, Testumgebung, Release-Ablauf
-- `geschenkeliste-fahrplan.md`: Reihenfolge der Pakete
-- `geschenkeliste-design-pop.md`: Pop-Design mit den Themen Ganzjährig und Weihnachten (Paket 5b)
-
-Nach jedem Paket hier und im Projekt aktualisieren.
+- `uebergabe.md`: kurzer Stand, nächster Schritt, Arbeitsweise. **Zuerst lesen.**
+- `fahrplan.md`: Pakete, Entscheidungen, „Später“-Liste
+- `technik.md`: Nachschlagewerk (Aufbau, Tests, Release-Ablauf, ein Abschnitt pro Bereich). Nur die passenden Abschnitte lesen.
+- `design-pop.md`: Pop-Design mit den Themen Ganzjährig und Weihnachten

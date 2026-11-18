@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 let fails = 0;
-const check = (name, cond) => { console.log((cond ? 'ok   ' : 'FAIL ') + name); if (!cond) fails++; };
+let passed = 0;
+const VERBOSE = !!process.env.GL_VERBOSE; // Standard: nur Fehler ausgeben
+const check = (name, cond) => { if (VERBOSE || !cond) console.log((cond ? 'ok   ' : 'FAIL ') + name); if (cond) passed++; else fails++; };
 const SCOPE = 'https://konstismile.github.io/Geschenkeliste/';
 
 function worker(wins = []) {
@@ -67,5 +69,5 @@ check('Push: offene App wird zum Neuladen aufgefordert', msgs[0].type === 'sync'
 await w2.fire('notificationclick', notif('#/g/abc'));
 check('Antippen: offene App springt zur Seite', win.focused && msgs[1].type === 'nav' && msgs[1].url === '#/g/abc' && w2.opened.length === 0);
 
-console.log(fails ? `\n${fails} Fehler` : '\nAlle Tests grün');
+console.log(`\n${passed} ok, ` + (fails ? `${fails} Fehler` : 'alle Tests grün'));
 process.exit(fails ? 1 : 0);
