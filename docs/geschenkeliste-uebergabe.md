@@ -1,8 +1,9 @@
-# Geschenkeliste – Übergabe (Stand 18. November 2026, Version 1.10.2)
+# Geschenkeliste – Übergabe (Stand 18. November 2026, Version 1.10.3)
 
 Maßgeblich für die Geschenkeliste (Abschnitt D der großen Übergabe verweist hierher). **Reihenfolge der nächsten Schritte: siehe `claude/geschenkeliste-fahrplan.md`. Pakete 1, 2, 3, 3b, 4, 5 und 5b sind gebaut. Nächstes Paket: Paket 6 – 1.11 Gemeinsam schenken** (vorher klären: wer kauft und streckt vor, was bei zu wenig Beteiligung).
 
 ## Stand
+- **Version 1.10.3** (18.11.): `body:has(.tabs)::after` = feste Fläche in `--bg` unter der Leiste, nach oben weich auslaufend (Inhalt schaut unten nicht mehr hervor), Cache v16, `?v=16`.
 - **Version 1.10.2 gepusht** (18.11.): Tab-Leiste als schwebende Kapsel (Form wie iOS 26 Liquid Glass, Look Pop): `position: fixed`, `bottom: max(12px, safe-area − 10px)`, Breite 100% − 28px (max. 480), `border-radius: 999px`, Kontur + harter Schatten, leicht durchscheinend mit `backdrop-filter`, aktiver Tab mit eigener Kapsel in `--accent-soft`. Cache `geschenkeliste-v15`, `?v=15`. Nutzer-Hinweis vom 18.11.: Datenbank war noch nicht aktualisiert (Meldung „schema.sql ausführen“), Anleitung zum Ausführen gegeben, Rückmeldung offen.
 - **Version 1.10.1 gepusht** (18.11.): Konto → Design hat zusätzlich den Schalter **Hell | Automatisch | Dunkel** (`.seg.modeseg`, Act `mode`). theme.js setzt jetzt immer `data-mode="light|dark"` am `<html>` (localStorage `geschenkeliste-mode` = `light|dark`, fehlt = wie das Gerät, hört auf `matchMedia`-Änderungen und ruft `window.GLThemeChanged` → `render()`). Dunkle Variablen in app.css hängen an `[data-mode="dark"]` statt an der Media-Query. Beide `meta theme-color` und die Statusleiste folgen dem tatsächlichen Modus. Cache `geschenkeliste-v14`, `?v=14`. Tests: 172 Playwright-Prüfungen (Bild `32-konto-dunkel`).
 - **Version 1.10 gepusht** (17.11.): Commit `bffb352`, Cache `geschenkeliste-v13`, `?v=13`. Inhalt: Pop-Design (siehe Abschnitt unten). Keine schema.sql, keine Edge Function geändert.
