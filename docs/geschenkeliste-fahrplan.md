@@ -1,4 +1,4 @@
-# Geschenkeliste – Fahrplan (Stand 18. November 2026, Version 1.13.1)
+# Geschenkeliste – Fahrplan (Stand 18. November 2026, Version 1.14)
 
 Reihenfolge der Features in kleinen Paketen. **Ein Paket = ein Chat** (Übergabe lesen, Paket bauen, testen, pushen, Übergabe aktualisieren). Jedes Paket ist für sich nutzbar, die Familie merkt nie eine halbe Baustelle.
 
@@ -92,14 +92,17 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Tests: 297 RLS-Prüfungen, 269 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.13“: A schema.sql ausführen, B neu laden (Version 1.13), C gemeinsam starten, D mit zweitem Konto mitmachen
 - [x] **[Du + Claude] Einrichtung nachgeholt (18.11.)**: pg_net und pg_cron an, schema.sql 1.13 ausgeführt, Edge Function `push` angelegt, Verify JWT aus, Schlüssel erzeugt, erster Versand an 4 Geräte ohne Fehler
-- [ ] **[Du]** Restpunkte: Kommen die Mitteilungen auf dem iPhone an (auch die Testnachricht)? schema.sql für 1.13.1 ausführen, App neu laden. Statusleiste der iPhone-App (1.10) prüfen
+- [x] **[Du]** Restpunkte (18.11.): Mitteilungen kommen auf dem iPhone an (auch die Testnachricht). Offen: Statusleiste der iPhone-App (1.10) prüfen
 - [x] **1.13.1** (18.11., Commit `0956c41`), schema.sql: Verwaltung und Benachrichtigungen unter Konto einklappbar; **Konto löschen** in drei Stufen (Knopf, „Sicher?“, Fenster mit Warnung); gegründete Gruppen gehen an das nächste Mitglied; Fix „neue Schlüssel“; Push-Takt jede Minute
-- [ ] **Paket 15 – 1.14 Direkte Freundschaft** (M) [Claude], schema.sql – **als Nächstes, gewünscht 18.11.**
-  - Freunde ohne gemeinsame Gruppe: hinzufügen per Link, Code oder Benutzername mit Anfrage und Annehmen (keine offene Suche, damit Fremde niemanden finden)
-  - Wünsche auch für einzelne Freunde freigeben, nicht nur für Gruppen; Freundesliste zeigt direkte Freunde mit ihren Wünschen, Reservieren und gemeinsam schenken wie in Gruppen
-  - Zu besprechen: Sichtbarkeit neuer Wünsche für Freunde (Standard an/aus?), Benutzername suchbar ja/nein, Freundschaft beenden, Push „Freundschaftsanfrage“, Verhältnis zu Paket 13
-  - Gewünscht 18.11. (hier oder kleines eigenes Paket): **Spitznamen** für Leute vergeben (nur für mich sichtbar) und Leute mit **gleichem Namen unterscheidbar** machen
-- [ ] **Paket 7 – 1.15 Chats Teil 1** (M) [Claude], schema.sql
+- [x] **Paket 15 – 1.14 Direkte Freundschaft** (M) [Claude], schema.sql – **gebaut und gepusht 18.11. (Commit `9977b5a`)**
+  - Freunde ohne gemeinsame Gruppe: persönlicher Freundes-Link (öffnen, bestätigen, befreundet; jederzeit neu erzeugbar) oder Anfrage per Benutzername (annehmen/ablehnen, keine Suche, verrät nicht, ob es den Namen gibt), „Als Freund hinzufügen“ bei Leuten aus Gruppen, Freundschaft beenden
+  - Neue Wünsche standardmäßig für alle Freunde sichtbar, im Formular auf einzelne Freunde beschränkbar; Liste eines Freundes ohne Gruppe mit Reservieren und gemeinsam schenken; Steckbrief für Freunde
+  - Spitznamen (nur für mich, ersetzen den Namen überall, auch in Mitteilungen); gleiche Namen bekommen einen Zusatz wie „Lena (Chor)“ und einen Hinweis zum Spitznamen
+  - Benachrichtigungen: Freundschaftsanfrage, neu befreundet (eigener Schalter), neue Wünsche von Freunden
+  - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.14: Direkte Freundschaft“ (A–D)
+  - Tests: 391 RLS-Prüfungen, 306 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
+- [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.14“: A schema.sql ausführen (enthält 1.13.1), B neu laden (Version 1.14), C Freundes-Link an jemanden schicken, D Spitzname vergeben
+- [ ] **Paket 7 – 1.15 Chats Teil 1** (M) [Claude], schema.sql – **als Nächstes**
   - Chat pro Geschenk + Plattform-Abfrage (WhatsApp, Signal, …, ausgegraut wenn gewählt)
 - [ ] **Paket 8 – 1.16 Chats Teil 2** (S) [Claude]
   - Gruppenchat und „ohne X“-Chats, Push bei neuer Nachricht
@@ -128,4 +131,4 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - Anlässe kommen vor Farbthemen, weil dabei das fest eingebaute Weihnachten verschwindet.
 - Öffnen für Freunde erst, wenn Datenschutz und Schutz vor Spam stehen.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan. Supabase ist eingerichtet (Restpunkte im Fahrplan). Jetzt besprechen und bauen wir Paket 15 (Direkte Freundschaft), inklusive Spitznamen und Unterscheidung gleicher Namen.“
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan. Version 1.14 (Direkte Freundschaft) ist gebaut. Jetzt besprechen und bauen wir Paket 7 (Chats Teil 1).“
