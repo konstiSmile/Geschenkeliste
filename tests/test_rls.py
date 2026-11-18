@@ -676,5 +676,107 @@ _, c, _ = run(f"select count(*) from public.ideas where owner = '{L}'")
 check('Ideen: Konto löschen löscht eigene Ideen', c == '0')
 
 
+# ---------- Steckbrief (1.12) ----------
+P, Q, R, T, U = (str(uuid.uuid4()) for _ in range(5))
+for u, n in ((P, 'Paul'), (Q, 'Quinn'), (R, 'Rosa'), (T, 'Tom'), (U, 'Uwe')):
+    run(f"insert into auth.users values ('{u}', '{n.lower()}@x.de');")
+    as_exec(u, f"insert into public.profiles (id, name) values ('{u}', '{n}')")
+ok, r = as_user(P, "select * from public.create_group('Fam')")
+sg1 = r[0]
+ok, r = as_user(P, "select * from public.create_group('Kumpels')")
+sg2 = r[0]
+as_user(Q, f"select public.join_group('{sg1['code']}') as g")
+as_user(R, f"select public.join_group('{sg1['code']}') as g")
+as_user(R, f"select public.join_group('{sg2['code']}') as g")
+as_user(T, f"select public.join_group('{sg2['code']}') as g")
+# Uwe ist in keiner Gruppe mit Paul
+
+
+def card_of(viewer, owner):
+    ok, r = as_user(viewer, 'select public.card_list() as c')
+    return (r[0]['c'] or {}).get(owner) if ok else 'ERR'
+
+
+def put(u, k, v):
+    return as_exec(u, f"select public.card_put('{k}', '{json.dumps(v)}'::jsonb)")[0]
+
+
+check('Steckbrief: Feld setzen', put(P, 'sizes.shoe', '43'))
+check('Steckbrief: Liste setzen', put(P, 'nope.allergy', ['Nüsse', 'Laktose']))
+check('Steckbrief: Diese oder jene', put(P, 'either.surprise', 'a'))
+check('Steckbrief: Ringgröße', put(P, 'sizes.ring', '58'))
+ok, r = as_user(P, 'select data, stamps from public.profile_cards')
+check('Steckbrief: eigener lesbar mit Zeitstempel', ok and r[0]['data']['sizes.shoe'] == '43' and 'sizes.shoe' in r[0]['stamps'])
+check('Steckbrief: ungültiger Schlüssel abgelehnt', not put(P, 'Böse', 'x'))
+check('Steckbrief: zu langer Text abgelehnt', not put(P, 'joy.text', 'x' * 401))
+check('Steckbrief: Zahl statt Text abgelehnt', not put(P, 'sizes.shoe', 43))
+check('Steckbrief: zu viele Einträge abgelehnt', not put(P, 'likes.hobbies', [f'h{i}' for i in range(31)]))
+check('Steckbrief: leerer Eintrag in Liste abgelehnt', not put(P, 'likes.hobbies', ['']))
+check('Steckbrief: Objekt als Wert abgelehnt', not put(P, 'likes.hobbies', {'a': 1}))
+ok, _ = as_exec(P, "update public.profile_cards set data = data || '{\"x.y\": \"1\"}'")
+check('Steckbrief: Prüfung auch bei direktem Ändern', not ok)
+ok, r = as_user(Q, 'select * from public.profile_cards')
+check('Steckbrief: Tabelle anderer nicht lesbar', ok and r == [])
+ok, _ = as_exec(Q, f"update public.profile_cards set data = '{{}}' where user_id = '{P}'")
+_, c, _ = run(f"select data->>'sizes.shoe' from public.profile_cards where user_id = '{P}'")
+check('Steckbrief: fremden nicht änderbar', c == '43')
+ok, _ = as_user(Q, f"insert into public.profile_cards (user_id) values ('{P}') returning user_id")
+check('Steckbrief: nicht für andere anlegen', not ok)
+
+c = card_of(Q, P)
+check('Steckbrief: Gruppenmitglied sieht alles', c and c['d'].get('sizes.shoe') == '43' and c['d'].get('nope.allergy') == ['Nüsse', 'Laktose'] and c['s'].get('sizes.shoe'))
+check('Steckbrief: Fremder sieht nichts', card_of(U, P) is None)
+check('Steckbrief: eigener nicht in card_list', card_of(P, P) is None)
+ok, _ = as_user(Q, f"select public.card_allowed('{P}', '{Q}', 'all') as a")
+check('Steckbrief: card_allowed nicht direkt aufrufbar', not ok)
+ok, _ = as_user(None, 'select public.card_list() as c', role='anon')
+check('Steckbrief: ohne Anmeldung nicht', not ok)
+
+# Feld nur für Quinn ausblenden
+ok, _ = as_exec(P, f"insert into public.profile_card_vis (item, mode, users) values ('sizes.ring', 'except', array['{Q}']::uuid[])")
+check('Steckbrief: Regel anlegen', ok)
+c = card_of(Q, P)
+check('Steckbrief: Feld vor Quinn verborgen', c and 'sizes.ring' not in c['d'] and 'sizes.ring' not in c['s'] and c['d'].get('sizes.shoe') == '43')
+check('Steckbrief: Rosa sieht Feld weiter', card_of(R, P)['d'].get('sizes.ring') == '58')
+# Abschnitt vor Gruppe Kumpels verbergen: Tom (nur Kumpels) nicht, Rosa (auch Fam) schon
+as_exec(P, f"insert into public.profile_card_vis (item, mode, groups) values ('sizes', 'except', array['{sg2['id']}']::uuid[])")
+c = card_of(T, P)
+check('Steckbrief: Abschnitt vor Gruppe verborgen', c and not any(k.startswith('sizes.') for k in c['d']) and 'nope.allergy' in c['d'])
+check('Steckbrief: wer auch in anderer Gruppe ist, sieht weiter', 'sizes.shoe' in card_of(R, P)['d'])
+# Ganzer Steckbrief nur für Gruppe Fam
+as_exec(P, f"insert into public.profile_card_vis (item, mode, groups) values ('all', 'only', array['{sg1['id']}']::uuid[])")
+check('Steckbrief: nur Fam, Tom sieht nichts', card_of(T, P) is None)
+check('Steckbrief: nur Fam, Quinn sieht ihn', card_of(Q, P) is not None)
+as_exec(P, f"update public.profile_card_vis set groups = '{{}}', users = array['{T}']::uuid[] where item = 'all'")
+check('Steckbrief: nur Tom, Quinn sieht nichts', card_of(Q, P) is None)
+check('Steckbrief: nur Tom, Tom sieht ihn', card_of(T, P) is not None)
+as_exec(P, "delete from public.profile_card_vis where item = 'all'")
+check('Steckbrief: Regel gelöscht, wieder sichtbar', card_of(Q, P) is not None)
+# Alle Felder verborgen = kein Eintrag
+as_exec(P, f"insert into public.profile_card_vis (item, mode, users) values ('nope', 'except', array['{Q}']::uuid[]), ('either', 'except', array['{Q}']::uuid[])")
+as_exec(P, f"update public.profile_card_vis set users = array['{Q}']::uuid[], groups = '{{}}' where item = 'sizes'")
+check('Steckbrief: alles verborgen = kein Eintrag', card_of(Q, P) is None)
+
+ok, _ = as_exec(Q, f"insert into public.profile_card_vis (owner, item, mode) values ('{P}', 'joy', 'only')")
+check('Steckbrief: keine Regeln für andere', not ok)
+ok, r = as_user(Q, 'select * from public.profile_card_vis')
+check('Steckbrief: Regeln anderer nicht lesbar', ok and r == [])
+ok, _ = as_exec(P, "insert into public.profile_card_vis (item, mode) values ('Alles', 'only')")
+check('Steckbrief: ungültiger Regelname abgelehnt', not ok)
+ok, _ = as_exec(P, "insert into public.profile_card_vis (item, mode) values ('joy', 'manchmal')")
+check('Steckbrief: ungültiger Modus abgelehnt', not ok)
+
+check('Steckbrief: Feld entfernen', put(P, 'sizes.shoe', ''))
+_, c, _ = run(f"select (data ? 'sizes.shoe')::text || (stamps ? 'sizes.shoe')::text from public.profile_cards where user_id = '{P}'")
+check('Steckbrief: entfernt samt Zeitstempel', c == 'falsefalse')
+as_user(R, f"select public.leave_group('{sg1['id']}') as r")
+as_user(R, f"select public.leave_group('{sg2['id']}') as r")
+check('Steckbrief: nach Verlassen nicht mehr sichtbar', card_of(R, P) is None)
+run(f"delete from auth.users where id = '{P}'")
+_, c, _ = run(f"select count(*) from public.profile_cards where user_id = '{P}'")
+_, c2, _ = run(f"select count(*) from public.profile_card_vis where owner = '{P}'")
+check('Steckbrief: Konto löschen löscht Steckbrief und Regeln', c == '0' and c2 == '0')
+
+
 print('\nAlle Tests grün' if not fails else f'\n{fails} Fehler')
 sys.exit(1 if fails else 0)

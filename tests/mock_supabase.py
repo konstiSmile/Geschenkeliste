@@ -7,7 +7,12 @@ PSQL = ['psql', '-h', '/tmp', '-p', '5544', '-U', 'postgres', '-d', 'gl', '-tAq'
 log = []
 
 
+JSONB_ARGS = {'p_val'}
+
+
 def lit(v):
+    if isinstance(v, list):   # uuid[] (Steckbrief-Sichtbarkeit)
+        return "'{" + ','.join(str(x) for x in v) + "}'"
     if v is None:
         return 'null'
     if isinstance(v, bool):
@@ -87,7 +92,8 @@ def handle(route, request):
 
     if path.startswith('/rest/v1/rpc/'):
         fn = ident(path.rsplit('/', 1)[1])
-        args = ', '.join(f'{ident(k)} => {lit(v)}' for k, v in (body or {}).items())
+        # jsonb-Parameter (Steckbrief: p_val) als JSON übergeben, wie PostgREST es tut
+        args = ', '.join(f'{ident(k)} => ' + (lit(json.dumps(v)) + '::jsonb' if k in JSONB_ARGS else lit(v)) for k, v in (body or {}).items())
         rows, err = sql_as(uid, f'select public.{fn}({args}) as r', role)
     else:
         table = ident(path.rsplit('/', 1)[1])
@@ -105,8 +111,8 @@ def handle(route, request):
             vals = ', '.join('(' + ', '.join(lit(it[k]) for k in keys) + ')' for it in items)
             conflict = ''
             if 'on_conflict' in q:
-                c = ident(q['on_conflict'][0])
-                conflict = f' on conflict ({c}) do update set ' + ', '.join(f'{ident(k)} = excluded.{ident(k)}' for k in keys if k != c)
+                cs = [ident(c) for c in q['on_conflict'][0].split(',')]
+                conflict = f' on conflict ({", ".join(cs)}) do update set ' + ', '.join(f'{ident(k)} = excluded.{ident(k)}' for k in keys if k not in cs)
             rows, err = sql_as(uid, f'insert into public.{table} ({", ".join(map(ident, keys))}) values {vals}{conflict} returning *')
         elif request.method == 'PATCH':
             sets = ', '.join(f'{ident(k)} = {lit(v)}' for k, v in body.items())

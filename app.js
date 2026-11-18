@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.11.1';
+const VERSION = '1.12';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -15,10 +15,11 @@ let S = loadState();      // {session, pendingJoin, pendingName, cache}
 let D = emptyData();      // Daten vom Server
 let busy = false;
 let ui = {};              // flüchtiger Zustand der Ansicht (offene Formulare, Löschbestätigung)
+let sbPending = 0;         // laufende Speichervorgänge im Steckbrief
 let fresh = null;         // neu erzeugter Wiederherstellungscode {code, username, reason}, nur im Speicher
 
 function emptyData() {
-  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], pp: null, ps: null, ip: [], ideas: [], at: 0, loaded: false };
+  return { profiles: [], groups: [], members: [], wishes: [], wg: [], res: [], account: null, admin: false, wd: [], wp: [], wx: [], wo: [], pp: null, ps: null, ip: [], ideas: [], card: null, cardVis: [], cards: {}, at: 0, loaded: false };
 }
 function loadState() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; }
@@ -270,7 +271,7 @@ async function passwordLogin(username, password) {
 async function sync(quiet) {
   if (!S.session) return;
   try {
-    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas] = await Promise.all([
+    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
       sb('/rest/v1/groups?select=id,name,code,created_by,created_at&order=created_at'),
       sb('/rest/v1/members?select=group_id,user_id,joined_at&order=joined_at'),
@@ -291,13 +292,20 @@ async function sync(quiet) {
       sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have').catch(() => null),
       // Private Ideenliste ab 1.11 (nur eigene Zeilen)
       sb('/rest/v1/idea_people?select=id,name,linked_user,created_at&order=created_at').catch(() => null),
-      sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at&order=created_at.desc').catch(() => null)
+      sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at&order=created_at.desc').catch(() => null),
+      // Steckbrief ab 1.12: eigener (Tabelle), Sichtbarkeit, die der anderen (gefiltert über card_list)
+      sb('/rest/v1/profile_cards?select=data,stamps').catch(() => null),
+      sb('/rest/v1/profile_card_vis?select=item,mode,users,groups').catch(() => null),
+      sb('/rest/v1/rpc/card_list', { method: 'POST', body: {} }).catch(() => null)
     ]);
     const ps = admin === true ? await sb('/rest/v1/rpc/push_status', { method: 'POST', body: {} }).catch(() => null) : null;
     if (!S.session) return;
     D = { profiles, groups, members, wishes, wg, res, account: acc && acc[0] ? acc[0] : null, admin: admin === true,
       wd: wd || [], wp: wp || [], wx: wx || [], wo: wo || [], pp: pp && pp[0] ? pp[0] : null, ps,
-      ip: ip || [], ideas: ideas || [], ideasOk: !!(ip && ideas), at: Date.now(), loaded: true };
+      ip: ip || [], ideas: ideas || [], ideasOk: !!(ip && ideas),
+      // Während ein Feld gespeichert wird, bleibt der lokale Stand (sonst springt die Auswahl kurz zurück)
+      card: sbPending ? D.card : (card && card[0] ? card[0] : null), cardVis: cardVis || [], cardOk: !!(card && cardVis),
+      cards: cards && typeof cards === 'object' ? cards : {}, cardsOk: !!cards, at: Date.now(), loaded: true };
     S.cache = { uid: me(), D };
     saveState();
     seenSync();
@@ -523,6 +531,13 @@ const I = {
   gem: '<path d="M7 4.5h10l4 4.8-9 10.7-9-10.7z"/><path d="M3 9.3h18M9.5 4.5 8 9.3l4 10.7 4-10.7-1.5-4.8"/>',
   note: '<path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>',
   ticket: '<path d="M3.5 8a1 1 0 0 1 1-1h15a1 1 0 0 1 1 1v2a2 2 0 0 0 0 4v2a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-2a2 2 0 0 0 0-4z"/><path d="M14.5 7.5v1.5M14.5 11.2v1.6M14.5 15v1.5"/>',
+  // Steckbrief (1.12)
+  idcard: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="11" r="2"/><path d="M5.5 16c.5-1.6 1.6-2.5 3-2.5s2.5.9 3 2.5M14 10h4M14 13.5h4"/>',
+  eye: '<path d="M2.5 12c1-1.8 4.5-6 9.5-6s8.5 4.2 9.5 6c-1 1.8-4.5 6-9.5 6s-8.5-4.2-9.5-6z"/><circle cx="12" cy="12" r="3"/>',
+  split: '<path d="M12 21v-7.5M12 13.5 6 7.5M12 13.5l6-6M6 3.5v4h4M18 3.5v4h-4"/>',
+  ban: '<circle cx="12" cy="12" r="8.5"/><path d="m6 6 12 12"/>',
+  ruler: '<rect x="2.5" y="8" width="19" height="8" rx="1.5"/><path d="M6.5 8v3M10 8v4.5M13.5 8v3M17 8v4.5"/>',
+  play: '<path d="M7.5 5v14l11-7z"/>',
   label: '<path d="M3.5 12.3V4.5a1 1 0 0 1 1-1h7.8l8.2 8.2a1.5 1.5 0 0 1 0 2.1l-6.7 6.7a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.4"/>'
 };
 const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
@@ -1068,11 +1083,13 @@ function theme() { return window.GLTheme ? GLTheme.resolve() : 'jahr'; }
 function xmasYear() { const d = new Date(); return d.getMonth() === 0 ? d.getFullYear() - 1 : d.getFullYear(); }
 function heroCard(days, nErr, nDone) {
   const when = days === 0 ? 'heute' : (days === 1 ? 'morgen' : `in ${days} Tagen`);
+  const allDone = nErr > 0 && nDone === nErr;
+  const early = allDone && days >= EARLY_DAYS;
   if (theme() !== 'weihnachten') {
     return `<section class="hero hero-jahr"><span class="hero-ic">${icon('calendar')}</span>
-      <div class="hero-main"><p class="hero-label">Nächster Anlass · ${when}</p><p class="hero-title">Heiligabend · 24.12.</p></div></section>`;
+      <div class="hero-main"><p class="hero-label">Nächster Anlass · ${when}</p><p class="hero-title">Heiligabend · 24.12.</p>${allDone ? `<p class="hero-label hero-early">${early ? 'Alles besorgt. Früh dran.' : 'Alles besorgt.'}</p>` : ''}</div></section>`;
   }
-  const sub = nErr ? `${nDone} von ${plural(nErr, 'Besorgung', 'Besorgungen')} erledigt` : 'Noch nichts reserviert';
+  const sub = allDone ? (early ? 'Alles besorgt. Früh dran.' : 'Alles besorgt.') : (nErr ? `${nDone} von ${plural(nErr, 'Besorgung', 'Besorgungen')} erledigt` : 'Noch nichts reserviert');
   return `<section class="hero hero-xmas"><p class="hero-num">${days === 0 ? 'Heute' : days}</p>
       <div class="hero-main"><p class="hero-title">${days === 0 ? 'ist Heiligabend' : (days === 1 ? 'Tag bis Heiligabend' : 'Tage bis Heiligabend')}</p><p class="hero-label">${sub}</p></div>
       <span class="hero-deco">${icon('star')}${icon('snow')}</span></section>`;
@@ -1120,7 +1137,7 @@ function viewList() {
   const add = `<a class="primary withicon" href="#/w/neu">${icon('plus')}Wunsch hinzufügen</a>`;
   const haveHtml = have.length ? `<h2>Hab ich schon</h2><ul class="cards">${have.map(row).join('')}</ul>` : '';
   const body = all.length
-    ? `${add}${list.length ? `<ul class="cards">${list.map(row).join('')}</ul>` : '<p class="empty-line">Alles auf deiner Liste hast du schon.</p>'}${haveHtml}<p class="foot">${icon('eyeoff')}<span>Ob etwas reserviert ist, siehst du nicht. So bleibt es eine Überraschung.</span></p>`
+    ? `${add}${list.length ? `<ul class="cards">${list.map(row).join('')}</ul>` : '<p class="empty-line">Alles auf deiner Liste hast du schon.</p>'}${haveHtml}<p class="foot">${icon('eyeoff')}<span>Ob etwas reserviert ist, siehst du nicht. So bleibt es eine Überraschung.</span></p>${cardLink(true)}`
     : emptyState('gift', 'Deine Liste ist noch leer', 'Trag ein, worüber du dich freuen würdest. Ein Link hilft den anderen, genau das Richtige zu finden.', add);
   return shell('Meine Wunschliste', listSwitch('w') + body, { tab: 'list', eyebrow: theme() === 'weihnachten' ? 'Weihnachten ' + xmasYear() : 'Alle Anlässe', sub: plural(list.length, 'Wunsch', 'Wünsche') });
 }
@@ -1269,7 +1286,7 @@ function viewFriend(key) {
     html += fold('fr-wishes', 'gift', 't0', 'Wünsche', ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${nFree} noch frei` : 'Noch keine Wünsche',
       ws.length ? `<ul class="rows plain">${wRows}</ul><p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert ist. Reservieren geht in der Liste der Gruppe.</span></p>` : `<p class="empty-line">${esc(name)} hat noch nichts eingetragen.</p>`, true);
   }
-  // Paket 11: Klappbereich „Steckbrief“ kommt hier hin
+  if (uid) html += cardFold(uid, name);
   if (D.ideasOk) {
     const iList = ideas.length ? `<ul class="rows plain">${ideas.map(i => ideaRow(i, ret)).join('')}</ul>` : '';
     html += fold('fr-ideas', 'bulb', 't2', 'Deine Ideen', ideas.length ? `${plural(nOpen, 'offene Idee', 'offene Ideen')}${ideas.length - nOpen ? ` · ${ideas.length - nOpen} besorgt` : ''}` : 'Nur du siehst sie',
@@ -1527,7 +1544,7 @@ function viewPerson(gid, uid) {
   const head = `<section class="profile">${avatar(uid, 'lg')}<div class="profile-main">
       <p class="row-meta">${ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${ws.length - taken} noch frei` : 'Noch keine Wünsche'}</p>
       ${ws.length ? `<progress max="${ws.length}" value="${taken}"></progress>` : ''}</div></section>
-    <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert oder gekauft ist.</span></p>`;
+    <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert oder gekauft ist.</span></p>${cardHint(gid, uid)}`;
   const body = ws.length || had.length ? filterBar + list + hadHtml : emptyState('gift', 'Noch leer', `${esc(name)} hat für diese Gruppe noch nichts eingetragen.`);
   return shell(name, head + body + personIdeas(gid, uid), { tab: 'groups', back: ['#/g/' + gid, g.name] });
 }
@@ -1614,6 +1631,309 @@ function viewWichteln(gid) {
     <p class="foot">${icon('eyeoff')}<span>Auch du siehst nur, wen du selbst gezogen hast.</span></p>`, opt);
 }
 
+/* ---------- Steckbrief (1.12) ----------
+   Ein Quiz mit einer Frage pro Karte (beim ersten Mal), danach Übersicht mit Abschnitten.
+   Gespeichert pro Feld über card_put (Schlüssel „abschnitt.feld“). Andere bekommen nur,
+   was sie sehen dürfen (card_list). Sichtbarkeit pro Steckbrief ('all'), Abschnitt oder Feld. */
+const SB_SECS = [
+  ['either', 'Diese oder jene', 'split', 't0'],
+  ['likes', 'Mag ich', 'heart', 't1'],
+  ['nope', 'Lieber nicht', 'ban', 't2'],
+  ['sizes', 'Größen', 'ruler', 't0'],
+  ['joy', 'Das freut mich immer', 'sparkle', 't1']];
+const SB_COLORS = [['rot', 'Rot'], ['orange', 'Orange'], ['gelb', 'Gelb'], ['gruen', 'Grün'], ['tuerkis', 'Türkis'], ['blau', 'Blau'],
+  ['lila', 'Lila'], ['rosa', 'Rosa'], ['braun', 'Braun'], ['beige', 'Beige'], ['grau', 'Grau'], ['schwarz', 'Schwarz'], ['weiss', 'Weiß'],
+  ['gold', 'Gold'], ['silber', 'Silber']];
+// [schlüssel, art, frage, kurzname, optionen, hinweis]
+const SB_FIELDS = [
+  ['either.thing', 'either', 'Erlebnis oder Ding?', 'Erlebnis oder Ding', [['Erlebnis', 'eher Erlebnisse'], ['Ding', 'eher Dinge']]],
+  ['either.surprise', 'either', 'Überraschung oder Wunschliste?', 'Überraschung', [['Überraschung', 'mag Überraschungen'], ['Wunschliste', 'lieber von der Wunschliste']]],
+  ['either.useful', 'either', 'Praktisch oder schön?', 'Praktisch oder schön', [['Praktisch', 'eher praktisch'], ['Schön', 'eher schön']]],
+  ['either.diy', 'either', 'Selbstgemacht oder gekauft?', 'Selbstgemacht', [['Selbstgemacht', 'mag Selbstgemachtes'], ['Gekauft', 'lieber gekauft']]],
+  ['either.count', 'either', 'Ein großes oder viele kleine?', 'Groß oder klein', [['Ein großes', 'lieber ein großes Geschenk'], ['Viele kleine', 'lieber viele kleine']]],
+  ['either.place', 'either', 'Zu Hause oder unterwegs?', 'Zu Hause oder unterwegs', [['Zu Hause', 'gern zu Hause'], ['Unterwegs', 'gern unterwegs']]],
+  ['either.taste', 'either', 'Süß oder herzhaft?', 'Süß oder herzhaft', [['Süß', 'eher süß'], ['Herzhaft', 'eher herzhaft']]],
+  ['either.play', 'either', 'Lesen oder spielen?', 'Lesen oder spielen', [['Lesen', 'liest gern'], ['Spielen', 'spielt gern']]],
+  ['likes.colors', 'colors', 'Welche Farben magst du?', 'Farben', SB_COLORS, 'Bis zu fünf'],
+  ['likes.hobbies', 'chips', 'Womit verbringst du gern Zeit?', 'Hobbys', ['Lesen', 'Kochen', 'Backen', 'Sport', 'Wandern', 'Radfahren', 'Musik', 'Gaming',
+    'Brettspiele', 'Garten', 'Reisen', 'Fotografie', 'Handarbeit', 'Basteln', 'Filme und Serien', 'Tiere']],
+  ['likes.food', 'chips', 'Was isst oder naschst du gern?', 'Essen und Naschen', ['Schokolade', 'Gummibärchen', 'Lakritz', 'Chips', 'Nüsse', 'Kaffee', 'Tee',
+    'Käse', 'Wein', 'Bier', 'Obst', 'Scharfes']],
+  ['likes.brands', 'chips', 'Lieblingsmarken oder Läden?', 'Marken und Läden', [], 'Tippe sie einfach ein'],
+  ['nope.things', 'chips', 'Was lieber nicht?', 'Lieber nicht', ['Duftkerzen', 'Deko', 'Süßes', 'Alkohol', 'Gutscheine', 'Kosmetik', 'Kleidung',
+    'Bücher', 'Staubfänger', 'Pflanzen']],
+  ['nope.allergy', 'chips', 'Allergien oder Unverträglichkeiten?', 'Allergien', ['Nüsse', 'Laktose', 'Gluten', 'Duftstoffe', 'Tierhaare', 'Nickel', 'Wolle']],
+  ['nope.enough', 'chips', 'Wovon hast du schon genug?', 'Hat genug', ['Tassen', 'Socken', 'Schals', 'Notizbücher', 'Kerzen', 'Bücher', 'Taschen', 'Spiele']],
+  ['sizes.top', 'one', 'Welche Größe bei Oberteilen?', 'Oberteile', ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL']],
+  ['sizes.pants', 'text', 'Und bei Hosen?', 'Hosen', 'z. B. 32/32 oder 40'],
+  ['sizes.shoe', 'one', 'Schuhgröße?', 'Schuhe', ['35', '36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47']],
+  ['sizes.ring', 'text', 'Ringgröße?', 'Ring', 'z. B. 54', 'Umfang in Millimetern. Überspring das ruhig.'],
+  ['joy.text', 'long', 'Was freut dich immer?', 'Das freut mich immer', 'Zum Beispiel Zeit zusammen, gutes Essen oder etwas zum Selbermachen', 'Ein Satz reicht.']];
+const SB_MAX = { text: 20, long: 300 };
+const SB_STALE = 365 * 864e5;
+const sbField = k => SB_FIELDS.find(f => f[0] === k);
+const sbSec = s => SB_SECS.find(x => x[0] === s);
+const sbFieldsOf = s => SB_FIELDS.filter(f => f[0].startsWith(s + '.'));
+const sbMine = () => (D.card && D.card.data) || {};
+const sbFilled = v => Array.isArray(v) ? v.length > 0 : !!v;
+const sbCount = data => SB_FIELDS.filter(f => sbFilled(data[f[0]])).length;
+const sbNext = () => Math.max(0, SB_FIELDS.findIndex(f => !sbFilled(sbMine()[f[0]])));
+function sbItemName(item) {
+  if (item === 'all') return 'Ganzer Steckbrief';
+  const s = sbSec(item);
+  if (s) return s[1];
+  const f = sbField(item);
+  return f ? f[3] : item;
+}
+// Wert für die Anzeige (bei „Diese oder jene“: die gewählte Seite bzw. ihr Kurzsatz)
+function sbText(f, v, forOthers) {
+  if (!sbFilled(v)) return '';
+  if (f[1] === 'either') { const o = f[4][v === 'b' ? 1 : 0]; return forOthers ? o[1] : o[0]; }
+  if (f[1] === 'colors') return v.map(c => (SB_COLORS.find(x => x[0] === c) || [c, c])[1]).join(', ');
+  return Array.isArray(v) ? v.join(', ') : v;
+}
+const sbSwatch = c => SB_COLORS.some(x => x[0] === c) ? `<i class="sw cl-${c}"></i>` : '';
+function sbStale(stamps, k) {
+  const t = stamps && stamps[k];
+  return t && Date.now() - new Date(t).getTime() > SB_STALE ? t : null;
+}
+const fmtMonth = ts => new Intl.DateTimeFormat('de-DE', { month: 'long', year: 'numeric' }).format(new Date(ts));
+
+/* Sichtbarkeit */
+const sbRule = item => (D.cardVis || []).find(r => r.item === item);
+function sbNames(r) {
+  const n = (r.groups || []).map(g => (D.groups.find(x => x.id === g) || {}).name).filter(Boolean)
+    .concat((r.users || []).filter(u => D.profiles.some(p => p.id === u)).map(nameOf));
+  if (!n.length) return '';
+  return n.length > 3 ? `${n.slice(0, 2).join(', ')} und ${n.length - 2} weitere` : n.join(', ').replace(/, ([^,]*)$/, ' und $1');
+}
+function sbVisText(item) {
+  const r = sbRule(item);
+  if (!r) return item === 'all' ? 'Alle aus deinen Gruppen' : 'Wie der Rest';
+  const n = sbNames(r);
+  if (r.mode === 'only') return n ? 'Nur ' + n : 'Niemand';
+  return n ? 'Alle außer ' + n : (item === 'all' ? 'Alle aus deinen Gruppen' : 'Wie der Rest');
+}
+const sbVisLink = (item, ret) => `<a class="vislink ${sbRule(item) ? 'on' : ''}" href="#/steckbrief/sicht/${item}?r=${ret}">${icon(sbRule(item) ? 'eyeoff' : 'eye')}<span>${esc(sbVisText(item))}</span></a>`;
+
+/* Eingaben (im Quiz und in der Übersicht gleich). next = Ziel nach dem Antworten (nur im Quiz) */
+function sbControl(f, next) {
+  const [k, type, , , opts, hint] = f;
+  const v = sbMine()[k];
+  const nx = next ? ` data-next="${next}"` : '';
+  if (type === 'either') {
+    return `<div class="either" role="radiogroup" aria-label="${esc(f[2])}">${opts.map((o, i) => {
+      const val = i ? 'b' : 'a';
+      return `<button class="eopt e${i} ${v === val ? 'on' : ''}" role="radio" aria-checked="${v === val}" data-act="sbpick" data-k="${k}" data-v="${val}"${nx}>${esc(o[0])}</button>`;
+    }).join('<span class="eor">oder</span>')}</div>`;
+  }
+  if (type === 'one') {
+    return `<div class="sbchips" role="radiogroup" aria-label="${esc(f[3])}">${opts.map(o =>
+      `<button class="chip ${v === o ? 'on' : ''}" role="radio" aria-checked="${v === o}" data-act="sbone" data-k="${k}" data-v="${esc(o)}"${nx}>${esc(o)}</button>`).join('')}</div>`;
+  }
+  if (type === 'chips' || type === 'colors') {
+    const cur = Array.isArray(v) ? v : [];
+    const keys = type === 'colors' ? opts.map(o => o[0]) : opts;
+    const own = type === 'colors' ? [] : cur.filter(x => !keys.includes(x));
+    const label = x => type === 'colors' ? (opts.find(o => o[0] === x) || [x, x])[1] : x;
+    const chips = keys.concat(own).map(x => `<button class="chip ${cur.includes(x) ? 'on' : ''}" aria-pressed="${cur.includes(x)}" data-act="sbtoggle" data-k="${k}" data-v="${esc(x)}">${type === 'colors' ? sbSwatch(x) : ''}${esc(label(x))}</button>`).join('');
+    const add = type === 'colors' ? '' : `<form data-form="sbown" data-k="${k}" class="inline sbadd"><input name="v" maxlength="40" placeholder="${keys.length ? 'Eigenes hinzufügen' : 'z. B. Lieblingsladen'}" aria-label="Eigenes hinzufügen" autocomplete="off"><button class="secondary sm" type="submit">${icon('plus')}<span class="vh">Hinzufügen</span></button></form>`;
+    return `${hint ? `<p class="small muted">${esc(hint)}</p>` : ''}${chips ? `<div class="sbchips">${chips}</div>` : ''}${add}`;
+  }
+  // text / long
+  const input = type === 'long'
+    ? `<textarea name="v" rows="3" maxlength="${SB_MAX.long}" placeholder="${esc(opts)}">${esc(v || '')}</textarea>`
+    : `<input name="v" maxlength="${SB_MAX.text}" placeholder="${esc(opts)}" value="${esc(v || '')}" autocomplete="off">`;
+  return `<form data-form="sbtext" data-k="${k}"${nx} id="${next ? 'sbform' : 'sbf-' + k.replace('.', '-')}" class="${next ? 'stack' : 'inline'}">
+      ${hint ? `<p class="small muted">${esc(hint)}</p>` : ''}${input}${next ? '' : '<button class="secondary sm" type="submit">Speichern</button>'}</form>`;
+}
+
+function sbMissing() {
+  return shell('Steckbrief', `<div class="banner warn">${icon('shield')}<span><b>Noch nicht eingerichtet</b><small>Für den Steckbrief muss die neue schema.sql einmal im Supabase SQL Editor ausgeführt werden.</small></span></div>`, { tab: 'acc', back: ['#/konto', 'Konto'] });
+}
+
+function viewCard(parts) {
+  if (!D.cardOk) return sbMissing();
+  if (parts[1] === 'quiz') return viewQuiz(parseInt(parts[2], 10) || 0);
+  if (parts[1] === 's' && sbSec(parts[2])) return viewCardSec(parts[2]);
+  if (parts[1] === 'sicht' && parts[2] && (parts[2] === 'all' || sbSec(parts[2]) || sbField(parts[2]))) return viewCardVis(parts[2]);
+  return viewCardHome();
+}
+
+function sbDots(i) {
+  const cur = i < SB_FIELDS.length ? SB_FIELDS[i][0].split('.')[0] : null;
+  const idx = cur ? SB_SECS.findIndex(s => s[0] === cur) : SB_SECS.length;
+  return `<ol class="sbdots" aria-label="Fortschritt">${SB_SECS.map((s, j) =>
+    `<li class="${j < idx ? 'done' : (j === idx ? 'cur' : '')}"><span class="vh">${esc(s[1])}</span></li>`).join('')}</ol>`;
+}
+
+function viewQuiz(i) {
+  const n = SB_FIELDS.length;
+  i = Math.min(Math.max(0, i), n);
+  const back = ['#/steckbrief', 'Steckbrief'];
+  if (i === n) {
+    const c = sbCount(sbMine());
+    return shell('Geschafft', `${sbDots(n)}<section class="card quiz done">
+        <span class="emptyicon">${icon('idcard')}</span>
+        <p class="quizq">Dein Steckbrief steht</p>
+        <p class="small">${c} von ${n} Fragen beantwortet. Sichtbar für: ${esc(sbVisText('all'))}.</p>
+        <p class="small muted">Ändern, ergänzen oder einzelne Teile verbergen kannst du jederzeit.</p></section>
+      <a class="primary" href="#/steckbrief">Zum Steckbrief</a>`, { tab: 'acc', back, eyebrow: 'Steckbrief' });
+  }
+  const f = SB_FIELDS[i];
+  const sec = sbSec(f[0].split('.')[0]);
+  const inSec = sbFieldsOf(sec[0]);
+  const pos = inSec.indexOf(f) + 1;
+  const next = `#/steckbrief/quiz/${i + 1}`;
+  const textual = f[1] === 'text' || f[1] === 'long';
+  const filled = sbFilled(sbMine()[f[0]]);
+  const go = textual
+    ? `<button class="primary" type="submit" form="sbform">Weiter</button>`
+    : `<a class="primary ${filled ? '' : 'quiet'}" href="${next}">Weiter</a>`;
+  return shell(sec[1], `${sbDots(i)}
+    <section class="card quiz q-${f[1]}"><p class="quizcount">${pos} von ${inSec.length}</p>
+      <p class="quizq">${esc(f[2])}</p>${sbControl(f, next)}</section>
+    <div class="quiznav"><a class="ghost" href="${next}">Überspringen</a>${go}</div>
+    <p class="linkrow"><a class="link" href="#/steckbrief">Später weiter</a></p>`, { tab: 'acc', back, eyebrow: `Steckbrief · ${i + 1} von ${n}` });
+}
+
+function viewCardHome() {
+  const data = sbMine();
+  const n = SB_FIELDS.length, c = sbCount(data);
+  if (!c) {
+    return shell('Steckbrief', `<section class="card quiz intro"><span class="emptyicon">${icon('idcard')}</span>
+        <p class="quizq">Damit die anderen wissen, was passt</p>
+        <p class="small">${n} kurze Fragen, fast alle mit einem Tipp beantwortet. Alles lässt sich überspringen und später ändern.</p></section>
+      <a class="primary" href="#/steckbrief/quiz/0">Los geht’s</a>
+      <p class="foot">${icon('eye')}<span>Sichtbar für alle aus deinen Gruppen. Einzelne Teile kannst du später verbergen.</span></p>`,
+    { tab: 'acc', back: ['#/konto', 'Konto'] });
+  }
+  const stamps = (D.card && D.card.stamps) || {};
+  const staleSizes = sbFieldsOf('sizes').filter(f => sbFilled(data[f[0]]) && sbStale(stamps, f[0]));
+  const stale = staleSizes.length ? `<div class="banner warn">${icon('ruler')}<span><b>Stimmen deine Größen noch?</b><small>Zuletzt geändert im ${esc(fmtMonth(stamps[staleSizes[0][0]]))}.</small></span><button class="link" data-act="sbconfirm">Stimmen noch</button></div>` : '';
+  const resume = c < n ? `<a class="secondary withicon" href="#/steckbrief/quiz/${sbNext()}">${icon('play')}Im Quiz weitermachen</a>`
+    : `<a class="ghost sm" href="#/steckbrief/quiz/0">Quiz noch mal durchgehen</a>`;
+  const top = `<section class="card sbtop"><div class="sbprog"><b>${c} von ${n}</b><span>beantwortet</span></div>
+      <progress max="${n}" value="${c}"></progress>${resume}</section>`;
+  const vis = `<a class="card row-item sbvis" href="#/steckbrief/sicht/all?r=steckbrief">${icon(sbRule('all') ? 'eyeoff' : 'eye')}
+      <span class="row-main"><span class="row-title">Wer sieht deinen Steckbrief</span><span class="row-meta">${esc(sbVisText('all'))}</span></span>${icon('chev', 'chev')}</a>`;
+  const secs = SB_SECS.map(([s, name, ic, tint]) => {
+    const fs = sbFieldsOf(s);
+    const done = fs.filter(f => sbFilled(data[f[0]])).length;
+    const rows = s === 'either'
+      ? `<p class="sbtags">${fs.filter(f => sbFilled(data[f[0]])).map(f => `<span class="tag">${esc(sbText(f, data[f[0]]))}</span>`).join('') || '<span class="muted">Noch nichts gewählt</span>'}</p>`
+      : `<ul class="facts">${fs.map(f => {
+        const v = data[f[0]];
+        const val = f[1] === 'colors' && sbFilled(v) ? v.map(x => sbSwatch(x)).join('') + esc(sbText(f, v)) : esc(sbText(f, v));
+        return `<li><span>${esc(f[3])}</span><b class="${sbFilled(v) ? '' : 'muted'}">${sbFilled(v) ? val : 'Offen'}</b></li>`;
+      }).join('')}</ul>`;
+    return `<section class="card sbsec"><a class="sbhead" href="#/steckbrief/s/${s}"><span class="tile ${tint}">${icon(ic)}</span>
+        <span class="foldsum"><b>${esc(name)}</b><small>${done} von ${fs.length}${sbRule(s) ? ' · ' + esc(sbVisText(s)) : ''}</small></span><span class="link">Bearbeiten</span></a>${rows}</section>`;
+  }).join('');
+  const del = ui.confirmDelCard
+    ? `<button class="danger" data-act="sbdelete">Steckbrief wirklich löschen</button>`
+    : `<button class="ghost danger-text" data-act="sbaskdel">Steckbrief löschen</button>`;
+  return shell('Steckbrief', `${stale}${top}${vis}${secs}<div class="card stack">${del}</div>`, { tab: 'acc', back: ['#/konto', 'Konto'], sub: 'So wissen die anderen, was zu dir passt.' });
+}
+
+function viewCardSec(s) {
+  const [, name] = sbSec(s);
+  const fs = sbFieldsOf(s);
+  const data = sbMine(), stamps = (D.card && D.card.stamps) || {};
+  const ret = 'steckbrief/s/' + s;
+  const first = SB_FIELDS.indexOf(fs.find(f => !sbFilled(data[f[0]])) || fs[0]);
+  const items = fs.map(f => {
+    const st = sbStale(stamps, f[0]);
+    return `<section class="card sbfield"><div class="sbfhead"><b>${esc(f[2])}</b></div>${sbControl(f)}
+      <div class="sbffoot">${st && sbFilled(data[f[0]]) ? `<span class="muted small">Zuletzt geändert im ${esc(fmtMonth(st))}</span>` : '<span></span>'}${sbVisLink(f[0], ret)}</div></section>`;
+  }).join('');
+  return shell(name, `<div class="sbsecbar">${sbVisLink(s, ret)}<a class="link" href="#/steckbrief/quiz/${first}">Als Quiz</a></div>${items}`,
+    { tab: 'acc', back: ['#/steckbrief', 'Steckbrief'], eyebrow: 'Steckbrief' });
+}
+
+function viewCardVis(item) {
+  const ret = backParam() || '#/steckbrief';
+  const r = sbRule(item);
+  const mode = r ? r.mode : 'all';
+  const gs = myGroups(), ps = groupPeople().slice().sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'de'));
+  const box = (name, val, label, on, meta = '') => `<label class="check"><input type="checkbox" name="${name}" value="${val}" ${on ? 'checked' : ''}><span>${esc(label)}${meta ? `<small>${esc(meta)}</small>` : ''}</span></label>`;
+  const opts = [['all', 'Alle'], ['except', 'Alle außer'], ['only', 'Nur']].map(([k, l]) =>
+    `<label><input type="radio" name="vmode" value="${k}" ${mode === k ? 'checked' : ''}><span>${l}</span></label>`).join('');
+  const parent = item === 'all' ? '' : (item.includes('.') ? `Gilt zusätzlich zu den Einstellungen für „${esc(sbItemName(item.split('.')[0]))}“ und den ganzen Steckbrief.` : 'Gilt zusätzlich zu den Einstellungen für den ganzen Steckbrief.');
+  const body = `<form data-form="sbvis" data-item="${item}" data-ret="${esc(ret)}" class="stack">
+      <div class="seg" role="radiogroup" aria-label="Wer sieht das">${opts}</div>
+      <div id="vispick" class="${mode === 'all' ? 'hide' : ''}">
+        <p class="small muted" id="vishelp">${mode === 'only' ? 'Nur wen du hier auswählst, sieht es.' : 'Wer in einer anderen deiner Gruppen ist, sieht es trotzdem. Einzelne Personen kannst du direkt auswählen.'}</p>
+        ${gs.length ? `<h2>Gruppen</h2><div class="card options">${gs.map(g => box('g', g.id, g.name, r && r.groups.includes(g.id), plural(membersOf(g.id).length, 'Person', 'Personen'))).join('')}</div>` : ''}
+        ${ps.length ? `<h2>Personen</h2><div class="card options">${ps.map(u => box('u', u, nameOf(u), r && r.users.includes(u))).join('')}</div>` : ''}
+      </div>
+      ${parent ? `<p class="foot">${icon('eye')}<span>${parent}</span></p>` : ''}
+      <button class="primary" type="submit">Speichern</button></form>`;
+  return shell('Wer sieht das?', body, { tab: 'acc', back: [ret, 'Zurück'], eyebrow: sbItemName(item) });
+}
+
+/* Ansicht für andere (Freundesseite) */
+function sbOf(uid) { return D.cardsOk && D.cards ? D.cards[uid] || null : null; }
+function sbSummary(c) {
+  if (!c) return '';
+  const a = c.d['nope.allergy'];
+  if (sbFilled(a)) return 'Allergien: ' + a.join(', ');
+  const tags = SB_FIELDS.filter(f => f[1] === 'either' && sbFilled(c.d[f[0]])).slice(0, 2).map(f => sbText(f, c.d[f[0]], true));
+  return tags.length ? tags.join(' · ') : plural(SB_FIELDS.filter(f => sbFilled(c.d[f[0]])).length, 'Angabe', 'Angaben');
+}
+function cardFold(uid, name) {
+  if (!D.cardsOk) return '';
+  const c = sbOf(uid);
+  if (!c) return fold('fr-card', 'idcard', 't1', 'Steckbrief', 'Noch kein Steckbrief', `<p class="empty-line">${esc(name)} hat noch keinen Steckbrief ausgefüllt.</p>`);
+  const d = c.d;
+  const vals = (k, cls = 'tag') => (d[k] || []).map(x => `<span class="${cls}">${esc(x)}</span>`).join('');
+  const row = (label, html) => html ? `<div class="sbrow"><span class="sblabel">${label}</span><span class="sbval">${html}</span></div>` : '';
+  const nope = (sbFilled(d['nope.allergy']) ? `<div class="banner warn sballergy">${icon('shield')}<span><b>Allergien</b><small>${esc(d['nope.allergy'].join(', '))}</small></span></div>` : '')
+    + row('Lieber nicht', vals('nope.things', 'tag no')) + row('Hat genug', vals('nope.enough', 'tag no'));
+  const either = SB_FIELDS.filter(f => f[1] === 'either' && sbFilled(d[f[0]])).map(f => `<span class="tag hi">${esc(sbText(f, d[f[0]], true))}</span>`).join('');
+  const colors = sbFilled(d['likes.colors']) ? d['likes.colors'].map(x => `<span class="tag">${sbSwatch(x)}${esc((SB_COLORS.find(o => o[0] === x) || [x, x])[1])}</span>`).join('') : '';
+  const likes = row('Farben', colors) + row('Hobbys', vals('likes.hobbies')) + row('Isst gern', vals('likes.food')) + row('Marken', vals('likes.brands'));
+  const sizes = sbFieldsOf('sizes').filter(f => sbFilled(d[f[0]])).map(f => {
+    const st = sbStale(c.s, f[0]);
+    return `<li><span>${esc(f[3])}</span><b>${esc(d[f[0]])}${st ? `<small class="muted"> · Stand ${esc(fmtMonth(st))}</small>` : ''}</b></li>`;
+  }).join('');
+  const joy = d['joy.text'] ? `<blockquote class="sbjoy"><span class="sblabel">Das freut ${esc(name)} immer</span>${esc(d['joy.text'])}</blockquote>` : '';
+  const inner = `<div class="card sbview">${nope}${either ? `<p class="sbtags">${either}</p>` : ''}${likes}${sizes ? `<ul class="facts">${sizes}</ul>` : ''}${joy}</div>`;
+  return fold('fr-card', 'idcard', 't1', 'Steckbrief', sbSummary(c), inner, true);
+}
+
+// Eintrag unter Konto (und dezent unter der eigenen Wunschliste, solange er nicht fertig ist)
+function cardLink(listHint) {
+  if (!D.cardOk) return '';
+  const n = SB_FIELDS.length, c = sbCount(sbMine());
+  if (listHint && c >= n) return '';
+  const sub = !c ? 'Größen, Lieblingsdinge und was lieber nicht' : (c < n ? `${c} von ${n} beantwortet` : 'Vollständig');
+  return `<a class="card row-item sblink ${listHint ? 'inlist' : ''}" href="#/steckbrief"><span class="tile t1">${icon('idcard')}</span>
+      <span class="row-main"><span class="row-title">${listHint ? 'Dein Steckbrief' : 'Steckbrief'}</span><span class="row-meta">${sub}</span></span>${icon('chev', 'chev')}</a>`;
+}
+// Auf der Liste einer Person in der Gruppe: Hinweis auf ihren Steckbrief (Allergien zuerst)
+function cardHint(gid, uid) {
+  const c = sbOf(uid);
+  if (!c) return '';
+  return `<a class="banner tap sbhint" href="#/f/u:${uid}?r=g/${gid}/p/${uid}">${icon('idcard')}<span><b>Steckbrief</b><small>${esc(sbSummary(c))}</small></span>${icon('chev', 'chev')}</a>`;
+}
+
+/* ---------- Früh dran (1.12) ----------
+   Dezentes Lob nur für mich: beim Abhaken einer Besorgung mindestens 14 Tage vor dem Anlass
+   und auf der Startseite, wenn alles erledigt ist. Anlass ist bis Paket 9 Heiligabend. */
+const EARLY_DAYS = 14;
+function errandStats() {
+  const errands = D.res.filter(r => r.user_id === me() && D.wishes.some(w => w.id === r.wish_id));
+  const ideasDone = (D.ideas || []).filter(i => i.done_at).length;
+  return { n: errands.length + ideasDone, done: errands.filter(r => r.status === 'gekauft').length + ideasDone };
+}
+function earlyToast() {
+  const days = daysToXmas();
+  if (days < EARLY_DAYS) return;
+  const st = errandStats();
+  toast(st.n && st.done === st.n ? `Alles besorgt, ${days} Tage vor Heiligabend. Früh dran.` : `Früh dran. Noch ${days} Tage bis Heiligabend.`);
+}
+
 function secureCard() {
   return `<div class="card stack">
     <div class="cardhead">${icon('lock')}<b>Konto sichern</b></div>
@@ -1671,6 +1991,7 @@ function viewAccount() {
     ${unsafe ? secureCard() : ''}
     <h2>Profil</h2>
     <div class="card"><form data-form="name" class="inline"><input name="name" maxlength="40" value="${esc(myName())}" required><button class="secondary" type="submit">Name ändern</button></form></div>
+    ${cardLink()}
     ${themeSection()}
     ${acc ? `<h2>Anmeldung</h2>${codeCard()}` : ''}
     ${adminSection()}
@@ -1679,6 +2000,7 @@ function viewAccount() {
     ${fold('privacy', 'lock', 't1', 'Datenschutz', 'Was gespeichert wird und wer was sieht', `    <div class="card prose">
       <p>Name, Benutzername, Gruppen, Wünsche und Reservierungen liegen in einer Datenbank bei Supabase in der EU. Passwort und Wiederherstellungscode werden nur verschlüsselt gespeichert.</p>
       <p>Andere sehen deinen Namen und die Wünsche, die du für ihre Gruppe freigibst. Reservierungen sieht der Beschenkte nie.</p>
+      <p>Deinen Steckbrief sehen alle aus deinen Gruppen. Unter Steckbrief kannst du ihn ganz oder teilweise für bestimmte Gruppen oder Personen verbergen.</p>
       <p>Für Benachrichtigungen wird eine Adresse des Push-Dienstes deines Geräts gespeichert (Apple, Google oder Mozilla). Die Nachrichten sind verschlüsselt.</p>
       <p>Auf dem Gerät bleiben nur die Anmeldung und eine Kopie der Listen, damit die App schnell startet.</p>
     </div>`)}
@@ -1724,6 +2046,7 @@ function render() {
   else if (parts[0] === 'g' && parts[1]) html = viewGroup(parts[1]);
   else if (parts[0] === 'liste') html = viewList();
   else if (parts[0] === 'konto' || parts[0] === 'mehr') html = viewAccount();
+  else if (parts[0] === 'steckbrief') html = viewCard(parts);
   else html = viewHome();
   const y = render.lastKey === location.hash ? window.scrollY : 0;
   app.innerHTML = html;
@@ -1761,7 +2084,61 @@ async function run(fn) {
   }
 }
 
+/* Steckbrief speichern: sofort lokal anzeigen, dann an die Datenbank */
+async function sbPut(k, v) {
+  const empty = !sbFilled(v);
+  D.card = D.card || { data: {}, stamps: {} };
+  const data = Object.assign({}, D.card.data), stamps = Object.assign({}, D.card.stamps);
+  if (empty) { delete data[k]; delete stamps[k]; } else { data[k] = v; stamps[k] = new Date().toISOString(); }
+  D.card = { data, stamps };
+  render();
+  sbPending++;
+  try {
+    await sb('/rest/v1/rpc/card_put', { method: 'POST', body: { p_key: k, p_val: empty ? null : v } });
+    saveState();
+  } catch (e) { sbPending--; await sync(true); throw e; }
+  sbPending--;
+}
+// Einzelauswahl (Diese oder jene, Größen): nochmal tippen hebt sie auf; im Quiz geht es danach weiter
+async function sbChoose(el) {
+  const k = el.dataset.k, v = el.dataset.v;
+  const off = sbMine()[k] === v;
+  const p = sbPut(k, off ? null : v);
+  if (!off && el.dataset.next) { await new Promise(r => setTimeout(r, 220)); go(el.dataset.next); }
+  await p;
+}
+
 const forms = {
+  async sbown(f) {
+    const k = f.dataset.k, v = f.v.value.trim().replace(/\s+/g, ' ').slice(0, 40);
+    if (!v) return;
+    const cur = Array.isArray(sbMine()[k]) ? sbMine()[k].slice() : [];
+    if (cur.some(x => x.toLowerCase() === v.toLowerCase())) { f.v.value = ''; return; }
+    if (cur.length >= 30) { toast('Höchstens 30 Einträge.'); return; }
+    cur.push(v);
+    await sbPut(k, cur);
+    const again = document.querySelector(`form[data-form="sbown"][data-k="${k}"] input`);
+    if (again) again.focus();
+  },
+  async sbtext(f) {
+    const k = f.dataset.k, v = f.v.value.trim();
+    if (v !== (sbMine()[k] || '')) await sbPut(k, v || null);
+    if (f.dataset.next) go(f.dataset.next); else toast('Gespeichert.');
+  },
+  async sbvis(f) {
+    const item = f.dataset.item;
+    const mode = (f.querySelector('input[name="vmode"]:checked') || {}).value || 'all';
+    const pick = n => [...f.querySelectorAll(`input[name="${n}"]:checked`)].map(x => x.value);
+    if (mode === 'all') {
+      await sb(`/rest/v1/profile_card_vis?owner=eq.${me()}&item=eq.${encodeURIComponent(item)}`, { method: 'DELETE' });
+    } else {
+      await sb('/rest/v1/profile_card_vis?on_conflict=owner,item', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+        body: { owner: me(), item, mode, users: pick('u'), groups: pick('g') } });
+    }
+    await sync(true);
+    toast('Gespeichert.');
+    go(f.dataset.ret || '#/steckbrief');
+  },
   async start(f) {
     const name = f.name.value.trim();
     if (!name) return;
@@ -2039,6 +2416,7 @@ const acts = {
     await sb('/rest/v1/ideas?id=eq.' + i.id, { method: 'PATCH', prefer: 'return=minimal', body: { done_at: at } });
     i.done_at = at;
     render();
+    if (at) earlyToast();
     sync(true);
   },
   delidea: async el => {
@@ -2148,6 +2526,36 @@ const acts = {
   resstatus: async el => {
     await sb('/rest/v1/reservations?wish_id=eq.' + el.dataset.id, { method: 'PATCH', prefer: 'return=minimal', body: { status: el.dataset.s } });
     await sync(true);
+    if (el.dataset.s === 'gekauft') earlyToast();
+  },
+  // Steckbrief (1.12)
+  sbpick: el => sbChoose(el),
+  sbone: el => sbChoose(el),
+  sbtoggle: async el => {
+    const k = el.dataset.k, v = el.dataset.v;
+    const cur = Array.isArray(sbMine()[k]) ? sbMine()[k].slice() : [];
+    const i = cur.indexOf(v);
+    if (i >= 0) cur.splice(i, 1);
+    else {
+      if (k === 'likes.colors' && cur.length >= 5) { toast('Höchstens fünf Farben.'); return; }
+      if (cur.length >= 30) { toast('Höchstens 30 Einträge.'); return; }
+      cur.push(v);
+    }
+    await sbPut(k, cur);
+  },
+  sbconfirm: async () => {
+    const d = sbMine();
+    for (const f of sbFieldsOf('sizes')) if (sbFilled(d[f[0]])) await sbPut(f[0], d[f[0]]);
+    toast('Danke, ist vermerkt.');
+  },
+  sbaskdel: async () => { ui.confirmDelCard = 1; render(); },
+  sbdelete: async () => {
+    await sb('/rest/v1/profile_card_vis?owner=eq.' + me(), { method: 'DELETE' });
+    await sb('/rest/v1/profile_cards?user_id=eq.' + me(), { method: 'DELETE' });
+    ui = {};
+    await sync(true);
+    toast('Steckbrief gelöscht.');
+    go('#/konto');
   },
   unreserve: async el => {
     await sb('/rest/v1/reservations?wish_id=eq.' + el.dataset.id, { method: 'DELETE' });
@@ -2211,6 +2619,11 @@ document.addEventListener('change', e => {
   if (e.target.name === 'person' && e.target.form && e.target.form.dataset.form === 'idea') {
     const n = $('#pnew');
     if (n) { n.classList.toggle('hide', e.target.value !== 'new'); if (e.target.value === 'new') n.querySelector('input').focus(); }
+  }
+  if (e.target.name === 'vmode') {
+    const box = $('#vispick'), help = $('#vishelp');
+    if (box) box.classList.toggle('hide', e.target.value === 'all');
+    if (help) help.textContent = e.target.value === 'only' ? 'Nur wen du hier auswählst, sieht es.' : 'Wer in einer anderen deiner Gruppen ist, sieht es trotzdem. Einzelne Personen kannst du direkt auswählen.';
   }
   if (e.target.name === 'vis') {
     const sub = $('#gsel');

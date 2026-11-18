@@ -1,4 +1,4 @@
--- Geschenkeliste – Datenbank, Stand Version 1.11 (Private Ideenliste)
+-- Geschenkeliste – Datenbank, Stand Version 1.12 (Steckbrief)
 -- Im Supabase SQL Editor komplett einfügen und „Run“ drücken.
 -- Das Skript darf mehrfach ausgeführt werden (bestehende Daten bleiben erhalten).
 
@@ -1363,3 +1363,175 @@ grant select, insert, update, delete on public.idea_people, public.ideas to auth
 revoke execute on function public.idea_people_check(), public.ideas_check(), public.idea_link(uuid, uuid)
   from public, anon, authenticated;
 grant execute on function public.idea_link(uuid, uuid) to authenticated;
+
+-- =====================================================================
+-- Steckbrief (Version 1.12)
+-- Größen, Lieblingsdinge, „Lieber nicht“, „Das freut mich immer“ und „Diese oder jene“.
+-- Schlüssel immer „abschnitt.feld“, z. B. sizes.shoe, nope.allergy, either.surprise.
+-- Standard: alle aus den eigenen Gruppen sehen ihn. Pro Steckbrief (item 'all'),
+-- Abschnitt (z. B. 'sizes') oder Feld (z. B. 'sizes.ring') lassen sich Leute oder
+-- Gruppen ausschließen („except“) oder nur bestimmte zulassen („only“).
+-- Andere lesen nie die Tabelle selbst, sondern nur gefiltert über card_list().
+-- =====================================================================
+
+create table if not exists public.profile_cards (
+  user_id uuid primary key default auth.uid() references auth.users(id) on delete cascade,
+  data jsonb not null default '{}',
+  stamps jsonb not null default '{}',   -- pro Feld: zuletzt geändert (ISO-Zeit)
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.profile_card_vis (
+  owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  item text not null check (item ~ '^(all|[a-z]{2,10}(\.[a-z_]{2,20})?)$'),
+  mode text not null check (mode in ('only', 'except')),
+  users uuid[] not null default '{}' check (cardinality(users) <= 200),
+  groups uuid[] not null default '{}' check (cardinality(groups) <= 200),
+  primary key (owner, item)
+);
+
+-- ---------- Prüfungen ----------
+
+-- Inhalt: Objekt mit Schlüsseln „abschnitt.feld“; Werte Text (bis 400 Zeichen)
+-- oder Liste mit höchstens 30 Texten (je bis 40 Zeichen); insgesamt höchstens 8 KB
+create or replace function public.profile_cards_check() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare e record; x jsonb;
+begin
+  if tg_op = 'UPDATE' and new.user_id <> old.user_id then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if jsonb_typeof(new.data) <> 'object' or jsonb_typeof(new.stamps) <> 'object'
+     or octet_length(new.data::text) > 8000 or octet_length(new.stamps::text) > 8000 then
+    raise exception 'Steckbrief ungültig' using errcode = '22023';
+  end if;
+  for e in select key, value from jsonb_each(new.data) loop
+    if e.key !~ '^[a-z]{2,10}\.[a-z_]{2,20}$' then
+      raise exception 'Steckbrief ungültig' using errcode = '22023';
+    end if;
+    if jsonb_typeof(e.value) = 'string' then
+      if char_length(e.value #>> '{}') > 400 then raise exception 'Text zu lang' using errcode = '22023'; end if;
+    elsif jsonb_typeof(e.value) = 'array' then
+      if jsonb_array_length(e.value) > 30 then raise exception 'Zu viele Einträge' using errcode = '22023'; end if;
+      for x in select value from jsonb_array_elements(e.value) loop
+        if jsonb_typeof(x) <> 'string' or char_length(x #>> '{}') not between 1 and 40 then
+          raise exception 'Steckbrief ungültig' using errcode = '22023';
+        end if;
+      end loop;
+    else
+      raise exception 'Steckbrief ungültig' using errcode = '22023';
+    end if;
+  end loop;
+  new.updated_at := now();
+  return new;
+end $$;
+drop trigger if exists profile_cards_check on public.profile_cards;
+create trigger profile_cards_check before insert or update on public.profile_cards
+  for each row execute function public.profile_cards_check();
+
+-- Höchstens 100 Sichtbarkeits-Regeln pro Konto, Besitzer nicht änderbar
+create or replace function public.profile_card_vis_check() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'UPDATE' and new.owner <> old.owner then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if tg_op = 'INSERT' and (select count(*) from public.profile_card_vis where owner = new.owner) >= 100 then
+    raise exception 'Höchstens 100 Regeln' using errcode = '54000';
+  end if;
+  return new;
+end $$;
+drop trigger if exists profile_card_vis_check on public.profile_card_vis;
+create trigger profile_card_vis_check before insert or update on public.profile_card_vis
+  for each row execute function public.profile_card_vis_check();
+
+-- ---------- Sichtbarkeit ----------
+
+-- Darf v diesen Teil (item) des Steckbriefs von o sehen? Ohne Regel: ja.
+-- only:   v steht in users oder ist in einer der Gruppen (in der auch o ist)
+-- except: v steht nicht in users und teilt mit o mindestens eine nicht ausgeschlossene Gruppe
+create or replace function public.card_allowed(o uuid, v uuid, it text) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select coalesce((
+    select case r.mode
+      when 'only' then v = any(r.users) or exists (
+        select 1 from public.members a join public.members b on b.group_id = a.group_id
+        where a.user_id = o and b.user_id = v and a.group_id = any(r.groups))
+      else not (v = any(r.users)) and exists (
+        select 1 from public.members a join public.members b on b.group_id = a.group_id
+        where a.user_id = o and b.user_id = v and not (a.group_id = any(r.groups)))
+    end
+    from public.profile_card_vis r where r.owner = o and r.item = it), true);
+$$;
+
+-- Alle Steckbriefe, die ich sehen darf: {uid: {d: {feld: wert}, s: {feld: zeit}}}.
+-- Ausgeblendete Felder fehlen einfach (niemand erfährt, dass es sie gibt).
+create or replace function public.card_list() returns jsonb
+language sql stable security definer set search_path = '' as $$
+  select coalesce(jsonb_object_agg(c.user_id, jsonb_build_object('d', f.d, 's', f.s)), '{}'::jsonb)
+  from public.profile_cards c
+  cross join lateral (
+    select jsonb_object_agg(e.key, e.value) as d,
+           jsonb_object_agg(e.key, coalesce(c.stamps -> e.key, 'null'::jsonb)) as s
+    from jsonb_each(c.data) e
+    where public.card_allowed(c.user_id, auth.uid(), split_part(e.key, '.', 1))
+      and public.card_allowed(c.user_id, auth.uid(), e.key)) f
+  where auth.uid() is not null and c.user_id <> auth.uid()
+    and public.shares_group(c.user_id)
+    and public.card_allowed(c.user_id, auth.uid(), 'all')
+    and f.d is not null;
+$$;
+
+-- ---------- Aktionen der App ----------
+
+-- Ein Feld setzen (leer, null oder [] = entfernen). Merkt sich, wann es geändert wurde.
+create or replace function public.card_put(p_key text, p_val jsonb) returns void
+language plpgsql security invoker set search_path = public as $$
+declare v_del boolean := p_val is null or p_val = 'null'::jsonb or p_val = '""'::jsonb or p_val = '[]'::jsonb;
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet' using errcode = '42501'; end if;
+  insert into public.profile_cards (user_id) values (auth.uid()) on conflict (user_id) do nothing;
+  update public.profile_cards set
+    data = case when v_del then data - p_key else data || jsonb_build_object(p_key, p_val) end,
+    stamps = case when v_del then stamps - p_key else stamps || jsonb_build_object(p_key, now()) end
+  where user_id = auth.uid();
+end $$;
+
+-- ---------- Zugriffsregeln ----------
+
+alter table public.profile_cards enable row level security;
+alter table public.profile_card_vis enable row level security;
+
+drop policy if exists "steckbrief lesen" on public.profile_cards;
+drop policy if exists "steckbrief anlegen" on public.profile_cards;
+drop policy if exists "steckbrief ändern" on public.profile_cards;
+drop policy if exists "steckbrief löschen" on public.profile_cards;
+create policy "steckbrief lesen" on public.profile_cards for select to authenticated
+  using (user_id = auth.uid());
+create policy "steckbrief anlegen" on public.profile_cards for insert to authenticated
+  with check (user_id = auth.uid());
+create policy "steckbrief ändern" on public.profile_cards for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "steckbrief löschen" on public.profile_cards for delete to authenticated
+  using (user_id = auth.uid());
+
+drop policy if exists "sichtbarkeit lesen" on public.profile_card_vis;
+drop policy if exists "sichtbarkeit anlegen" on public.profile_card_vis;
+drop policy if exists "sichtbarkeit ändern" on public.profile_card_vis;
+drop policy if exists "sichtbarkeit löschen" on public.profile_card_vis;
+create policy "sichtbarkeit lesen" on public.profile_card_vis for select to authenticated
+  using (owner = auth.uid());
+create policy "sichtbarkeit anlegen" on public.profile_card_vis for insert to authenticated
+  with check (owner = auth.uid());
+create policy "sichtbarkeit ändern" on public.profile_card_vis for update to authenticated
+  using (owner = auth.uid()) with check (owner = auth.uid());
+create policy "sichtbarkeit löschen" on public.profile_card_vis for delete to authenticated
+  using (owner = auth.uid());
+
+revoke all on public.profile_cards, public.profile_card_vis from anon, authenticated;
+grant select, insert, update, delete on public.profile_cards, public.profile_card_vis to authenticated;
+
+revoke execute on function public.profile_cards_check(), public.profile_card_vis_check(),
+  public.card_allowed(uuid, uuid, text), public.card_list(), public.card_put(text, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.card_list(), public.card_put(text, jsonb) to authenticated;
