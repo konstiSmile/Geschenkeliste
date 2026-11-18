@@ -1,4 +1,4 @@
-# Geschenkeliste – Fahrplan (Stand 18. November 2026, Version 1.11)
+# Geschenkeliste – Fahrplan (Stand 18. November 2026, Version 1.12)
 
 Reihenfolge der Features in kleinen Paketen. **Ein Paket = ein Chat** (Übergabe lesen, Paket bauen, testen, pushen, Übergabe aktualisieren). Jedes Paket ist für sich nutzbar, die Familie merkt nie eine halbe Baustelle.
 
@@ -72,11 +72,18 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.11: Private Ideenliste“ (A–D)
   - Tests: 201 RLS-Prüfungen, 194 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.11“: A schema.sql ausführen, B neu laden (Version 1.11), C Idee für jemanden aus der Gruppe notieren, D Person ohne App anlegen
-- [x] **1.11.1 Freunde** (18.11.): unter Gruppen eine Freundesliste (Leute aus den Gruppen + selbst angelegte), Personenseite mit aufklappbaren Bereichen: gemeinsame Gruppen, Wünsche, Ideen, Verwalten. Steckbrief kommt dort mit Paket 11 dazu
-- [ ] **Paket 11 – 1.12 Steckbrief + „Früh dran“** (M) [Claude], schema.sql – **vorgezogen (18.11.), als Nächstes**
-  - Erst Ideen besprechen, wie der Steckbrief Spaß macht statt zu überfordern; Inhalte Größen, Lieblingsdinge, Lieber nicht, Freitext. „Früh dran“: dezentes Lob nur für mich, auch für einzelne Besorgungen
+- [x] **1.11.1 Freunde** (18.11.): unter Gruppen eine Freundesliste (Leute aus den Gruppen + selbst angelegte), Personenseite mit aufklappbaren Bereichen: gemeinsame Gruppen, Wünsche, Ideen, Verwalten. Steckbrief ist dort seit 1.12
+- [x] **Paket 11 – 1.12 Steckbrief + „Früh dran“** (M) [Claude], schema.sql – **gebaut und gepusht 18.11. (Commit `d0369b7`)**
+  - Steckbrief unter Konto: beim ersten Mal ein Quiz (20 kurze Fragen: Diese oder jene, Mag ich, Lieber nicht, Größen, Das freut mich immer), danach Übersicht mit Abschnitten, jederzeit im Quiz weitermachen; alles überspringbar
+  - Sichtbar für alle aus den Gruppen; ganzer Steckbrief, Abschnitte oder einzelne Felder mit „Alle außer …“ oder „Nur …“ für Gruppen und Personen
+  - Bei Freunden Klappbereich „Steckbrief“ (Allergien zuerst), Hinweis auf der Liste in der Gruppe; Größen zeigen „Stand …“ nach einem Jahr
+  - „Früh dran“: Hinweis beim Abhaken ab 14 Tagen vor Heiligabend, Hero-Karte „Alles besorgt. Früh dran.“ Nur für mich
+  - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.12: Steckbrief und Früh dran“ (A–D)
+  - Tests: 240 RLS-Prüfungen, 236 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
+  - Später: Steckbrief für Personen ohne App, Größe im Wunsch-/Ideenformular
+- [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.12“: A schema.sql ausführen, B neu laden (Version 1.12), C Steckbrief ausfüllen, D Sichtbarkeit prüfen
 - [ ] **[Du]** Vorher klären für Paket 6: Wer kauft und streckt vor? Was, wenn zu wenige mitmachen?
-- [ ] **Paket 6 – 1.13 Gemeinsam schenken** (M) [Claude], schema.sql – nach Paket 12 und 11
+- [ ] **Paket 6 – 1.13 Gemeinsam schenken** (M) [Claude], schema.sql – **als Nächstes**
   - Anfrage an bestimmte Leute oder offen, Aufteilung fair/Budget/individuell, „bezahlt“ abhaken, Benachrichtigung (Preis am Wunsch gibt es seit 1.7, Push seit 1.9)
 - [ ] **Paket 7 – 1.14 Chats Teil 1** (M) [Claude], schema.sql
   - Chat pro Geschenk + Plattform-Abfrage (WhatsApp, Signal, …, ausgegraut wenn gewählt)
@@ -107,4 +114,4 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - Anlässe kommen vor Farbthemen, weil dabei das fest eingebaute Weihnachten verschwindet.
 - Öffnen für Freunde erst, wenn Datenschutz und Schutz vor Spam stehen.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann besprechen und bauen wir Paket 11 (Steckbrief + Früh dran).“
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann besprechen und bauen wir Paket 6 (Gemeinsam schenken).“
