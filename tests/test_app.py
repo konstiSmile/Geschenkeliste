@@ -1000,8 +1000,10 @@ with sync_playwright() as pw:
     a.wait_for_selector('.modeseg input[value=auto]:checked')
     check('1.10.1: Automatisch folgt wieder dem Gerät', a.evaluate("document.documentElement.dataset.mode") == 'dark' and a.evaluate("localStorage.getItem('geschenkeliste-mode')") is None)
     a.emulate_media(color_scheme='light')
-    a.wait_for_function("document.documentElement.dataset.mode === 'light'")
-    check('1.10.1: Gerät wechselt auf Hell, App zieht mit', True)
+    for _ in range(20):
+        if a.evaluate('document.documentElement.dataset.mode') == 'light': break
+        a.wait_for_timeout(100)
+    check('1.10.1: Gerät wechselt auf Hell, App zieht mit', a.evaluate('document.documentElement.dataset.mode') == 'light')
 
     # Start aus Cache ohne Netz: Daten bleiben sichtbar
     a.context.unroute('https://qbdpzamygonpruaafcrt.supabase.co/**')
