@@ -1,6 +1,6 @@
 # Geschenkeliste – Übergabe (Stand 18. November 2026, Version 1.13)
 
-Maßgeblich für die Geschenkeliste (Abschnitt D der großen Übergabe verweist hierher). **Reihenfolge der nächsten Schritte: siehe `claude/geschenkeliste-fahrplan.md`. Pakete 1, 2, 3, 3b, 4, 5, 5b, 12, 11 und 6 sind gebaut. Nächstes Paket: Paket 7 (Chats Teil 1).**
+Maßgeblich für die Geschenkeliste (Abschnitt D der großen Übergabe verweist hierher). **Reihenfolge der nächsten Schritte: siehe `claude/geschenkeliste-fahrplan.md`. Pakete 1, 2, 3, 3b, 4, 5, 5b, 12, 11 und 6 sind gebaut. Im nächsten Chat zuerst mit dem Nutzer Supabase fertig einrichten (alles Offene aus 1.9 bis 1.13, vor allem Benachrichtigungen), dann Paket 15 (Direkte Freundschaft, 1.14).**
 
 ## Stand
 - **Version 1.13 gepusht** (18.11., Commit `b423ea9`): **Gemeinsam schenken** (Details im Abschnitt „Paket 6“ unten). schema.sql geändert (Push-Block: `push_prefs.pool`, `push_outbox.info` + Kind `pool`, `push_wants`, `push_on_wish`, `push_message`, `push_daily`; neuer Block „Gemeinsam schenken“ am Ende), Edge Function unverändert. Cache `geschenkeliste-v21`, `?v=21`. Tests: 297 RLS, 269 Playwright, 14 Edge Function, 9 Service Worker. Anleitung: Abschnitt „Neu mit Version 1.13: Gemeinsam schenken“ (A–D, Tabelle) nach dem 1.12-Abschnitt (Doc rev 39).
@@ -102,6 +102,10 @@ Keine Mails. Benutzername in `accounts` (nur selbst lesbar). Tabellen `recovery_
 - Tests: `test_rls.py` Block „Gemeinsam schenken (1.13)“ (Vera/Wim/Xenia/Yann/Zoe, 57 Prüfungen), `test_app.py` Block „1.13 Gemeinsam schenken“ nach dem Schließen von j/k/l (Rita/Sam/Tina/Uli, Bilder `43-gemeinsam-starten` bis `47-gemeinsam-frist`). Achtung im Test: nach Änderungen anderer Konten `reload()` und auf den neuen Stand warten (Seite zeigt erst den Cache).
 - **Später:** Idee → gemeinsames Geschenk, gemeinsam schenken ohne Wunsch (freies Geschenk), Push wenn jemand aussteigt, Chat pro Geschenk (Paket 7).
 
+## Direkte Freundschaft (Wunsch vom 18.11., Paket 15, als Nächstes)
+- Heute: Wünsche nur über gemeinsame Gruppen sichtbar (`can_see_wish`), keine Suche (Benutzernamen nur selbst lesbar, `admin_find_users` nur Admin). Notlösung: Gruppe für zwei.
+- Gewünscht: Freunde ohne Gruppe hinzufügen (Link/Code/Benutzername + Anfrage/Annehmen, keine offene Suche), Wünsche auch pro Freund freigeben. Betrifft `can_see_wish`, `shares_group` (Profile, Steckbrief, Ideen-Verknüpfung), `wish_visible_to`/`pool_audience` (gemeinsam schenken), Push `wish`. Offene Fragen siehe Fahrplan.
+
 ## Chats (Idee vom 17.11., noch nicht bauen)
 - Chat pro Wunsch (geheim vor der beschenkten Person), Gruppenchat, Gruppenchat „ohne X“. Plattform-Abfrage (WhatsApp, Signal, Telegram, andere) → Chat ausgegraut mit Hinweis. Erst Abfragen alle paar Sekunden, Realtime später (CSP um `wss://`). Push wie oben.
 
@@ -131,7 +135,7 @@ Keine Mails. Benutzername in `accounts` (nur selbst lesbar). Tabellen `recovery_
 `VERSION` in app.js, `?v=` in index.html und sw.js, `CACHE` in sw.js erhöhen; alle vier Tests laufen lassen (`test_rls.py`, `test_app.py`, `node tests/test_push_fn.mjs`, `node tests/test_sw.mjs`); Screenshots ansehen; Commit mit Co-Author- und Session-Zeile; pushen; Anleitung und diese Übergabe anpassen; im Fahrplan abhaken. Ändert sich die Edge Function, muss der Nutzer sie im Dashboard neu einfügen und deployen.
 
 ## Danach
-Reihenfolge im **Fahrplan** `claude/geschenkeliste-fahrplan.md`: **Paket 7 Chats Teil 1** (Paket 6 ist fertig), dann Chats Teil 2, Phase 3 nach Weihnachten Anlässe / Farbthemen / Steckbrief / Ideenliste / Öffnen für Freunde / Fotos. Ein Paket pro Chat.
+Reihenfolge im **Fahrplan** `claude/geschenkeliste-fahrplan.md`: **Einrichtung nachholen, dann Paket 15 Direkte Freundschaft** (Paket 6 ist fertig), dann Chats Teil 1 und 2, Phase 3 nach Weihnachten Anlässe / Farbthemen / Steckbrief / Ideenliste / Öffnen für Freunde / Fotos. Ein Paket pro Chat.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann besprechen und bauen wir Paket 7 (Chats Teil 1).“
-Versionsnummern: Paket 12 ist 1.11, Paket 11 ist 1.12, Paket 6 ist 1.13, Paket 7 wird 1.14.
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan. Zuerst richten wir zusammen Supabase fertig ein (alles Offene aus 1.9 bis 1.13, vor allem Benachrichtigungen), dann besprechen und bauen wir Paket 15 (Direkte Freundschaft).“
+Versionsnummern: Paket 12 ist 1.11, Paket 11 ist 1.12, Paket 6 ist 1.13, Paket 15 wird 1.14, Chats 1.15 und 1.16.

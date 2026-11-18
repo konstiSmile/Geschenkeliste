@@ -91,9 +91,17 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.13: Gemeinsam schenken“ (A–D)
   - Tests: 297 RLS-Prüfungen, 269 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.13“: A schema.sql ausführen, B neu laden (Version 1.13), C gemeinsam starten, D mit zweitem Konto mitmachen
-- [ ] **Paket 7 – 1.14 Chats Teil 1** (M) [Claude], schema.sql – **als Nächstes**
+- [ ] **[Du + Claude] Einrichtung nachholen – im nächsten Chat zuerst** (ca. 30 Min., gemeinsam Schritt für Schritt)
+  - Aktuelle schema.sql einmal ausführen (deckt 1.6 bis 1.13 ab)
+  - Benachrichtigungen (1.9, A–F): Edge Function `push` anlegen, Verify JWT aus, Schlüssel erzeugen, iPhone erlauben + Testnachricht, zweites Gerät. Erster echter Test gegen Apple/Google → Logs und rote Hinweise in der Verwaltung prüfen
+  - Prüfen: pg_net und pg_cron aktiv (Verwaltung zeigt es), Statusleiste der iPhone-App (1.10), App-Version unter Konto
+- [ ] **Paket 15 – 1.14 Direkte Freundschaft** (M) [Claude], schema.sql – **als Nächstes, gewünscht 18.11.**
+  - Freunde ohne gemeinsame Gruppe: hinzufügen per Link, Code oder Benutzername mit Anfrage und Annehmen (keine offene Suche, damit Fremde niemanden finden)
+  - Wünsche auch für einzelne Freunde freigeben, nicht nur für Gruppen; Freundesliste zeigt direkte Freunde mit ihren Wünschen, Reservieren und gemeinsam schenken wie in Gruppen
+  - Zu besprechen: Sichtbarkeit neuer Wünsche für Freunde (Standard an/aus?), Benutzername suchbar ja/nein, Freundschaft beenden, Push „Freundschaftsanfrage“, Verhältnis zu Paket 13
+- [ ] **Paket 7 – 1.15 Chats Teil 1** (M) [Claude], schema.sql
   - Chat pro Geschenk + Plattform-Abfrage (WhatsApp, Signal, …, ausgegraut wenn gewählt)
-- [ ] **Paket 8 – 1.15 Chats Teil 2** (S) [Claude]
+- [ ] **Paket 8 – 1.16 Chats Teil 2** (S) [Claude]
   - Gruppenchat und „ohne X“-Chats, Push bei neuer Nachricht
 
 ## Phase 3: Nach Weihnachten – Umbau zur Wunschlisten-App für alle Anlässe
@@ -120,4 +128,4 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
 - Anlässe kommen vor Farbthemen, weil dabei das fest eingebaute Weihnachten verschwindet.
 - Öffnen für Freunde erst, wenn Datenschutz und Schutz vor Spam stehen.
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan, dann besprechen und bauen wir Paket 7 (Chats Teil 1).“
+**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe und claude/geschenkeliste-fahrplan. Zuerst richten wir zusammen Supabase fertig ein (alles Offene aus 1.9 bis 1.13, vor allem Benachrichtigungen), dann besprechen und bauen wir Paket 15 (Direkte Freundschaft).“
