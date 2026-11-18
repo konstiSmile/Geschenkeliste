@@ -66,7 +66,7 @@ Legende: **[Du]** = deine Aufgabe, **[Claude]** = ich baue. Größe S/M/L. „sc
   - Tests: 171 RLS-Prüfungen, 165 Playwright-Prüfungen, 14 Edge Function, 9 Service Worker
 - [x] **1.10.1–1.10.4** (18.11.): Hell/Dunkel fest wählbar, Tab-Leiste als schwebende Kapsel, Weihnachten dunkel neu (Tannennacht, Cranberry, Gold, Salbei, Creme), Design und Datenschutz unter Konto aufklappbar (anfangs zu)
 - [ ] **[Du]** Anleitung Abschnitt „Neu mit Version 1.10“: A neu laden, B Konto → Design ausprobieren, C Dunkelmodus ansehen, D iPhone-App: Statusleiste oben lesbar? (Rückmeldung an Claude)
-- [x] **Paket 12 – 1.11 Private Ideenliste** (S–M) [Claude], schema.sql – **gebaut und gepusht 18.11.**
+- [x] **Paket 12 – 1.11 Private Ideenliste** (S–M) [Claude], schema.sql – **gebaut und gepusht 18.11. (Commit `98aabea`)**
   - Wunschliste hat zwei Reiter „Meine Wünsche | Ideen für andere“; Ideen für Leute aus den Gruppen oder für selbst angelegte Personen ohne App, später mit echtem Konto verknüpfbar (Ideen wandern mit); Titel, Link, Preis, Kategorie, Notiz; als besorgt abhaken (zählt bei den Besorgungen); Abschnitt „Deine Ideen“ auf der Personenseite. Nur ich sehe sie
   - Später: Idee in Reservierung umwandeln
   - Einrichtungs-Anleitung: Abschnitt „Neu mit Version 1.11: Private Ideenliste“ (A–D)
