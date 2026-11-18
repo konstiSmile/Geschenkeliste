@@ -71,51 +71,50 @@
   --a5: #ffe9b3; --a5-fg: #2b1720;
 }
 
-/* ---------- Dunkel: Grund Tinte bzw. Lakritz, helle Konturen, schwarze Schatten ---------- */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1e1b2e;
-    --card: #2a2640;
-    --ink: #d6d0f0;
-    --shc: #000000;
-    --text: #fff9ec;
-    --text-2: #c2bcd6;
-    --text-3: #8f89a8;
-    --line: #3a3555;
-    --accent: #7255ff;
-    --accent-press: #8a71ff;
-    --accent-soft: #393266;
-    --danger: #ff6b5e;
-    --open: #ffa48c;  --open-bg: #4a2b2c;
-    --res: #c3b6ff;   --res-bg: #393266;
-    --ok: #7255ff;
-    --t0: #393266; --t0-fg: #c3b6ff;
-    --t1: #4a2e33; --t1-fg: #ffa48c;
-    --t2: #4a4026; --t2-fg: #ffd36a;
-    --a3: #7255ff;
-    color-scheme: dark;
-  }
-  [data-theme="weihnachten"] {
-    --bg: #2b1720;
-    --card: #3a2230;
-    --ink: #f1d7cc;
-    --text: #fff4ec;
-    --text-2: #dcc5cc;
-    --text-3: #a68e97;
-    --line: #4d3040;
-    --accent: #dc1f3c;
-    --accent-press: #ec3550;
-    --accent-soft: #5a2533;
-    --danger: #ff6b7d;
-    --open: #ffe9b3;  --open-bg: #4d3a22;
-    --res: #74dbb2;   --res-bg: #1f4337;
-    --ok: #2fa37c;
-    --hero: #c8102e;
-    --t0: #5a2533; --t0-fg: #ff9aa8;
-    --t1: #1f4337; --t1-fg: #74dbb2;
-    --t2: #4d3a22; --t2-fg: #ffe9b3;
-    --a3: #dc1f3c;
-  }
+/* ---------- Dunkel (data-mode, gesetzt von theme.js nach Gerät oder fester Wahl):
+   Grund Tinte bzw. Lakritz, helle Konturen, schwarze Schatten ---------- */
+[data-mode="dark"] {
+  --bg: #1e1b2e;
+  --card: #2a2640;
+  --ink: #d6d0f0;
+  --shc: #000000;
+  --text: #fff9ec;
+  --text-2: #c2bcd6;
+  --text-3: #8f89a8;
+  --line: #3a3555;
+  --accent: #7255ff;
+  --accent-press: #8a71ff;
+  --accent-soft: #393266;
+  --danger: #ff6b5e;
+  --open: #ffa48c;  --open-bg: #4a2b2c;
+  --res: #c3b6ff;   --res-bg: #393266;
+  --ok: #7255ff;
+  --t0: #393266; --t0-fg: #c3b6ff;
+  --t1: #4a2e33; --t1-fg: #ffa48c;
+  --t2: #4a4026; --t2-fg: #ffd36a;
+  --a3: #7255ff;
+  color-scheme: dark;
+}
+[data-mode="dark"][data-theme="weihnachten"] {
+  --bg: #2b1720;
+  --card: #3a2230;
+  --ink: #f1d7cc;
+  --text: #fff4ec;
+  --text-2: #dcc5cc;
+  --text-3: #a68e97;
+  --line: #4d3040;
+  --accent: #dc1f3c;
+  --accent-press: #ec3550;
+  --accent-soft: #5a2533;
+  --danger: #ff6b7d;
+  --open: #ffe9b3;  --open-bg: #4d3a22;
+  --res: #74dbb2;   --res-bg: #1f4337;
+  --ok: #2fa37c;
+  --hero: #c8102e;
+  --t0: #5a2533; --t0-fg: #ff9aa8;
+  --t1: #1f4337; --t1-fg: #74dbb2;
+  --t2: #4d3a22; --t2-fg: #ffe9b3;
+  --a3: #dc1f3c;
 }
 
 * { box-sizing: border-box; }
@@ -508,3 +507,8 @@ form h2 { margin-top: 24px; }
 .sw-weihnachten i:nth-child(1), .sw-auto i:nth-child(2) { background: #c8102e; }
 .sw-weihnachten i:nth-child(2) { background: #2fa37c; }
 .sw-weihnachten i:nth-child(3) { background: #ffe9b3; }
+
+/* Hell/Dunkel (1.10.1) */
+.modeseg { margin-top: 12px; }
+.modeseg span { gap: 6px; display: flex; align-items: center; justify-content: center; }
+.modeseg .ic { width: 17px; height: 17px; }

@@ -977,6 +977,31 @@ with sync_playwright() as pw:
     a.click('.themeopt[data-v=auto]')
     a.wait_for_selector('.themeopt.on[data-v=auto]')
     check('1.10: Automatisch löscht die feste Wahl', a.evaluate("localStorage.getItem('geschenkeliste-theme')") is None)
+    # 1.10.1: Hell/Dunkel fest wählbar, unabhängig vom Gerät
+    a.emulate_media(color_scheme='light')
+    check('1.10.1: Hell/Dunkel steht auf Automatisch', a.locator('.modeseg input[value=auto]').is_checked() and a.evaluate("document.documentElement.dataset.mode") == 'light')
+    a.click('.modeseg label:has-text("Dunkel")')
+    a.wait_for_selector('.modeseg input[value=dark]:checked')
+    check('1.10.1: Dunkel gewählt: dunkler Grund trotz hellem Gerät', a.evaluate("document.documentElement.dataset.mode") == 'dark'
+          and a.evaluate("localStorage.getItem('geschenkeliste-mode')") == 'dark'
+          and a.evaluate("getComputedStyle(document.body).backgroundColor") in ('rgb(30, 27, 46)', 'rgb(43, 23, 32)'))
+    check('1.10.1: Statusleiste dunkel', a.evaluate("document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]').content") == 'black-translucent'
+          and a.evaluate("document.querySelector('meta[name=theme-color]').content") in ('#1E1B2E', '#2B1720'))
+    shot(a, '32-konto-dunkel')
+    a.reload()
+    a.wait_for_selector('.modeseg')
+    check('1.10.1: Dunkel bleibt nach Neuladen', a.evaluate("document.documentElement.dataset.mode") == 'dark')
+    a.emulate_media(color_scheme='dark')
+    a.click('.modeseg label:has-text("Hell")')
+    a.wait_for_selector('.modeseg input[value=light]:checked')
+    check('1.10.1: Hell gewählt: heller Grund trotz dunklem Gerät', a.evaluate("document.documentElement.dataset.mode") == 'light'
+          and a.evaluate("getComputedStyle(document.body).backgroundColor") in ('rgb(255, 249, 236)', 'rgb(255, 244, 236)'))
+    a.click('.modeseg label:has-text("Automatisch")')
+    a.wait_for_selector('.modeseg input[value=auto]:checked')
+    check('1.10.1: Automatisch folgt wieder dem Gerät', a.evaluate("document.documentElement.dataset.mode") == 'dark' and a.evaluate("localStorage.getItem('geschenkeliste-mode')") is None)
+    a.emulate_media(color_scheme='light')
+    a.wait_for_function("document.documentElement.dataset.mode === 'light'")
+    check('1.10.1: Gerät wechselt auf Hell, App zieht mit', True)
 
     # Start aus Cache ohne Netz: Daten bleiben sichtbar
     a.context.unroute('https://qbdpzamygonpruaafcrt.supabase.co/**')

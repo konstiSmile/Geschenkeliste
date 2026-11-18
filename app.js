@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.10';
+const VERSION = '1.10.1';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -504,6 +504,8 @@ const I = {
   snow: '<path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9.5 4.5 12 7l2.5-2.5M9.5 19.5 12 17l2.5 2.5"/>',
   calendar: '<rect x="4" y="5.5" width="16" height="15" rx="2.5"/><path d="M4 10.5h16M8.5 3.5v4M15.5 3.5v4"/>',
   sparkle: '<path d="M12 4c.8 4.2 3.8 7.2 8 8-4.2.8-7.2 3.8-8 8-.8-4.2-3.8-7.2-8-8 4.2-.8 7.2-3.8 8-8z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
+  moon: '<path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z"/>',
   palette: '<path d="M12 3.5a8.5 8.5 0 0 0 0 17c1.4 0 2-.9 2-1.8 0-1.3-1.2-1.6-1.2-2.8 0-1 .8-1.6 1.8-1.6h2.1c2.2 0 3.8-1.6 3.8-3.8 0-3.9-3.8-7-8.5-7z"/><circle cx="7.8" cy="11.5" r="1"/><circle cx="10" cy="7.6" r="1"/><circle cx="14.5" cy="7.6" r="1"/>',
   book: '<path d="M5 17V6.5a3 3 0 0 1 3-3h10.5V17"/><path d="M5 17.5a3 3 0 0 0 3 3h10.5V14H8a3 3 0 0 0-3 3.5z"/>',
   shirt: '<path d="M8.5 3.5 4 6l1.8 4.2L8 9.4v11.1h8V9.4l2.2.8L20 6l-4.5-2.5a3.5 3.5 0 0 1-7 0z"/>',
@@ -1068,7 +1070,11 @@ function themeSection() {
   const p = window.GLTheme ? GLTheme.pref() : 'auto';
   const opts = THEMES.map(([k, n, d]) => `<button class="themeopt ${p === k ? 'on' : ''}" role="radio" aria-checked="${p === k}" data-act="theme" data-v="${k}">
       <span class="swatches sw-${k}"><i></i><i></i><i></i></span><span class="themetext"><b>${n}</b><small>${d}</small></span>${icon('check', 'themecheck')}</button>`).join('');
-  return `<h2>Design</h2><div class="themes" role="radiogroup" aria-label="Design">${opts}</div>`;
+  const m = window.GLTheme ? GLTheme.modePref() : 'auto';
+  const modes = [['light', 'Hell', 'sun'], ['auto', 'Automatisch', ''], ['dark', 'Dunkel', 'moon']].map(([k, n, ic]) =>
+    `<label><input type="radio" name="mode" value="${k}" data-act="mode" data-v="${k}" ${m === k ? 'checked' : ''}><span>${ic ? icon(ic) : ''}${n}</span></label>`).join('');
+  return `<h2>Design</h2><div class="themes" role="radiogroup" aria-label="Design">${opts}</div>
+    <div class="seg modeseg" role="radiogroup" aria-label="Hell oder dunkel">${modes}</div>`;
 }
 
 function wishMeta(w, extra = []) {
@@ -1627,6 +1633,7 @@ const forms = {
 const acts = {
   sync: () => sync(),
   theme: async el => { if (window.GLTheme) GLTheme.set(el.dataset.v); render(); },
+  mode: async el => { if (window.GLTheme) GLTheme.setMode(el.dataset.v); render(); },
   badgelater: async () => { S.badgeAsked = 1; saveState(); render(); },
   pushlater: async () => { S.pushAsked = 1; saveState(); render(); },
   pushnotice: async () => { S.pushNotice = 1; saveState(); render(); },
@@ -1918,3 +1925,6 @@ function takeShare() {
   if (S.session) await afterLogin();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
+
+// Gerät wechselt Hell/Dunkel bei offener App (theme.js meldet sich)
+window.GLThemeChanged = () => render();

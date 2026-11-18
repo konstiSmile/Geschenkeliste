@@ -1,8 +1,9 @@
-# Geschenkeliste – Übergabe (Stand 17. November 2026, Version 1.10)
+# Geschenkeliste – Übergabe (Stand 18. November 2026, Version 1.10.1)
 
 Maßgeblich für die Geschenkeliste (Abschnitt D der großen Übergabe verweist hierher). **Reihenfolge der nächsten Schritte: siehe `claude/geschenkeliste-fahrplan.md`. Pakete 1, 2, 3, 3b, 4, 5 und 5b sind gebaut. Nächstes Paket: Paket 6 – 1.11 Gemeinsam schenken** (vorher klären: wer kauft und streckt vor, was bei zu wenig Beteiligung).
 
 ## Stand
+- **Version 1.10.1 gepusht** (18.11.): Konto → Design hat zusätzlich den Schalter **Hell | Automatisch | Dunkel** (`.seg.modeseg`, Act `mode`). theme.js setzt jetzt immer `data-mode="light|dark"` am `<html>` (localStorage `geschenkeliste-mode` = `light|dark`, fehlt = wie das Gerät, hört auf `matchMedia`-Änderungen und ruft `window.GLThemeChanged` → `render()`). Dunkle Variablen in app.css hängen an `[data-mode="dark"]` statt an der Media-Query. Beide `meta theme-color` und die Statusleiste folgen dem tatsächlichen Modus. Cache `geschenkeliste-v14`, `?v=14`. Tests: 172 Playwright-Prüfungen (Bild `32-konto-dunkel`).
 - **Version 1.10 gepusht** (17.11.): Commit `bffb352`, Cache `geschenkeliste-v13`, `?v=13`. Inhalt: Pop-Design (siehe Abschnitt unten). Keine schema.sql, keine Edge Function geändert.
 - **Offen für den Nutzer (1.10):** Anleitung Abschnitt „Neu mit Version 1.10: Pop-Design“ A–D (neu laden, Konto → Design, Dunkelmodus, iPhone-Statusleiste in der Home-Bildschirm-App prüfen).
 - **Version 1.9 gepusht** (17.11.): Repo `konstiSmile/Geschenkeliste`, Commit `c8c6896`, Cache `geschenkeliste-v12`, `?v=12`. Inhalt: Benachrichtigungen (siehe unten). Seite: `https://konstismile.github.io/Geschenkeliste/` (Claude kann github.io aus der Sitzung nicht abrufen → Nutzer prüft selbst).
