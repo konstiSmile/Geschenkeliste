@@ -1,4 +1,4 @@
-# Geschenkeliste – Fahrplan (Stand 20.11.2026, Version 1.18)
+# Geschenkeliste – Fahrplan (Stand 20.11.2026, Version 1.19)
 
 Ein Paket = ein Chat. Jedes Paket ist für sich nutzbar. „schema.sql“ heißt: nach dem Push einmal im Supabase SQL-Editor ausführen. Details zu gebauten Paketen: `docs/technik.md`.
 
@@ -20,21 +20,22 @@ Ein Paket = ein Chat. Jedes Paket ist für sich nutzbar. „schema.sql“ heißt
 | 1.16 | 9b | Geburtstagsgruppe für jemanden (auch ohne App), gemeinsame Ideen, Archiv | `0f60ca4` |
 | 1.17 | Einfach bedienen | Klarere Wörter, Plus-Menü, Gruppenfenster, Mehr Angaben, Erste Schritte, Hilfe, Rückgängig, Wischen; 1.17.1 Freund entfernen | `5ba8114` |
 | 1.18 | Feinschliff | Benutzername unter Konto, Größe, Idee wird „Ich schenke das“, gesehen im Konto, Steckbrief für Personen ohne App | `58f96f7` |
+| 1.19 | 13 | Öffnen für Freunde: Sperrliste, Konten-Limit, Benutzername ändern, Ablehnen mit Pause und Rückgängig | `a2df016` |
 
 Gestrichen: Pakete 7 und 8 (Chats), Absprachen laufen über WhatsApp und Co.
 
 ## Offen für den Nutzer
-- schema.sql ausführen, App neu laden, Version 1.18 prüfen, Neues ausprobieren
+- schema.sql ausführen, App neu laden, Version 1.19 prüfen, in Supabase das Limit für anonyme Anmeldungen auf 10 setzen
 - Familie einladen, Wichteln eintragen und auslosen (Anfang Dezember)
 
 ## Als Nächstes (vom Nutzer sortiert, 20.11.)
-1. **Paket 13 – Öffnen für Freunde** (M): bald, weil Freunde die App schon nutzen. Datenschutz-Seite, Captcha, verbotene Benutzernamen, Benutzername ändern, Spam-Schutz für Freundschaftsanfragen; optional echte Mail (dann eigene Domain + SMTP); klären: Admin-Reset für Fremde.
-2. Danach: gemeinsam schenken ohne Wunsch bzw. Idee → gemeinsames Geschenk; Anlass beim Anlegen einer Idee wählen (Ideen pro Anlass); Push bei neuen Ideen in Geburtstagsgruppen.
+1. Gemeinsam schenken ohne Wunsch bzw. Idee → gemeinsames Geschenk; Anlass beim Anlegen einer Idee wählen (Ideen pro Anlass); Push bei neuen Ideen in Geburtstagsgruppen.
 
 Für jedes Paket: zurückhaltend, nichts Neues auf den Hauptseiten ohne Not, nicht überfordern.
 Aus „Einfach bedienen“ nicht gewählt (bei Bedarf später): größere Schrift, Schalter „Große Schrift“, dunklere Hinweistexte, größere Knöpfe, Einfach-Modus, Wischen auf Zeilen.
 
 ## Für später gemerkt
+- **Datenschutz-Seite** (DSGVO, sobald Fremde die App nutzen eigentlich nötig; am 20.11. vom Nutzer abgewählt), Blockieren-Knopf bei Anfragen.
 - **Paket 10 – Farbthemen** (S): braucht es laut Nutzer eigentlich nicht, aber nicht verworfen.
 - **Paket 14 – Fotos am Wunsch** (M): Supabase Storage. Einschätzung 20.11.: Gratis-Plan hat 1 GB Speicher und 5 GB Datenverkehr (plus 5 GB aus dem Zwischenspeicher) im Monat. Fotos vor dem Hochladen auf ca. 150 KB verkleinern, kleine Vorschaubilder auf dem Gerät behalten, dann reicht es für Familie und Freunde. Aufwand vor allem bei den Zugriffsregeln (Foto nur für die, die den Wunsch sehen).
 - **Schriften als woff2:** ging am 20.11. nicht (Paket brotli fehlt, Installationen im Konto aus). Spart nur ca. 15 KB.

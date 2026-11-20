@@ -1,27 +1,25 @@
-# Geschenkeliste – Übergabe (Stand 20.11.2026, Version 1.18)
+# Geschenkeliste – Übergabe (Stand 20.11.2026, Version 1.19)
 
-**Projekt-Übergabe:** Doc „Übergabe 5 – Geschenkeliste“ im Projekt (Thema 5, Chats heißen „5.<Nr> …“, letzter Chat 5.25). Startsatz: „Thema 5 (Geschenkeliste), Chat 5.<Nr>. Weiter laut ‚Übergabe 5 – Geschenkeliste‘. Nächster Schritt: …“
+**Projekt-Übergabe:** Doc „Übergabe 5 – Geschenkeliste“ im Projekt (Thema 5, Chats heißen „5.<Nr> …“, letzter Chat 5.26). Startsatz: „Thema 5 (Geschenkeliste), Chat 5.<Nr>. Weiter laut ‚Übergabe 5 – Geschenkeliste‘. Nächster Schritt: …“
 
 ## ZUERST (Wunsch des Nutzers)
 Bevor etwas besprochen oder gebaut wird: To-do-Liste aus „Offen beim Nutzer“ als kurze nummerierte Liste zum Abhaken geben, warten, kurz nachfragen, ob etwas aufgefallen ist. Repo erst danach klonen.
 
 ## Stand
-- Version **1.18 Feinschliff** gepusht (Commit `58f96f7`), Cache `geschenkeliste-v28`, `?v=28` (Symbole `?v=24`). **schema.sql geändert.**
-- Tests: 523 RLS, 388 Playwright, 14 Edge Function, 9 Service Worker, alle grün.
+- Version **1.19 Öffnen für Freunde** gepusht (Commit `a2df016`), Cache `geschenkeliste-v29`, `?v=29` (Symbole `?v=24`). **schema.sql geändert**, Edge Function unverändert.
+- Tests: 552 RLS, 394 Playwright, 14 Edge Function, 9 Service Worker, alle grün.
 - App: https://konstismile.github.io/Geschenkeliste/ (Claude kann github.io nicht abrufen).
 
-## Offen beim Nutzer (To-do-Liste)
-1. schema.sql im Supabase SQL-Editor ausführen (Rohlink: https://raw.githubusercontent.com/konstiSmile/Geschenkeliste/main/supabase/schema.sql).
-2. App neu laden, unter Konto → Weitere Einstellungen ganz unten: Version 1.18.
-3. Unter Konto die Karte „So finden dich Freunde“ ansehen.
-4. Bei einem Wunsch unter „Mehr Angaben“ eine Größe eintragen.
-5. Eine Idee für jemanden mit App öffnen, „Passt zu einem Wunsch“ antippen und einen Wunsch wählen.
-6. Bei einer Person ohne App den Steckbrief ausfüllen.
-7. Gesehen auf zwei Geräten: auf dem einen neue Wünsche ansehen, auf dem anderen sind sie danach nicht mehr neu.
-8. In der Anleitung (Claude Doc) den Vorschlag „Neu mit Version 1.18“ annehmen (dazu die offenen 1.16/1.17, falls noch nicht).
+## Offen beim Nutzer
+1. schema.sql im Supabase SQL Editor ausführen: https://raw.githubusercontent.com/konstiSmile/Geschenkeliste/main/supabase/schema.sql
+2. Supabase → Authentication → Rate Limits: anonyme Anmeldungen pro Stunde von 30 auf 10.
+3. App neu laden, Konto → Weitere Einstellungen ganz unten: Version 1.19.
+4. Konto → Weitere Einstellungen → Anmeldung: Benutzername ändern ausprobieren (danach 30 Tage gesperrt, also bewusst wählen).
+5. Eine Freundschaftsanfrage ablehnen und „Rückgängig“ antippen.
+6. Anleitung (Claude Doc): Vorschlag „Neu mit Version 1.19“ annehmen.
 
 ## Nächster Schritt
-Paket 13 „Öffnen für Freunde“ (siehe `docs/fahrplan.md`, Abschnitt „Als Nächstes“). Vorher mit dem Nutzer klären: Captcha ja/nein, Admin-Reset für Fremde, echte Mail ja/nein.
+Gemeinsam schenken ohne Wunsch bzw. Idee → gemeinsames Geschenk; Anlass beim Anlegen einer Idee wählen; Push bei neuen Ideen in Geburtstagsgruppen (siehe `docs/fahrplan.md`).
 
 ## So arbeiten (sparsam)
 - Technik in `docs/technik.md` (nur passende Abschnitte lesen, `grep -n "^## "`), Planung in `docs/fahrplan.md`, Design in `docs/design-pop.md`.
