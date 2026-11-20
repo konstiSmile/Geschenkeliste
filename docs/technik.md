@@ -19,7 +19,8 @@ Neue Pakete bekommen hier einen eigenen Abschnitt (knapp: Datenbank, App, Tests,
 3. Nur die **neuen oder geänderten** Screenshots ansehen.
 4. Commit mit Co-Author- und Session-Zeile, pushen.
 5. Unterlagen: `docs/uebergabe.md` neu schreiben (kurz halten), neuer Abschnitt hier in `technik.md`, im `docs/fahrplan.md` abhaken. Im Projekt das Doc `claude/Übergabe 5 – Geschenkeliste.md` ersetzen (Projekt hat nur diese eine Datei).
-6. Anleitung (Claude Doc): pro Version ein **kurzer** Abschnitt „Neu mit Version x“: höchstens 3–5 Zeilen „Was du tun musst“ (schema.sql ausführen? neu laden? Edge Function neu einfügen?) plus ein Satz, was neu ist. Keine Fehlertabellen; der Nutzer fragt nach, wenn etwas klemmt.
+6. **Wunsch des Nutzers (20.11.):** Wann immer er schema.sql ausführen soll, im Chat gleich den Rohlink mitgeben: https://raw.githubusercontent.com/konstiSmile/Geschenkeliste/main/supabase/schema.sql
+7. Anleitung (Claude Doc): pro Version ein **kurzer** Abschnitt „Neu mit Version x“: höchstens 3–5 Zeilen „Was du tun musst“ (schema.sql ausführen? neu laden? Edge Function neu einfügen?) plus ein Satz, was neu ist. Keine Fehlertabellen; der Nutzer fragt nach, wenn etwas klemmt.
 
 Ändert sich die Edge Function, muss der Nutzer sie im Dashboard neu einfügen und deployen.
 

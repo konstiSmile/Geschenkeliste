@@ -11,7 +11,7 @@ Bevor etwas besprochen oder gebaut wird: To-do-Liste aus „Offen beim Nutzer“
 - App: https://konstismile.github.io/Geschenkeliste/ (Claude kann github.io nicht abrufen).
 
 ## Offen beim Nutzer (To-do-Liste)
-1. Aktuelle `supabase/schema.sql` im Supabase SQL-Editor komplett ausführen.
+1. Aktuelle `supabase/schema.sql` im Supabase SQL-Editor komplett ausführen: https://raw.githubusercontent.com/konstiSmile/Geschenkeliste/main/supabase/schema.sql (Rohlink immer mitgeben, Wunsch des Nutzers).
 2. App neu laden, unter Konto prüfen: Version 1.15.
 3. Eine Gruppe öffnen → Verwalten → Anlass prüfen (bestehende Gruppen sind Weihnachten).
 4. Unter Konto den eigenen Geburtstag eintragen.
