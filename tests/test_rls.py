@@ -1682,5 +1682,107 @@ check('Gesehen: nur Objekt', not ok)
 ok, _ = as_user(None, "select * from public.seen_state", role='anon')
 check('Gesehen: ohne Anmeldung nichts', not ok)
 
+
+# ---------- Öffnen für Freunde (1.19) ----------
+OA, OB, OC = (str(uuid.uuid4()) for _ in range(3))
+for u in (OA, OB, OC):
+    run(f"insert into auth.users (id, is_anonymous) values ('{u}', true);")
+ok, _ = rpc(OA, "public.secure_account('oskar', 'geheim123')")
+check('Offen: normaler Name geht', ok)
+for bad in ('admin', 'Support2', 'geschenkeliste.team', 'f.i.c.k.er', 'superporno'):
+    ok, r = rpc(OB, f"public.secure_account('{bad}', 'geheim123')")
+    check(f'Offen: gesperrter Name {bad}', not ok and 'gesperrt' in str(r))
+ok, _ = rpc(OB, "public.secure_account('essex', 'geheim123')")
+check('Offen: harmloser Name mit Wortteil geht', ok)
+
+
+def with_ip(uid, sql, ip):
+    pre = (f"begin; set local role authenticated; set local request.jwt.claim.sub = '{uid}';"
+           f" set local request.headers = '{{\"x-forwarded-for\": \"{ip}, 10.0.0.1\"}}';\n")
+    code, out, err = run(pre + f"select {sql};\ncommit;")
+    return code == 0, (err or out)
+
+
+run('truncate public.signup_log')
+ips = [str(uuid.uuid4()) for _ in range(6)]
+for u in ips:
+    run(f"insert into auth.users (id, is_anonymous) values ('{u}', true);")
+res = [with_ip(u, f"public.secure_account('ip{i}x', 'geheim123')", '203.0.113.7')[0] for i, u in enumerate(ips)]
+check('Offen: 5 Konten pro Anschluss und Stunde', res == [True] * 5 + [False])
+ok, r = with_ip(ips[5], "public.secure_account('ip5x', 'geheim123')", '203.0.113.8')
+check('Offen: anderer Anschluss geht', ok)
+_, out, _ = run("select count(*) from public.signup_log where ip_hash like '203%'")
+check('Offen: IP nur als Hash', out == '0')
+
+# Benutzername ändern
+ok, r = rpc(OA, "public.change_username('Oskar.neu')")
+_, out, _ = run(f"select username || ' ' || (name_changed_at is not null) from public.accounts where user_id = '{OA}'")
+_, mail, _ = run(f"select email from auth.users where id = '{OA}'")
+_, idm, _ = run(f"select identity_data->>'email' from auth.identities where user_id = '{OA}'")
+check('Name ändern: klappt', ok and r == 'oskar.neu' and out == 'oskar.neu true'
+      and mail == idm == 'oskar.neu@nutzer.geschenkeliste.invalid')
+ok, r = rpc(OA, "public.change_username('oskar3')")
+check('Name ändern: höchstens alle 30 Tage', not ok and 'erst wieder ab' in str(r))
+ok, r = rpc(OA, "public.change_username('oskar.neu')")
+check('Name ändern: gleicher Name ist kein Fehler', ok)
+ok, r = rpc(OC, "public.secure_account('oskar', 'geheim123')")
+check('Name ändern: alter Name 30 Tage reserviert', not ok and 'vergeben' in str(r))
+run(f"update public.accounts set name_changed_at = now() - interval '31 days' where user_id = '{OA}'")
+ok, r = rpc(OA, "public.change_username('admin')")
+check('Name ändern: Sperrliste gilt', not ok and 'gesperrt' in str(r))
+ok, r = rpc(OA, "public.change_username('essex')")
+check('Name ändern: vergebener Name geht nicht', not ok and 'vergeben' in str(r))
+ok, r = rpc(OA, "public.change_username('a')")
+check('Name ändern: ungültig', not ok and 'ungültig' in str(r))
+ok, r = rpc(OA, "public.change_username('oskar')")
+check('Name ändern: eigenen alten Namen zurück', ok and r == 'oskar')
+ok, r = rpc(OC, "public.change_username('oskar9')")
+check('Name ändern: nur gesicherte Konten', not ok)
+ok, _ = rpc(None, "public.change_username('x123')", role='anon')
+check('Name ändern: ohne Anmeldung nicht', not ok)
+ok, r = as_user(OA, 'select * from public.username_holds')
+ok2, r2 = as_user(OA, 'select * from public.friend_declines')
+check('Offen: Tabellen nicht lesbar', not ok and not ok2)
+ok, _ = rpc(OA, "public.username_blocked('x')")
+check('Offen: Hilfen nicht aufrufbar', not ok)
+
+# Ablehnungen: nach 3 Mal 30 Tage Pause
+run(f"insert into public.profiles (id, name) values ('{OB}', 'Ella'), ('{OA}', 'Oskar') on conflict do nothing")
+
+
+def req_in(u):
+    return [x['id'] for x in reqs(u)['in']]
+
+
+def ask_and_decline():
+    rpc(OB, "public.friend_request('oskar')")
+    ids = req_in(OA)
+    if ids:
+        rpc(OA, f"public.friend_answer('{ids[0]}', false)")
+    for x in reqs(OB)['out']:
+        rpc(OB, f"public.friend_withdraw('{x['id']}')")
+    return len(ids)
+
+
+got = [ask_and_decline() for _ in range(3)]
+check('Ablehnen: 3 Anfragen kommen an', got == [1, 1, 1])
+run('truncate public.push_outbox')
+ok, r = rpc(OB, "public.friend_request('oskar')")
+check('Ablehnen: danach still „wartet“', ok and r == 'sent' and req_in(OA) == [] and len(reqs(OB)['out']) == 1)
+_, out, _ = run(f"select count(*) from public.push_outbox where user_id = '{OA}'")
+check('Ablehnen: in der Pause keine Benachrichtigung', out == '0')
+for x in reqs(OB)['out']:
+    rpc(OB, f"public.friend_withdraw('{x['id']}')")
+run(f"update public.friend_declines set last_at = now() - interval '31 days'")
+rpc(OB, "public.friend_request('oskar')")
+check('Ablehnen: nach 30 Tagen wieder möglich', len(req_in(OA)) == 1)
+rpc(OA, f"public.friend_answer('{req_in(OA)[0]}', false)")
+_, out, _ = run(f"select n from public.friend_declines where from_user = '{OB}'")
+check('Ablehnen: Zählung beginnt neu', out == '1')
+ok, r = rpc(OA, "public.friend_request('essex')")
+check('Ablehnen: wer abgelehnt hat und selbst fragt, ist sofort befreundet', ok and r == 'accepted')
+_, out, _ = run(f"select count(*) from public.friend_declines where from_user = '{OB}'")
+check('Ablehnen: Zählung beim Befreunden gelöscht', out == '0')
+
 print(f'\n{passed} ok, ' + ('alle Tests grün' if not fails else f'{fails} Fehler'))
 sys.exit(1 if fails else 0)

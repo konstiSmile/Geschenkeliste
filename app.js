@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.18';
+const VERSION = '1.19';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -198,6 +198,9 @@ function errText(j, status) {
   if (status === 429 || /rate limit/i.test(m + code)) return 'Zu viele Versuche. Bitte ein paar Minuten warten.';
   if (code === 'invalid_credentials' || /invalid login credentials/i.test(m)) return 'Benutzername oder Passwort falsch.';
   if (/Benutzername vergeben|accounts_username_key/.test(m)) return 'Diesen Benutzernamen gibt es schon.';
+  if (/Benutzername gesperrt/.test(m)) return 'Diesen Benutzernamen kannst du nicht nehmen. Bitte wähle einen anderen.';
+  if (/Benutzername erst wieder ab/.test(m)) return 'Den Benutzernamen kannst du erst ab ' + m.replace(/.*ab /, '') + ' wieder ändern.';
+  if (/Zu viele neue Konten/.test(m)) return 'Von hier aus wurden gerade viele Konten angelegt. Versuch es in einer Stunde nochmal.';
   if (/Benutzername ungültig/.test(m)) return 'Benutzername: 3 bis 24 Zeichen, nur Kleinbuchstaben, Ziffern, Punkt, Bindestrich und Unterstrich.';
   if (/Passwort zu kurz/.test(m)) return 'Das Passwort braucht mindestens 8 Zeichen.';
   if (/Passwort zu lang/.test(m)) return 'Das Passwort ist zu lang.';
@@ -363,7 +366,8 @@ async function sync(quiet) {
       sb('/rest/v1/wish_groups?select=wish_id,group_id'),
       sb('/rest/v1/reservations?select=wish_id,user_id,status'),
       // ab 1.5; vor dem Ausführen der neuen schema.sql fehlen sie, die App läuft trotzdem
-      sb('/rest/v1/accounts?select=username,reset_at,reset_notice').catch(() => null),
+      sb('/rest/v1/accounts?select=username,reset_at,reset_notice,name_changed_at')
+        .catch(() => sb('/rest/v1/accounts?select=username,reset_at,reset_notice')).catch(() => null),   // name_changed_at ab 1.19
       sb('/rest/v1/rpc/is_app_admin', { method: 'POST', body: {} }).catch(() => false),
       // Wichteln ab 1.6, ebenfalls tolerant
       sb('/rest/v1/wichtel_draws?select=group_id,drawn_at,participants').catch(() => []),
@@ -3121,6 +3125,21 @@ function secureCard() {
   </div>`;
 }
 
+// Benutzername ändern (1.19): höchstens alle 30 Tage
+function userCard(acc) {
+  const next = acc.name_changed_at ? new Date(new Date(acc.name_changed_at).getTime() + 30 * 864e5) : null;
+  const wait = next && next > new Date();
+  return `<div class="card stack" id="usercard">
+    <div class="cardhead">${icon('user')}<b>Benutzername</b></div>
+    ${ui.editUser && !wait ? `<form data-form="username" class="stack">
+      <input name="username" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="24" value="${esc(acc.username)}" required>
+      <p class="small muted">Danach meldest du dich mit dem neuen Namen an. Dein Freundes-Link bleibt gleich. Ändern geht nur einmal in 30 Tagen.</p>
+      <div class="inline"><button class="primary" type="submit">Speichern</button><button class="ghost" type="button" data-act="edituserno">Abbrechen</button></div>
+    </form>` : `<p class="findrow"><b class="uname">${esc(acc.username)}</b>${wait ? '' : `<button class="secondary sm" data-act="edituser">Ändern</button>`}</p>
+      ${wait ? `<p class="small muted">Wieder änderbar ab ${esc(fmtDay(next))}.</p>` : ''}`}
+  </div>`;
+}
+
 function codeCard() {
   return `<div class="card stack">
     <div class="cardhead">${icon('key')}<b>Wiederherstellungscode</b></div>
@@ -3181,7 +3200,7 @@ function viewAccount() {
     ${fold('k-more', 'more', 't1', 'Weitere Einstellungen', 'Aussehen, Anmeldung, Benachrichtigungen, Abmelden', `<div class="foldin">
     ${bdaySwitch()}
     ${themeSection()}
-    ${acc ? `<h2>Anmeldung</h2>${codeCard()}` : ''}
+    ${acc ? `<h2>Anmeldung</h2>${userCard(acc)}${codeCard()}` : ''}
     ${adminSection()}
     <div id="install" data-ctx="konto">${installCard('konto')}</div>
     ${notifySection()}
@@ -3273,7 +3292,7 @@ const HELP = [
   ['Wie komme ich in eine Gruppe?', 'Lass dir von jemandem aus der Gruppe den Einladungslink schicken und öffne ihn. Oder tippe unter Gruppen oben auf das Plus und dann auf „Einladungscode eingeben“. Eine eigene Gruppe legst du über das Plus mit „Neue Gruppe“ an und lädst dann mit „Einladen“ andere ein.'],
   ['Wer sieht meine Wünsche?', 'Alle aus deinen Gruppen und deine Freunde. Bei jedem Wunsch kannst du unter „Mehr Angaben“ bei „Wer darf das sehen?“ einstellen, wer ihn sieht.'],
   ['Sieht jemand, was ich ihm schenke?', 'Nein. Wenn du bei einem Wunsch auf „Ich schenke das“ tippst, sehen das nur die anderen, damit nichts doppelt gekauft wird. Die beschenkte Person sieht es nie.'],
-  ['Was mache ich, wenn ich mein Passwort vergessen habe?', 'Tippe bei der Anmeldung auf „Passwort vergessen“. Mit deinem Benutzernamen und deinem Wiederherstellungscode legst du ein neues Passwort fest. Hast du noch keinen Benutzernamen, sichere dein Konto unter Konto, solange du angemeldet bist.'],
+  ['Was mache ich, wenn ich mein Passwort vergessen habe?', 'Tippe bei der Anmeldung auf „Passwort vergessen“. Mit deinem Benutzernamen und deinem Wiederherstellungscode legst du ein neues Passwort fest. Ist auch der Code weg, melde dich bei der Person, die die App betreut. Sie kann dir einen Rücksetz-Code geben. Hast du noch keinen Benutzernamen, sichere dein Konto unter Konto, solange du angemeldet bist.'],
   ['Wie schenken wir etwas zusammen?', 'Öffne den Wunsch einer Person und tippe auf „Gemeinsam“. Dann wählst du, wen du fragst. Wer mitmacht, gibt einen Teil dazu, und einer kauft.'],
 ];
 function viewHelp() {
@@ -3504,6 +3523,15 @@ const forms = {
     delete S.pendingName;
     saveState();
     await afterLogin();
+  },
+  async username(f) {
+    const username = normUser(f.username.value);
+    checkUser(username);
+    if (D.account && username === D.account.username) { ui.editUser = false; render(); return; }
+    await sb('/rest/v1/rpc/change_username', { method: 'POST', body: { p_username: username } });
+    ui.editUser = false;
+    await sync(true);
+    toast('Benutzername geändert. Melde dich ab jetzt damit an.');
   },
   async secure(f) {
     const username = normUser(f.username.value);
@@ -3786,13 +3814,15 @@ const forms = {
   }
 };
 
-/* Löschen mit Rückgängig (1.17): Wunsch oder Idee verschwindet sofort, gelöscht wird nach 8 Sekunden */
+/* Löschen mit Rückgängig (1.17): Wunsch oder Idee verschwindet sofort, gelöscht wird nach 8 Sekunden.
+   Seit 1.19 genauso das Ablehnen einer Freundschaftsanfrage (kind 'f'). */
 const UNDO_MS = 8000;
 const undoMs = () => window.GL_UNDO_MS || UNDO_MS;   // Tests setzen das kürzer
 let pendingDel = null;   // { kind: 'w' | 'i', id, timer }
 function hidePendingDel() {
   if (!pendingDel) return;
   if (pendingDel.kind === 'w') D.wishes = D.wishes.filter(w => w.id !== pendingDel.id);
+  else if (pendingDel.kind === 'f') D.fq = { ...D.fq, in: (D.fq.in || []).filter(r => r.id !== pendingDel.id) };
   else D.ideas = (D.ideas || []).filter(i => i.id !== pendingDel.id);
 }
 async function commitDel(keepalive) {
@@ -3801,7 +3831,8 @@ async function commitDel(keepalive) {
   pendingDel = null;
   clearTimeout(p.timer);
   try {
-    await sb(`/rest/v1/${p.kind === 'w' ? 'wishes' : 'ideas'}?id=eq.${p.id}`, { method: 'DELETE', keepalive });
+    if (p.kind === 'f') await sb('/rest/v1/rpc/friend_answer', { method: 'POST', keepalive, body: { p_id: p.id, p_accept: false } });
+    else await sb(`/rest/v1/${p.kind === 'w' ? 'wishes' : 'ideas'}?id=eq.${p.id}`, { method: 'DELETE', keepalive });
   } catch (e) {
     if (!keepalive) toast(e.message);
   }
@@ -3873,11 +3904,10 @@ const acts = {
     await sync(true);
     toast('Ihr seid jetzt befreundet.');
   },
-  freqno: async el => {
-    await sb('/rest/v1/rpc/friend_answer', { method: 'POST', body: { p_id: el.dataset.id, p_accept: false } });
-    await sync(true);
-    toast('Abgelehnt. Die andere Person erfährt das nicht.');
-  },
+  // 1.19: Ablehnen mit Rückgängig, abgeschickt wird erst nach 8 Sekunden
+  freqno: async el => startDel('f', el.dataset.id, 'Abgelehnt. Die andere Person erfährt das nicht.', location.hash || '#/freunde'),
+  edituser: async () => { ui.editUser = true; render(); const i = $('#usercard input'); if (i) i.focus(); },
+  edituserno: async () => { ui.editUser = false; render(); },
   freqwithdraw: async el => {
     await sb('/rest/v1/rpc/friend_withdraw', { method: 'POST', body: { p_id: el.dataset.id } });
     await sync(true);
@@ -4060,7 +4090,7 @@ const acts = {
     pendingDel = null;
     $('#toast').classList.remove('show', 'withundo');
     await sync(true);
-    toast(p.kind === 'w' ? 'Der Wunsch ist wieder da.' : 'Die Idee ist wieder da.');
+    toast(p.kind === 'w' ? 'Der Wunsch ist wieder da.' : p.kind === 'f' ? 'Die Anfrage ist wieder da.' : 'Die Idee ist wieder da.');
   },
   askdelip: async el => { ui.confirmDelIp = el.dataset.id; render(); },
   delip: async el => {

@@ -2224,6 +2224,63 @@ with sync_playwright() as pw:
     for x in (hn, jo, h2):
         x.context.close()
 
+    # ---------- 1.19 Öffnen für Freunde ----------
+    rn = newpage(browser, errs)
+    start_anon(rn, 'Rena')
+    rn.wait_for_selector('h1:has-text("Hallo Rena")')
+    uid_rn = uid_of(rn)
+    tm = newpage(browser, errs)
+    start_anon(tm, 'Timo')
+    tm.wait_for_selector('h1:has-text("Hallo Timo")')
+    uid_tm = uid_of(tm)
+    q(f"insert into public.accounts (user_id, username) values ('{uid_rn}', 'rena'), ('{uid_tm}', 'timo')")
+    rn.goto(BASE + '#/konto')
+    rn.reload()
+    rn.wait_for_selector('#usercard')
+    check('1.19: Benutzername unter Anmeldung', 'rena' in rn.inner_text('#usercard'))
+    rn.click('#usercard button[data-act=edituser]')
+    rn.fill('#usercard input[name=username]', 'admin')
+    rn.click('#usercard button[type=submit]')
+    toast(rn, 'kannst du nicht nehmen')
+    rn.fill('#usercard input[name=username]', 'timo')
+    rn.click('#usercard button[type=submit]')
+    toast(rn, 'gibt es schon')
+    shot(rn, '83-benutzername-aendern')
+    rn.fill('#usercard input[name=username]', 'Rena.B')
+    rn.click('#usercard button[type=submit]')
+    toast(rn, 'Benutzername geändert')
+    rn.wait_for_selector('#usercard:has-text("Wieder änderbar ab")')
+    check('1.19: Benutzername geändert', q(f"select username from public.accounts where user_id = '{uid_rn}'") == 'rena.b'
+          and 'rena.b' in rn.inner_text('.findme .uname') and rn.locator('#usercard button[data-act=edituser]').count() == 0)
+    # Ablehnen mit Rückgängig
+    q(f"insert into public.friend_requests (from_user, to_user) values ('{uid_tm}', '{uid_rn}')")
+    rn.goto(BASE + '#/freunde')
+    rn.reload()
+    rn.wait_for_selector('button[data-act=freqno]')
+    rn.evaluate('window.GL_UNDO_MS = 8000')
+    rn.click('button[data-act=freqno]')
+    toast(rn, 'Abgelehnt')
+    check('1.19: Ablehnen wartet noch', rn.locator('button[data-act=freqno]').count() == 0
+          and q(f"select count(*) from public.friend_requests where to_user = '{uid_rn}' and declined_at is null") == '1')
+    shot(rn, '84-ablehnen-rueckgaengig')
+    rn.click('#toast button[data-act=undo]')
+    toast(rn, 'Die Anfrage ist wieder da')
+    rn.wait_for_selector('button[data-act=freqno]')
+    rn.evaluate('window.GL_UNDO_MS = 300')
+    rn.click('button[data-act=freqno]')
+    rn.wait_for_timeout(1200)
+    check('1.19: nach der Frist abgelehnt', q(f"select count(*) from public.friend_requests where to_user = '{uid_rn}' and declined_at is not null") == '1'
+          and q(f"select n from public.friend_declines where to_user = '{uid_rn}'") == '1')
+    # Wer abgelehnt hat und selbst fragt, ist sofort befreundet
+    sel = openform(rn, 'friendadd')
+    rn.fill(sel + ' input', 'timo')
+    rn.click(sel + ' button[type=submit]')
+    rn.wait_for_timeout(800)
+    check('1.19: Gegenanfrage nach Ablehnen = befreundet', q(f"select count(*) from public.friendships where a = least('{uid_rn}'::uuid, '{uid_tm}'::uuid) and b = greatest('{uid_rn}'::uuid, '{uid_tm}'::uuid)") == '1')
+    check('Kein Überlauf (1.19)', overflow(rn) and overflow(tm))
+    for x in (rn, tm):
+        x.context.close()
+
     # Start aus Cache ohne Netz: Daten bleiben sichtbar
     a.context.unroute('https://qbdpzamygonpruaafcrt.supabase.co/**')
     a.context.route('https://qbdpzamygonpruaafcrt.supabase.co/**', lambda r, q: r.abort())

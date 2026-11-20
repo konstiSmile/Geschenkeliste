@@ -525,6 +525,12 @@ begin
   if u is null then raise exception 'Nicht angemeldet'; end if;
   if exists (select 1 from public.accounts where user_id = u) then raise exception 'Konto schon gesichert'; end if;
   if n !~ '^[a-z0-9][a-z0-9._-]{2,23}$' then raise exception 'Benutzername ungültig'; end if;
+  -- 1.19: Sperrliste, reservierte alte Namen, Limit pro Anschluss (Hilfen im Block „Öffnen für Freunde“)
+  if to_regprocedure('public.username_blocked(text)') is not null then
+    if public.username_blocked(n) then raise exception 'Benutzername gesperrt' using errcode = '22023'; end if;
+    if public.username_held(n, u) then raise exception 'Benutzername vergeben'; end if;
+    perform public.signup_check();
+  end if;
   if exists (select 1 from public.accounts where username = n) then raise exception 'Benutzername vergeben'; end if;
   perform public.set_password(u, p_password);
   mail := n || '@nutzer.geschenkeliste.invalid';
@@ -2353,6 +2359,9 @@ begin
   if x is null or y is null or x = y then raise exception 'Das bist du' using errcode = '22023'; end if;
   delete from public.friend_requests
     where (from_user = x and to_user = y) or (from_user = y and to_user = x);
+  if to_regclass('public.friend_declines') is not null then  -- 1.19
+    delete from public.friend_declines where (from_user = x and to_user = y) or (from_user = y and to_user = x);
+  end if;
   if public.are_friends(x, y) then return false; end if;
   if (select count(*) from public.friendships where a = x or b = x) >= 500
      or (select count(*) from public.friendships where a = y or b = y) >= 500 then
@@ -2428,9 +2437,10 @@ declare
 begin
   if p_to = me then raise exception 'Das bist du' using errcode = '22023'; end if;
   if p_to is not null and public.are_friends(me, p_to) then return 'friends'; end if;
-  -- Hat die Person mich schon gefragt (und nicht abgelehnt)? Dann gleich befreundet.
+  -- Hat die Person mich schon gefragt? Dann gleich befreundet. Seit 1.19 auch, wenn ich
+  -- abgelehnt hatte: wer selbst fragt, will es (z. B. nach versehentlichem Ablehnen).
   if p_to is not null and exists (select 1 from public.friend_requests
-       where from_user = p_to and to_user = me and declined_at is null) then
+       where from_user = p_to and to_user = me) then
     perform public.friend_make(me, p_to);
     perform public.friend_notify_ok(p_to, me);
     return 'accepted';
@@ -2442,6 +2452,13 @@ begin
   if (select count(*) from public.friend_requests where from_user = me and created_at > now() - interval '1 day') >= 20
      or (select count(*) from public.friend_requests where from_user = me) >= 100 then
     raise exception 'Zu viele Anfragen' using errcode = '54000';
+  end if;
+  -- 1.19: Nach 3 Ablehnungen 30 Tage Pause. Die Anfrage gilt still als abgelehnt, der Absender sieht „wartet“.
+  if p_to is not null and to_regclass('public.friend_declines') is not null and exists (
+       select 1 from public.friend_declines d where d.from_user = me and d.to_user = p_to
+         and d.n >= 3 and d.last_at > now() - interval '30 days') then
+    insert into public.friend_requests (from_user, to_user, to_name, declined_at) values (me, p_to, p_name, now());
+    return 'sent';
   end if;
   insert into public.friend_requests (from_user, to_user, to_name) values (me, p_to, p_name) returning id into rid;
   if p_to is not null and public.push_wants(p_to, 'friend') then
@@ -2482,8 +2499,14 @@ begin
   if not found then raise exception 'Anfrage nicht gefunden' using errcode = 'P0002'; end if;
   if p_accept then
     if public.friend_make(r.from_user, auth.uid()) then perform public.friend_notify_ok(r.from_user, auth.uid()); end if;
-  else
+  elsif r.declined_at is null then
     update public.friend_requests set declined_at = now() where id = p_id;
+    -- 1.19: Ablehnungen zählen; nach Ablauf einer Pause beginnt die Zählung neu
+    if to_regclass('public.friend_declines') is not null then
+      insert into public.friend_declines (from_user, to_user, n, last_at) values (r.from_user, r.to_user, 1, now())
+        on conflict (from_user, to_user) do update set
+          n = case when public.friend_declines.n >= 3 then 1 else public.friend_declines.n + 1 end, last_at = now();
+    end if;
   end if;
 end $$;
 
@@ -3164,3 +3187,119 @@ grant select, insert, update, delete on public.seen_state to authenticated;
 revoke execute on function public.card_valid(jsonb), public.ip_card_put(uuid, text, jsonb),
   public.idea_take(uuid, uuid) from public, anon, authenticated;
 grant execute on function public.ip_card_put(uuid, text, jsonb), public.idea_take(uuid, uuid) to authenticated;
+
+-- =====================================================================
+-- Öffnen für Freunde (Version 1.19, Paket 13)
+-- Kein Captcha und keine Mail. Neue Konten pro Anschluss begrenzt, Sperrliste für
+-- Benutzernamen, Benutzername höchstens alle 30 Tage änderbar (alter Name bleibt
+-- 30 Tage für einen reserviert), nach 3 Ablehnungen 30 Tage keine neue Anfrage.
+-- Neue anonyme Konten begrenzt zusätzlich Supabase (Authentication → Rate Limits).
+-- =====================================================================
+
+alter table public.accounts add column if not exists name_changed_at timestamptz;
+
+-- Alte Benutzernamen nach dem Ändern: 30 Tage nur für die bisherige Person
+create table if not exists public.username_holds (
+  username text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  until timestamptz not null
+);
+
+-- Gesicherte Konten pro Anschluss (IP nur als Hash, nach einem Tag gelöscht)
+create table if not exists public.signup_log (
+  ip_hash text not null,
+  at timestamptz not null default now()
+);
+create index if not exists signup_log_idx on public.signup_log(ip_hash, at);
+
+-- Ablehnungen von Freundschaftsanfragen pro Paar
+create table if not exists public.friend_declines (
+  from_user uuid not null references auth.users(id) on delete cascade,
+  to_user uuid not null references auth.users(id) on delete cascade,
+  n int not null default 1,
+  last_at timestamptz not null default now(),
+  primary key (from_user, to_user)
+);
+
+alter table public.username_holds enable row level security;
+alter table public.signup_log enable row level security;
+alter table public.friend_declines enable row level security;
+-- absichtlich keine Regeln: nur über die Funktionen
+revoke all on public.username_holds, public.signup_log, public.friend_declines from anon, authenticated;
+
+-- Gesperrte Benutzernamen: reservierte Namen am Anfang, grobe Wörter irgendwo im Namen
+-- (Punkt, Bindestrich, Unterstrich zählen nicht). Bestehende Konten bleiben unberührt.
+create or replace function public.username_blocked(p text) returns boolean
+language sql immutable set search_path = '' as $$
+  with x as (select regexp_replace(lower(coalesce(p, '')), '[._-]', '', 'g') as n)
+  select n ~ '^(admin|administrator|support|hilfe|help|team|system|root|moderator|mod|service|kontakt|info|offiziell|official|geschenkeliste|geschenke|supabase|anthropic|claude)([0-9]*)$'
+      or n ~ '^(admin|support|geschenkeliste|moderator)'
+      or n ~ '(fick|fuck|ficken|wichser|hurensohn|hure|nutte|schlampe|fotze|bitch|cunt|arschloch|missgeburt|spast|nazi|hitler|neger|nigger|kanake|schwuchtel|pimmel|penis|porno|porn)'
+  from x;
+$$;
+
+create or replace function public.username_held(p text, p_user uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.username_holds h
+    where h.username = p and h.until > now() and h.user_id is distinct from p_user);
+$$;
+
+-- Höchstens 5 gesicherte Konten pro Anschluss und Stunde. Ohne Kopfzeilen (SQL Editor, Tests) keine Grenze.
+create or replace function public.signup_check() returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  h jsonb;
+  ip text;
+  k text;
+begin
+  begin
+    h := nullif(current_setting('request.headers', true), '')::jsonb;
+  exception when others then h := null;
+  end;
+  ip := nullif(btrim(coalesce(h->>'cf-connecting-ip', split_part(coalesce(h->>'x-forwarded-for', ''), ',', 1))), '');
+  if ip is null then return; end if;
+  k := encode(extensions.digest(ip, 'sha256'), 'hex');
+  delete from public.signup_log where at < now() - interval '1 day';
+  if (select count(*) from public.signup_log where ip_hash = k and at > now() - interval '1 hour') >= 5 then
+    raise exception 'Zu viele neue Konten' using errcode = '54000';
+  end if;
+  insert into public.signup_log (ip_hash) values (k);
+end $$;
+
+-- Benutzername ändern: höchstens alle 30 Tage. Freundes-Links bleiben gültig, Anmeldung mit dem neuen Namen.
+create or replace function public.change_username(p_username text) returns text
+language plpgsql security definer set search_path = '' as $$
+declare
+  u uuid := auth.uid();
+  n text := lower(btrim(regexp_replace(coalesce(p_username, ''), '^@', '')));
+  a public.accounts;
+  mail text;
+begin
+  if u is null then raise exception 'Nicht angemeldet'; end if;
+  select * into a from public.accounts where user_id = u for update;
+  if not found then raise exception 'Konto nicht gesichert'; end if;
+  if n = a.username then return n; end if;
+  if n !~ '^[a-z0-9][a-z0-9._-]{2,23}$' then raise exception 'Benutzername ungültig' using errcode = '22023'; end if;
+  if a.name_changed_at > now() - interval '30 days' then
+    raise exception 'Benutzername erst wieder ab %', to_char((a.name_changed_at + interval '30 days') at time zone 'Europe/Berlin', 'DD.MM.YYYY')
+      using errcode = '54000';
+  end if;
+  if public.username_blocked(n) then raise exception 'Benutzername gesperrt' using errcode = '22023'; end if;
+  if public.username_held(n, u) or exists (select 1 from public.accounts where username = n) then
+    raise exception 'Benutzername vergeben';
+  end if;
+  delete from public.username_holds where username = n or until < now();
+  insert into public.username_holds (username, user_id, until) values (a.username, u, now() + interval '30 days')
+    on conflict (username) do update set user_id = excluded.user_id, until = excluded.until;
+  update public.accounts set username = n, name_changed_at = now() where user_id = u;
+  delete from public.login_attempts where username = a.username;
+  mail := n || '@nutzer.geschenkeliste.invalid';
+  update auth.users set email = mail, updated_at = now() where id = u;
+  update auth.identities set identity_data = coalesce(identity_data, '{}'::jsonb) || jsonb_build_object('email', mail), updated_at = now()
+    where user_id = u and provider = 'email';
+  return n;
+end $$;
+
+revoke execute on function public.username_blocked(text), public.username_held(text, uuid), public.signup_check(),
+  public.change_username(text) from public, anon, authenticated;
+grant execute on function public.change_username(text) to authenticated;
