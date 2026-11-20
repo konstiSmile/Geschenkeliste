@@ -48,6 +48,10 @@ alter table public.wishes drop constraint if exists wishes_category_ok;
 alter table public.wishes add constraint wishes_category_ok check (category is null or category ~ '^[a-z]{2,20}$');
 alter table public.wishes drop constraint if exists wishes_priority_ok;
 alter table public.wishes add constraint wishes_priority_ok check (priority between 1 and 3);
+-- Seit 1.18: Größe (frei, z. B. „M“ oder „42“)
+alter table public.wishes add column if not exists size text;
+alter table public.wishes drop constraint if exists wishes_size_ok;
+alter table public.wishes add constraint wishes_size_ok check (size is null or char_length(size) between 1 and 40);
 
 -- Freigabe pro Gruppe (nur genutzt, wenn all_groups = false)
 create table if not exists public.wish_groups (
@@ -1510,6 +1514,16 @@ create table if not exists public.ideas (
 create index if not exists ideas_owner_idx on public.ideas(owner);
 create index if not exists ideas_person_idx on public.ideas(person);
 
+-- Seit 1.18: Größe, Verknüpfung mit einem Wunsch der Person („Ich schenke das“),
+-- privater Steckbrief für die Person (nur der Besitzer sieht ihn)
+alter table public.ideas add column if not exists size text;
+alter table public.ideas drop constraint if exists ideas_size_ok;
+alter table public.ideas add constraint ideas_size_ok check (size is null or char_length(size) between 1 and 40);
+alter table public.ideas add column if not exists wish_id uuid references public.wishes(id) on delete set null;
+create index if not exists ideas_wish_idx on public.ideas(wish_id);
+alter table public.idea_people add column if not exists card jsonb not null default '{}';
+alter table public.idea_people add column if not exists card_stamps jsonb not null default '{}';
+
 -- ---------- Prüfungen ----------
 
 -- Verknüpfen nur mit Leuten aus den eigenen Gruppen (beim Anlegen oder Ändern der Verknüpfung),
@@ -1527,6 +1541,10 @@ begin
   if tg_op = 'INSERT' and (select count(*) from public.idea_people where owner = new.owner) >= 200 then
     raise exception 'Höchstens 200 Personen' using errcode = '54000';
   end if;
+  if not public.card_valid(new.card) or jsonb_typeof(new.card_stamps) <> 'object'
+     or octet_length(new.card_stamps::text) > 8000 then
+    raise exception 'Steckbrief ungültig' using errcode = '22023';
+  end if;
   return new;
 end $$;
 drop trigger if exists idea_people_check on public.idea_people;
@@ -1543,6 +1561,13 @@ begin
   end if;
   if tg_op = 'INSERT' and (select count(*) from public.ideas where owner = new.owner) >= 1000 then
     raise exception 'Höchstens 1000 Ideen' using errcode = '54000';
+  end if;
+  -- Wunsch nur von der verknüpften Person und nur, wenn der Besitzer ihn sieht
+  if new.wish_id is not null and (tg_op = 'INSERT' or new.wish_id is distinct from old.wish_id)
+     and not exists (select 1 from public.wishes w join public.idea_people p on p.id = new.person
+                     where w.id = new.wish_id and w.owner = p.linked_user
+                       and public.wish_visible_to(w.id, new.owner)) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
   end if;
   return new;
 end $$;
@@ -1572,6 +1597,8 @@ begin
     where owner = auth.uid() and linked_user = p_user and id <> p_person;
   if v_other is not null then
     update public.ideas set person = p_person where person = v_other;
+    update public.idea_people t set card = o.card || t.card, card_stamps = o.card_stamps || t.card_stamps
+      from public.idea_people o where t.id = p_person and o.id = v_other;
     delete from public.idea_people where id = v_other;
   end if;
   update public.idea_people set linked_user = p_user where id = p_person;
@@ -3062,3 +3089,78 @@ revoke execute on function public.group_ideas_check(), public.create_bday_group(
 grant execute on function public.create_bday_group(uuid, uuid, text, date), public.bday_link(uuid, uuid),
   public.gidea_take(uuid, text), public.bday_archive(uuid), public.bday_reopen(uuid), public.bday_delete(uuid)
   to authenticated;
+
+-- =====================================================================
+-- Feinschliff (Version 1.18)
+-- Steckbrief für Personen ohne App (an idea_people, nur der Besitzer), Idee wird
+-- „Ich schenke das“ (Wunsch reservieren und Idee verknüpfen), „gesehen“ im Konto
+-- statt nur auf dem Gerät. Spalten size, wish_id, card stehen oben bei den Tabellen.
+-- =====================================================================
+
+-- Gleiche Regeln wie beim eigenen Steckbrief: Schlüssel „abschnitt.feld“, Text bis 400
+-- Zeichen oder Liste mit höchstens 30 Texten (je bis 40), insgesamt höchstens 8 KB
+create or replace function public.card_valid(d jsonb) returns boolean
+language plpgsql immutable set search_path = public as $$
+declare e record; x jsonb;
+begin
+  if d is null or jsonb_typeof(d) <> 'object' or octet_length(d::text) > 8000 then return false; end if;
+  for e in select key, value from jsonb_each(d) loop
+    if e.key !~ '^[a-z]{2,10}\.[a-z_]{2,20}$' then return false; end if;
+    if jsonb_typeof(e.value) = 'string' then
+      if char_length(e.value #>> '{}') > 400 then return false; end if;
+    elsif jsonb_typeof(e.value) = 'array' then
+      if jsonb_array_length(e.value) > 30 then return false; end if;
+      for x in select value from jsonb_array_elements(e.value) loop
+        if jsonb_typeof(x) <> 'string' or char_length(x #>> '{}') not between 1 and 40 then return false; end if;
+      end loop;
+    else
+      return false;
+    end if;
+  end loop;
+  return true;
+end $$;
+
+-- Ein Feld im Steckbrief einer eigenen Person setzen (leer/null/[] = entfernen)
+create or replace function public.ip_card_put(p_person uuid, p_key text, p_val jsonb) returns void
+language plpgsql security invoker set search_path = public as $$
+declare v_del boolean := p_val is null or p_val = 'null'::jsonb or p_val = '""'::jsonb or p_val = '[]'::jsonb;
+begin
+  update public.idea_people set
+    card = case when v_del then card - p_key else card || jsonb_build_object(p_key, p_val) end,
+    card_stamps = case when v_del then card_stamps - p_key else card_stamps || jsonb_build_object(p_key, now()) end
+  where id = p_person and owner = auth.uid();
+  if not found then raise exception 'Nicht gefunden' using errcode = 'P0002'; end if;
+end $$;
+
+-- Idee wird „Ich schenke das“: Wunsch reservieren und die Idee damit verknüpfen.
+-- Läuft mit den Rechten der Person (Reservierungsregeln gelten wie sonst auch).
+create or replace function public.idea_take(p_idea uuid, p_wish uuid) returns void
+language plpgsql security invoker set search_path = public as $$
+begin
+  if not exists (select 1 from public.ideas where id = p_idea and owner = auth.uid()) then
+    raise exception 'Nicht gefunden' using errcode = 'P0002';
+  end if;
+  if not exists (select 1 from public.reservations where wish_id = p_wish and user_id = auth.uid()) then
+    insert into public.reservations (wish_id) values (p_wish);
+  end if;
+  update public.ideas set wish_id = p_wish where id = p_idea;
+end $$;
+
+-- „Gesehen“ pro Konto (1.8 lag nur auf dem Gerät). Inhalt wie localStorage
+-- `geschenkeliste-seen` für diese uid: {w, m, g, d, f}. Nur für einen selbst.
+create table if not exists public.seen_state (
+  user_id uuid primary key default auth.uid() references auth.users(id) on delete cascade,
+  data jsonb not null default '{}' check (jsonb_typeof(data) = 'object' and octet_length(data::text) <= 200000),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.seen_state enable row level security;
+drop policy if exists "gesehen" on public.seen_state;
+create policy "gesehen" on public.seen_state for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+revoke all on public.seen_state from anon, authenticated;
+grant select, insert, update, delete on public.seen_state to authenticated;
+
+revoke execute on function public.card_valid(jsonb), public.ip_card_put(uuid, text, jsonb),
+  public.idea_take(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.ip_card_put(uuid, text, jsonb), public.idea_take(uuid, uuid) to authenticated;

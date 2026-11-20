@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.17.1';
+const VERSION = '1.18';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -16,6 +16,7 @@ let D = emptyData();      // Daten vom Server
 let busy = false;
 let ui = {};              // flüchtiger Zustand der Ansicht (offene Formulare, Löschbestätigung)
 let sbPending = 0;         // laufende Speichervorgänge im Steckbrief
+let sbT = null;            // Steckbrief einer Person ohne App (1.18): id aus idea_people, sonst der eigene
 let fresh = null;         // neu erzeugter Wiederherstellungscode {code, username, reason}, nur im Speicher
 
 function emptyData() {
@@ -345,7 +346,7 @@ async function passwordLogin(username, password) {
 async function sync(quiet) {
   if (!S.session) return;
   try {
-    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards, pools, shares, fr, wf, fq, nick, bd, gl, glp, gi, bdo] = await Promise.all([
+    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards, pools, shares, fr, wf, fq, nick, bd, gl, glp, gi, bdo, sst] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
       // Anlass pro Gruppe ab 1.15, Geburtstagsgruppen ab 1.16
       sb('/rest/v1/groups?select=id,name,code,created_by,created_at,occ_kind,occ_name,occ_date,bday_user,bday_name,bday_person,archived_at,bday_recap&order=created_at')
@@ -354,7 +355,9 @@ async function sync(quiet) {
       sb('/rest/v1/members?select=group_id,user_id,joined_at&order=joined_at'),
       // Preis, Kategorie, Wichtigkeit, „Hab ich schon“ ab 1.7; vorher ohne diese Spalten
       // ab 1.14 mit all_friends
-      sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,all_friends,created_at,price,category,priority,have_at&order=created_at.desc')
+      // ab 1.18 mit Größe
+      sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,all_friends,created_at,price,category,priority,have_at,size&order=created_at.desc')
+        .catch(() => sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,all_friends,created_at,price,category,priority,have_at&order=created_at.desc'))
         .catch(() => sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,created_at,price,category,priority,have_at&order=created_at.desc'))
         .catch(() => sb('/rest/v1/wishes?select=id,owner,title,url,note,all_groups,created_at&order=created_at.desc')),
       sb('/rest/v1/wish_groups?select=wish_id,group_id'),
@@ -372,8 +375,11 @@ async function sync(quiet) {
         .catch(() => sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have,pool'))
         .catch(() => sb('/rest/v1/push_prefs?select=wish,member,draw,remind,have')).catch(() => null),
       // Private Ideenliste ab 1.11 (nur eigene Zeilen)
-      sb('/rest/v1/idea_people?select=id,name,linked_user,created_at&order=created_at').catch(() => null),
-      sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at&order=created_at.desc').catch(() => null),
+      // ab 1.18 mit Steckbrief der Person, Größe und verknüpftem Wunsch
+      sb('/rest/v1/idea_people?select=id,name,linked_user,created_at,card,card_stamps&order=created_at')
+        .catch(() => sb('/rest/v1/idea_people?select=id,name,linked_user,created_at&order=created_at')).catch(() => null),
+      sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at,size,wish_id&order=created_at.desc')
+        .catch(() => sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at&order=created_at.desc')).catch(() => null),
       // Steckbrief ab 1.12: eigener (Tabelle), Sichtbarkeit, die der anderen (gefiltert über card_list)
       sb('/rest/v1/profile_cards?select=data,stamps').catch(() => null),
       sb('/rest/v1/profile_card_vis?select=item,mode,users,groups').catch(() => null),
@@ -392,13 +398,15 @@ async function sync(quiet) {
       sb('/rest/v1/gift_list_people?select=list_id,person,done_at,added_at&order=added_at').catch(() => null),
       // Geburtstagsgruppen ab 1.16
       sb('/rest/v1/group_ideas?select=id,group_id,created_by,title,url,note,price,taken_by,status,created_at&order=created_at').catch(() => null),
-      sb('/rest/v1/bday_optout?select=user_id').catch(() => null)
+      sb('/rest/v1/bday_optout?select=user_id').catch(() => null),
+      // Gesehen im Konto ab 1.18
+      sb('/rest/v1/seen_state?select=data').catch(() => null)
     ]);
     const ps = admin === true ? await sb('/rest/v1/rpc/push_status', { method: 'POST', body: {} }).catch(() => null) : null;
     if (!S.session) return;
     D = { profiles, groups, members, wishes, wg, res, account: acc && acc[0] ? acc[0] : null, admin: admin === true,
       wd: wd || [], wp: wp || [], wx: wx || [], wo: wo || [], pp: pp && pp[0] ? pp[0] : null, ps,
-      ip: ip || [], ideas: ideas || [], ideasOk: !!(ip && ideas),
+      ip: sbPending && sbT ? D.ip : (ip || []), ideas: ideas || [], ideasOk: !!(ip && ideas),
       // Während ein Feld gespeichert wird, bleibt der lokale Stand (sonst springt die Auswahl kurz zurück)
       card: sbPending ? D.card : (card && card[0] ? card[0] : null), cardVis: cardVis || [], cardOk: !!(card && cardVis),
       cards: cards && typeof cards === 'object' ? cards : {}, cardsOk: !!cards,
@@ -406,6 +414,8 @@ async function sync(quiet) {
       fr: fr || [], wf: wf || [], fq: fq && fq.in ? fq : { in: [], out: [] }, nick: nick || [], friendsOk: !!(fr && wf && fq && nick),
       occOk: !!(groups[0] ? 'occ_kind' in groups[0] : bd), bd: bd || [], bdOk: !!bd, gl: gl || [], glp: glp || [], glOk: !!(gl && glp),
       gi: gi || [], bdgOk: !!(gi && bdo), bdOff: !!(bdo && bdo.length),
+      seenRemote: sst && sst[0] ? sst[0].data : null, seenOk: !!sst,
+      fsOk: !!sst,   // schema.sql 1.18 ausgeführt (Größe, Idee → Wunsch, Steckbrief ohne App)
       fcode: D.fcode, at: Date.now(), loaded: true };
     hidePendingDel();
     S.cache = { uid: me(), D };
@@ -477,6 +487,30 @@ function seenLoad() {
   seen = s && s.w ? Object.assign({ m: {}, g: {}, d: {}, f: {} }, s, { uid: me() }) : null;
   return seen;
 }
+/* Gesehen im Konto (1.18): beim Laden mit dem Stand der anderen Geräte vereinen, nach dem
+   Speichern kurz verzögert hochladen. Wer gleichzeitig auf zwei Geräten liest, verliert höchstens
+   eine Markierung, die beim nächsten Laden wieder dazukommt. */
+let seenPushed = '', seenTimer = null;
+function seenMerge(s, r) {
+  if (!r || !r.w) return s;
+  if (!s) return Object.assign({ w: {}, m: {}, g: {}, d: {}, f: {} }, r, { uid: me() });
+  for (const k of ['w', 'm', 'g', 'f']) s[k] = Object.assign({}, r[k] || {}, s[k]);
+  const d = Object.assign({}, r.d || {}, s.d);
+  for (const [gid, at] of Object.entries(r.d || {})) if (at === wichtelState(gid).at) d[gid] = at;
+  s.d = d;
+  return s;
+}
+function seenPush() {
+  if (!D.seenOk || !seen || seen.uid !== me()) return;
+  const { uid, ...data } = seen;
+  const body = JSON.stringify(data);
+  if (body === seenPushed) return;
+  clearTimeout(seenTimer);
+  seenTimer = setTimeout(() => {
+    sb('/rest/v1/seen_state?on_conflict=user_id', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: { user_id: uid, data } })
+      .then(() => { seenPushed = body; }).catch(() => { /* nächstes Mal */ });
+  }, 1500);
+}
 function seenSave() {
   if (!seen) return;
   let all = {};
@@ -484,6 +518,7 @@ function seenSave() {
   const { uid, ...rest } = seen;
   all[uid] = rest;
   try { localStorage.setItem(SEEN_KEY, JSON.stringify(all)); } catch (e) { /* voll oder gesperrt */ }
+  seenPush();
 }
 const othersWishes = () => D.wishes.filter(w => w.owner !== me() && !w.have_at);
 function othersMembers() {
@@ -497,6 +532,7 @@ function myDraws() {
 function seenSync() {
   if (!D.loaded || !me()) return;
   const gs = myGroups().map(g => g.id);
+  if (D.seenRemote && !D.seenMerged) { seen = seenMerge(seenLoad(), D.seenRemote); D.seenMerged = 1; }
   let s = seenLoad();
   const first = !s;
   if (first) s = seen = { uid: me(), w: {}, m: {}, g: {}, d: {}, f: {} };
@@ -1205,7 +1241,7 @@ function viewHome() {
   const mine = openWishes(me());
   const errands = D.res.filter(r => r.user_id === me())
     .map(r => ({ r, w: D.wishes.find(w => w.id === r.wish_id) })).filter(x => x.w);
-  const ideasDone = (D.ideas || []).filter(i => i.done_at);
+  const ideasDone = (D.ideas || []).filter(i => i.done_at && !ideaTaken(i));
   const bought = errands.filter(x => x.r.status === 'gekauft').length + ideasDone.length;
   const nErr = errands.length + ideasDone.length;
   const days = daysToXmas();
@@ -1367,7 +1403,7 @@ function themeSection() {
 }
 
 function wishMeta(w, extra = []) {
-  return [w.price != null ? fmtPrice(w.price) : '', w.category ? catName(w.category) : '', ...extra].filter(Boolean).join(' · ');
+  return [w.price != null ? fmtPrice(w.price) : '', w.category ? catName(w.category) : '', w.size ? 'Größe ' + w.size : '', ...extra].filter(Boolean).join(' · ');
 }
 function prioMark(w) {
   return prio(w) === 3 && !w.have_at ? `<span class="prio" title="Sehr gern">${icon('heart')}</span>` : '';
@@ -1391,7 +1427,7 @@ function viewList() {
    Ideen für andere, nur für mich sichtbar. Person = jemand aus meinen Gruppen (linked_user)
    oder ein frei angelegter Name. Personen-Schlüssel im Formular: u:<uid> bzw. p:<idea_people.id>. */
 function listSwitch(on) {
-  const n = (D.ideas || []).filter(i => !i.done_at).length;
+  const n = (D.ideas || []).filter(i => !ideaDone(i)).length;
   return `<nav class="subtabs" aria-label="Wunschliste oder Ideen"><a href="#/liste" class="${on === 'w' ? 'on' : ''}">Meine Wünsche</a>
     <a href="#/ideen" class="${on === 'i' ? 'on' : ''}">Ideen für andere${n ? `<span class="subcount">${n}</span>` : ''}</a></nav>`;
 }
@@ -1424,12 +1460,37 @@ function backParam() {
   const m = /[?&]r=([\w/:-]*)/.exec(location.hash);
   return m ? '#/' + m[1] : '';
 }
-const byDone = (a, b) => (a.done_at ? 1 : 0) - (b.done_at ? 1 : 0);
+/* Idee wird „Ich schenke das“ (1.18): verknüpfter Wunsch, solange meine Reservierung besteht.
+   Dann zählt die Reservierung (gekauft = besorgt), die Idee nicht noch einmal. */
+function ideaTaken(i) {
+  if (!i || !i.wish_id) return null;
+  const r = resOf(i.wish_id), w = D.wishes.find(x => x.id === i.wish_id);
+  return r && w && r.user_id === me() ? { r, w } : null;
+}
+const ideaDone = i => { const t = ideaTaken(i); return t ? t.r.status === 'gekauft' : !!i.done_at; };
+const byDone = (a, b) => (ideaDone(a) ? 1 : 0) - (ideaDone(b) ? 1 : 0);
+// Bereich oben im Ideenformular: verknüpfter Wunsch oder Auswahl „Passt zu einem Wunsch“
+function ideaTakeHtml(i, uid) {
+  if (!D.fsOk || !uid) return '';
+  const t = ideaTaken(i);
+  if (t) {
+    return `<div class="banner ideatake">${icon('gift')}<span><b>Ich schenke das: ${esc(t.w.title)}</b><small>Wunsch von ${esc(nameOf(uid))}, ${t.r.status === 'gekauft' ? 'gekauft' : 'reserviert'}</small></span>
+      <span class="acts"><a class="link" href="#/p/${uid}?r=i/${i.id}">Ansehen</a><button class="link" data-act="ideaunlink" data-id="${i.id}">Lösen</button></span></div>`;
+  }
+  const ws = openWishes(uid).filter(w => { const r = resOf(w.id); return (!r || r.user_id === me()) && !(poolOf(w.id) && poolOf(w.id).buyer !== me()); }).sort(byPrio);
+  if (!ws.length) return '';
+  if (ui.ideaPick !== i.id) return `<button class="secondary withicon ideapick" data-act="ideapick" data-id="${i.id}">${icon('gift')}Passt zu einem Wunsch von ${esc(nameOf(uid))}</button>`;
+  const rows = ws.map(w => `<li class="row-item">${tile(w)}<span class="row-main"><span class="row-title">${esc(w.title)}</span>${wishMeta(w) ? `<span class="row-meta">${esc(wishMeta(w))}</span>` : ''}</span>
+      <button class="primary sm" data-act="ideatake" data-id="${i.id}" data-w="${w.id}">Ich schenke das</button></li>`).join('');
+  return `<section class="card stack ideapicker"><p class="row-title">Welcher Wunsch passt?</p><p class="small muted">Der Wunsch wird für dich reserviert. Die Idee bleibt und zeigt darauf.</p>
+    <ul class="rows plain">${rows}</ul><button class="ghost sm" data-act="ideapickoff">Abbrechen</button></section>`;
+}
 function ideaRow(i, ret) {
-  const done = !!i.done_at;
-  const meta = [wishMeta(i), i.url ? domain(i.url) : '', done ? 'besorgt' : ''].filter(Boolean).join(' · ');
+  const t = ideaTaken(i);
+  const done = ideaDone(i);
+  const meta = [wishMeta(i), t ? 'Ich schenke das' : (i.url ? domain(i.url) : ''), done ? (t ? 'gekauft' : 'besorgt') : ''].filter(Boolean).join(' · ');
   return `<li class="row-item ${done ? 'done' : ''}">
-      <button class="tick ${done ? 'on' : ''}" data-act="ideadone" data-id="${i.id}" aria-label="${done ? 'Doch nicht besorgt' : 'Als besorgt markieren'}">${icon('check')}</button>
+      <button class="tick ${done ? 'on' : ''}" data-act="ideadone" data-id="${i.id}" aria-label="${done ? (t ? 'Doch nicht gekauft' : 'Doch nicht besorgt') : (t ? 'Als gekauft markieren' : 'Als besorgt markieren')}">${icon('check')}</button>
       <a class="row-main" href="#/i/${i.id}${ret ? '?r=' + ret : ''}"><span class="row-title">${esc(i.title)}</span>${meta ? `<span class="row-meta">${esc(meta)}</span>` : ''}</a>
       ${icon('chev', 'chev')}
     </li>`;
@@ -1454,12 +1515,12 @@ function viewIdeas() {
   // Personen mit offenen Ideen zuerst, dann nach Namen; frei angelegte ohne Ideen bleiben sichtbar
   const people = D.ip.filter(p => ideasFor(p.id).length || !p.linked_user).map(p => {
     const list = ideasFor(p.id).slice().sort(byDone);
-    return { p, list, open: list.filter(i => !i.done_at).length };
+    return { p, list, open: list.filter(i => !ideaDone(i)).length };
   }).sort((a, b) => (b.open ? 1 : 0) - (a.open ? 1 : 0) || ipName(a.p).localeCompare(ipName(b.p), 'de'));
   const sec = ({ p, list, open }) => `<div class="sechead ideahead"><a href="#/f/${friendKey(p)}?r=ideen" class="ideaperson">${ipAvatar(p, 'sm')}<h2>${esc(ipName(p))}</h2></a>
       <span class="row-meta">${list.length ? (open ? plural(open, 'Idee', 'Ideen') : 'alles besorgt') : 'noch keine Ideen'}</span></div>
       ${list.length ? `<ul class="rows plain">${list.map(i => ideaRow(i, 'ideen')).join('')}</ul>` : ''}`;
-  const open = all.filter(i => !i.done_at).length;
+  const open = all.filter(i => !ideaDone(i)).length;
   return shell('Ideen für andere', `${listSwitch('i')}${add}${giftListsSection()}${people.map(sec).join('')}${privacyFoot('die Person selbst')}`,
     Object.assign(opt, { sub: `${plural(open, 'offene Idee', 'offene Ideen')}${all.length - open ? ` · ${all.length - open} besorgt` : ''}` }));
 }
@@ -1490,7 +1551,7 @@ function viewGiftList(id) {
   const ps = glPeople(id).map(x => ({ x, p: ipById(x.person) })).filter(o => o.p)
     .sort((a, b) => (a.x.done_at ? 1 : 0) - (b.x.done_at ? 1 : 0) || ipName(a.p).localeCompare(ipName(b.p), 'de'));
   const rows = ps.map(({ x, p }) => {
-    const n = ideasFor(p.id).filter(i => !i.done_at).length;
+    const n = ideasFor(p.id).filter(i => !ideaDone(i)).length;
     const meta = [n ? plural(n, 'Idee', 'Ideen') : '', p.linked_user && known(p.linked_user) ? plural(openWishes(p.linked_user).length, 'Wunsch', 'Wünsche') : '', x.done_at ? 'erledigt' : ''].filter(Boolean).join(' · ');
     return `<li class="row-item ${x.done_at ? 'done' : ''}">
       <button class="tick ${x.done_at ? 'on' : ''}" data-act="gldone" data-l="${id}" data-p="${p.id}" aria-label="${x.done_at ? 'Doch nicht erledigt' : 'Als erledigt markieren'}">${icon('check')}</button>
@@ -1599,7 +1660,7 @@ function plusMenu(kind) {
 function viewFriends() {
   const list = friendsList();
   const row = f => {
-    const nIdeas = f.p ? ideasFor(f.p.id).filter(i => !i.done_at).length : 0;
+    const nIdeas = f.p ? ideasFor(f.p.id).filter(i => !ideaDone(i)).length : 0;
     const meta = f.uid
       ? [sharedGroups(f.uid).map(g => g.name).join(', '), isFriend(f.uid) ? 'befreundet' : '', plural(openWishes(f.uid).length, 'Wunsch', 'Wünsche')].filter(Boolean)
       : ['Ohne App'];
@@ -1652,7 +1713,7 @@ function viewFriend(key) {
   const ws = uid ? openWishes(uid).sort(byPrio) : [];
   const nFree = ws.filter(w => !resOf(w.id)).length;
   const ideas = p ? ideasFor(p.id).slice().sort(byDone) : [];
-  const nOpen = ideas.filter(i => !i.done_at).length;
+  const nOpen = ideas.filter(i => !ideaDone(i)).length;
   const where = uid ? [shared.map(g => g.name).join(', '), friend ? 'befreundet' : ''].filter(Boolean).join(' · ') : (p.linked_user ? 'Nicht mehr in deinen Gruppen' : 'Ohne App');
   const real = uid && nickOf(uid) && realName(uid) && realName(uid) !== nickOf(uid) ? `<p class="row-meta">Heißt in der App ${esc(realName(uid))}</p>` : '';
   const head = `<section class="profile">${uid ? avatar(uid, 'lg') : ipAvatar(p, 'lg')}<div class="profile-main">
@@ -1685,6 +1746,7 @@ function viewFriend(key) {
       ws.length ? `<ul class="rows plain">${wRows}</ul><a class="secondary withicon" href="${listHref}">${icon('gift')}Liste öffnen und reservieren</a><p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert ist.</span></p>` : `<p class="empty-line">${esc(name)} hat noch nichts eingetragen.</p>`, true);
   }
   if (uid) html += cardFold(uid, name);
+  if (p && (!uid || sbCount(p.card || {}))) html += ipCardFold(p, name);
   if (D.ideasOk) {
     const iList = ideas.length ? `<ul class="rows plain">${ideas.map(i => ideaRow(i, ret)).join('')}</ul>` : '';
     html += fold('fr-ideas', 'bulb', 't2', 'Deine Ideen', ideas.length ? `${plural(nOpen, 'offene Idee', 'offene Ideen')}${ideas.length - nOpen ? ` · ${ideas.length - nOpen} besorgt` : ''}` : 'Nur du siehst sie',
@@ -1807,27 +1869,33 @@ function viewIdeaForm(id, key) {
     + (own.length ? `<optgroup label="Ohne App">${own.map(p => o('p:' + p.id, ipName(p))).join('')}</optgroup>` : '')
     + `<option value="new" ${cur === 'new' ? 'selected' : ''}>Neue Person …</option>`;
   const cats = '<option value="">Keine</option>' + CATS.map(([k, n]) => `<option value="${k}" ${i.category === k ? 'selected' : ''}>${esc(n)}</option>`).join('');
-  const done = neu ? '' : (i.done_at
+  const done = neu || ideaTaken(i) ? '' : (i.done_at
     ? `<button type="button" class="secondary" data-act="ideadone" data-id="${id}">Doch nicht besorgt</button>`
     : `<button type="button" class="secondary withicon" data-act="ideadone" data-id="${id}">${icon('check')}Besorgt</button>`);
   const del = neu ? '' : `<button type="button" class="ghost danger-text" data-act="delidea" data-id="${id}">Idee löschen</button>`;
-  const doneNote = i.done_at ? `<div class="banner">${icon('check')}<span><b>Besorgt am ${esc(fmtDay(i.done_at))}</b></span></div>` : '';
-  return shell(neu ? 'Neue Idee' : 'Idee bearbeiten', `${doneNote}
+  const doneNote = i.done_at && !ideaTaken(i) ? `<div class="banner">${icon('check')}<span><b>Besorgt am ${esc(fmtDay(i.done_at))}</b></span></div>` : '';
+  // Größen aus dem Steckbrief der Person und „Passt zu einem Wunsch“ (1.18)
+  const cp = cur.startsWith('u:') ? ipFor(cur.slice(2)) : (cur.startsWith('p:') ? ipById(cur.slice(2)) : null);
+  const cuid = cur.startsWith('u:') ? cur.slice(2) : (cp && cp.linked_user && known(cp.linked_user) ? cp.linked_user : null);
+  const sizes = D.fsOk ? sizesLine(cuid, cp) : '';
+  const take = neu ? '' : ideaTakeHtml(i, cuid);
+  return shell(neu ? 'Neue Idee' : 'Idee bearbeiten', `${doneNote}${take}
     <form data-form="idea" data-id="${id}" class="stack">
       <div class="card fields">
         <label>Für wen?<select name="person" required>${sel}</select></label>
         <label class="${cur === 'new' ? '' : 'hide'}" id="pnew">Name<input name="pname" maxlength="40" autocomplete="off" placeholder="z. B. Oma Ruth"></label>
         <label>Was könnte passen?<input name="title" maxlength="120" required value="${esc(i.title)}" placeholder="z. B. Fotobuch vom Urlaub"></label>
       </div>
-      ${fold('i-more-' + id, 'more', 't1', 'Mehr Angaben', 'Link, Preis, Kategorie, Notiz', `<div class="card fields">
+      ${fold('i-more-' + id, 'more', 't1', 'Mehr Angaben', D.fsOk ? 'Link, Preis, Kategorie, Größe, Notiz' : 'Link, Preis, Kategorie, Notiz', `<div class="card fields">
         <div class="field"><div class="fieldhead"><label for="f-url">Link</label><button type="button" class="link withicon" data-act="pasteurl">${icon('paste')}Einfügen</button></div>
           <input id="f-url" name="url" inputmode="url" autocomplete="off" value="${esc(i.url || '')}" placeholder="https://"></div>
         <div class="two">
           <label>Preis<span class="money"><input name="price" inputmode="decimal" autocomplete="off" maxlength="12" value="${esc(priceInput(i.price))}" placeholder="ca."><span>€</span></span></label>
           <label>Kategorie<select name="category">${cats}</select></label>
         </div>
-        <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Wo gesehen, Größe, Farbe">${esc(i.note || '')}</textarea></label>
-      </div>`, !!(i.url || i.price != null || i.category || i.note))}
+        ${D.fsOk ? `<label>Größe<input name="size" maxlength="40" autocomplete="off" value="${esc(i.size || '')}" placeholder="z. B. M oder 42">${sizes ? `<small class="fhelp">Laut Steckbrief: ${esc(sizes)}</small>` : ''}</label>` : ''}
+        <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Wo gesehen, Farbe">${esc(i.note || '')}</textarea></label>
+      </div>`, !!(i.url || i.price != null || i.category || i.note || i.size))}
       <button class="primary" type="submit">Speichern</button>
       ${done}
       ${del}
@@ -2222,13 +2290,15 @@ function viewWishForm(id) {
           <input id="f-url" name="url" inputmode="url" autocomplete="off" value="${esc(w.url || '')}" placeholder="https://"></div>
         <label class="pricefield">Preis<span class="money"><input name="price" inputmode="decimal" autocomplete="off" maxlength="12" value="${esc(priceInput(w.price))}" placeholder="ca."><span>€</span></span></label>
       </div>
-      ${fold('w-more-' + id, 'more', 't1', 'Mehr Angaben', 'Notiz, Kategorie, wer es sehen darf', `<div class="stack">
+      ${fold('w-more-' + id, 'more', 't1', 'Mehr Angaben', D.fsOk ? 'Notiz, Größe, Kategorie, wer es sehen darf' : 'Notiz, Kategorie, wer es sehen darf', `<div class="stack">
       <div class="card fields">
         <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Größe, Farbe, Alternativen">${esc(w.note || '')}</textarea></label>
-        <label>Kategorie<select name="category">${cats}</select></label>
+        ${D.fsOk ? `<div class="two"><label>Kategorie<select name="category">${cats}</select></label>
+          <label>Größe<input name="size" maxlength="40" autocomplete="off" value="${esc(w.size || '')}" placeholder="z. B. M oder 42"></label></div>`
+          : `<label>Kategorie<select name="category">${cats}</select></label>`}
         <div class="field"><span class="flabel">Wie sehr wünschst du es dir?</span><div class="seg">${prios}</div></div>
       </div>
-      ${vis}</div>`, !!(w.note || w.category || prio(w) !== 2 || !w.all_groups || w.all_friends === false))}
+      ${vis}</div>`, !!(w.note || w.category || w.size || prio(w) !== 2 || !w.all_groups || w.all_friends === false))}
       <button class="primary" type="submit">Speichern</button>
       ${have}
       ${del}
@@ -2737,7 +2807,8 @@ const SB_STALE = 365 * 864e5;
 const sbField = k => SB_FIELDS.find(f => f[0] === k);
 const sbSec = s => SB_SECS.find(x => x[0] === s);
 const sbFieldsOf = s => SB_FIELDS.filter(f => f[0].startsWith(s + '.'));
-const sbMine = () => (D.card && D.card.data) || {};
+const sbMine = () => sbT ? ((ipById(sbT) || {}).card || {}) : ((D.card && D.card.data) || {});
+const sbStamps = () => sbT ? ((ipById(sbT) || {}).card_stamps || {}) : ((D.card && D.card.stamps) || {});
 const sbFilled = v => Array.isArray(v) ? v.length > 0 : !!v;
 const sbCount = data => SB_FIELDS.filter(f => sbFilled(data[f[0]])).length;
 const sbNext = () => Math.max(0, SB_FIELDS.findIndex(f => !sbFilled(sbMine()[f[0]])));
@@ -2880,7 +2951,16 @@ function viewCardHome() {
       <progress max="${n}" value="${c}"></progress>${resume}</section>`;
   const vis = `<a class="card row-item sbvis" href="#/steckbrief/sicht/all?r=steckbrief">${icon(sbRule('all') ? 'eyeoff' : 'eye')}
       <span class="row-main"><span class="row-title">Wer sieht deinen Steckbrief</span><span class="row-meta">${esc(sbVisText('all'))}</span></span>${icon('chev', 'chev')}</a>`;
-  const secs = SB_SECS.map(([s, name, ic, tint]) => {
+  const secs = sbSecCards(data, '#/steckbrief/s/', true);
+  const del = ui.confirmDelCard
+    ? `<button class="danger" data-act="sbdelete">Steckbrief wirklich löschen</button>`
+    : `<button class="ghost danger-text" data-act="sbaskdel">Steckbrief löschen</button>`;
+  return shell('Steckbrief', `${stale}${top}${vis}${secs}<div class="card stack">${del}</div>`, { tab: 'list', back: ['#/liste', 'Wunschliste'], sub: 'So wissen die anderen, was zu dir passt.' });
+}
+
+/* Abschnitts-Karten der Übersicht (eigener Steckbrief und der von Personen ohne App) */
+function sbSecCards(data, href, vis) {
+  return SB_SECS.map(([s, name, ic, tint]) => {
     const fs = sbFieldsOf(s);
     const done = fs.filter(f => sbFilled(data[f[0]])).length;
     const rows = s === 'either'
@@ -2890,26 +2970,43 @@ function viewCardHome() {
         const val = f[1] === 'colors' && sbFilled(v) ? v.map(x => sbSwatch(x)).join('') + esc(sbText(f, v)) : esc(sbText(f, v));
         return `<li><span>${esc(f[3])}</span><b class="${sbFilled(v) ? '' : 'muted'}">${sbFilled(v) ? val : 'Offen'}</b></li>`;
       }).join('')}</ul>`;
-    return `<section class="card sbsec"><a class="sbhead" href="#/steckbrief/s/${s}"><span class="tile ${tint}">${icon(ic)}</span>
-        <span class="foldsum"><b>${esc(name)}</b><small>${done} von ${fs.length}${sbRule(s) ? ' · ' + esc(sbVisText(s)) : ''}</small></span><span class="link">Bearbeiten</span></a>${rows}</section>`;
+    return `<section class="card sbsec"><a class="sbhead" href="${href}${s}"><span class="tile ${tint}">${icon(ic)}</span>
+        <span class="foldsum"><b>${esc(name)}</b><small>${done} von ${fs.length}${vis && sbRule(s) ? ' · ' + esc(sbVisText(s)) : ''}</small></span><span class="link">Bearbeiten</span></a>${rows}</section>`;
   }).join('');
-  const del = ui.confirmDelCard
-    ? `<button class="danger" data-act="sbdelete">Steckbrief wirklich löschen</button>`
-    : `<button class="ghost danger-text" data-act="sbaskdel">Steckbrief löschen</button>`;
-  return shell('Steckbrief', `${stale}${top}${vis}${secs}<div class="card stack">${del}</div>`, { tab: 'list', back: ['#/liste', 'Wunschliste'], sub: 'So wissen die anderen, was zu dir passt.' });
+}
+
+function sbItems(fs, data, stamps, ret) {
+  return fs.map(f => {
+    const st = sbStale(stamps, f[0]);
+    return `<section class="card sbfield"><div class="sbfhead"><b>${esc(f[2])}</b></div>${sbControl(f)}
+      <div class="sbffoot">${st && sbFilled(data[f[0]]) ? `<span class="muted small">Zuletzt geändert im ${esc(fmtMonth(st))}</span>` : '<span></span>'}${ret ? sbVisLink(f[0], ret) : ''}</div></section>`;
+  }).join('');
+}
+
+/* Steckbrief einer Person ohne App (1.18): wie der eigene, ohne Quiz und Sichtbarkeit, nur für dich */
+function viewIpCard(pid, s) {
+  const p = ipById(pid);
+  const back = p ? ['#/f/' + friendKey(p), ipName(p)] : ['#/ideen', 'Ideen'];
+  if (!p) return shell('Steckbrief', emptyState('idcard', 'Nicht gefunden', 'Diese Person gibt es hier nicht mehr.'), { tab: 'groups', back });
+  if (!D.fsOk) return shell('Steckbrief', dbHint(), { tab: 'groups', back });
+  sbT = pid;
+  const data = sbMine(), stamps = sbStamps();
+  const base = `#/ideen/p/${pid}/steckbrief`;
+  if (s && sbSec(s)) {
+    return shell(sbSec(s)[1], sbItems(sbFieldsOf(s), data, stamps, null) + privacyFoot(ipName(p)),
+      { tab: 'groups', back: [base, 'Steckbrief'], eyebrow: 'Steckbrief von ' + ipName(p) });
+  }
+  return shell('Steckbrief', sbSecCards(data, base + '/', false) + privacyFoot(ipName(p)),
+    { tab: 'groups', back, eyebrow: ipName(p), sub: 'Was du über ' + ipName(p) + ' weißt.' });
 }
 
 function viewCardSec(s) {
   const [, name] = sbSec(s);
   const fs = sbFieldsOf(s);
-  const data = sbMine(), stamps = (D.card && D.card.stamps) || {};
+  const data = sbMine(), stamps = sbStamps();
   const ret = 'steckbrief/s/' + s;
   const first = SB_FIELDS.indexOf(fs.find(f => !sbFilled(data[f[0]])) || fs[0]);
-  const items = fs.map(f => {
-    const st = sbStale(stamps, f[0]);
-    return `<section class="card sbfield"><div class="sbfhead"><b>${esc(f[2])}</b></div>${sbControl(f)}
-      <div class="sbffoot">${st && sbFilled(data[f[0]]) ? `<span class="muted small">Zuletzt geändert im ${esc(fmtMonth(st))}</span>` : '<span></span>'}${sbVisLink(f[0], ret)}</div></section>`;
-  }).join('');
+  const items = sbItems(fs, data, stamps, ret);
   return shell(name, `<div class="sbsecbar">${sbVisLink(s, ret)}<a class="link" href="#/steckbrief/quiz/${first}">Als Quiz</a></div>${items}`,
     { tab: 'list', back: ['#/steckbrief', 'Steckbrief'], eyebrow: 'Steckbrief' });
 }
@@ -2948,7 +3045,9 @@ function cardFold(uid, name) {
   if (!D.cardsOk) return '';
   const c = sbOf(uid);
   if (!c) return fold('fr-card', 'idcard', 't1', 'Steckbrief', 'Noch kein Steckbrief', `<p class="empty-line">${esc(name)} hat noch keinen Steckbrief ausgefüllt.</p>`);
-  const d = c.d;
+  return fold('fr-card', 'idcard', 't1', 'Steckbrief', sbSummary(c), cardBody(c.d, c.s, name), true);
+}
+function cardBody(d, stamps, name) {
   const vals = (k, cls = 'tag') => (d[k] || []).map(x => `<span class="${cls}">${esc(x)}</span>`).join('');
   const row = (label, html) => html ? `<div class="sbrow"><span class="sblabel">${label}</span><span class="sbval">${html}</span></div>` : '';
   const nope = (sbFilled(d['nope.allergy']) ? `<div class="banner warn sballergy">${icon('shield')}<span><b>Allergien</b><small>${esc(d['nope.allergy'].join(', '))}</small></span></div>` : '')
@@ -2957,12 +3056,26 @@ function cardFold(uid, name) {
   const colors = sbFilled(d['likes.colors']) ? d['likes.colors'].map(x => `<span class="tag">${sbSwatch(x)}${esc((SB_COLORS.find(o => o[0] === x) || [x, x])[1])}</span>`).join('') : '';
   const likes = row('Farben', colors) + row('Hobbys', vals('likes.hobbies')) + row('Isst gern', vals('likes.food')) + row('Marken', vals('likes.brands'));
   const sizes = sbFieldsOf('sizes').filter(f => sbFilled(d[f[0]])).map(f => {
-    const st = sbStale(c.s, f[0]);
+    const st = sbStale(stamps, f[0]);
     return `<li><span>${esc(f[3])}</span><b>${esc(d[f[0]])}${st ? `<small class="muted"> · Stand ${esc(fmtMonth(st))}</small>` : ''}</b></li>`;
   }).join('');
   const joy = d['joy.text'] ? `<blockquote class="sbjoy"><span class="sblabel">Das freut ${esc(name)} immer</span>${esc(d['joy.text'])}</blockquote>` : '';
-  const inner = `<div class="card sbview">${nope}${either ? `<p class="sbtags">${either}</p>` : ''}${likes}${sizes ? `<ul class="facts">${sizes}</ul>` : ''}${joy}</div>`;
-  return fold('fr-card', 'idcard', 't1', 'Steckbrief', sbSummary(c), inner, true);
+  return `<div class="card sbview">${nope}${either ? `<p class="sbtags">${either}</p>` : ''}${likes}${sizes ? `<ul class="facts">${sizes}</ul>` : ''}${joy}</div>`;
+}
+// Steckbrief, den du für eine Person ohne App führst (1.18); bei Verknüpften nur, wenn etwas drinsteht
+function ipCardFold(p, name) {
+  if (!D.fsOk || !p) return '';
+  const d = p.card || {};
+  const n = sbCount(d);
+  const edit = `<a class="secondary withicon" href="#/ideen/p/${p.id}/steckbrief">${icon('idcard')}${n ? 'Steckbrief bearbeiten' : 'Steckbrief ausfüllen'}</a>`;
+  const title = p.linked_user ? 'Deine Notizen zum Steckbrief' : 'Steckbrief';
+  if (!n) return fold('fr-ipcard', 'idcard', 't1', title, 'Größen, Lieblingsdinge, nur für dich', `<p class="empty-line">Trag ein, was du über ${esc(name)} weißt. Nur du siehst es.</p>${edit}`);
+  return fold('fr-ipcard', 'idcard', 't1', title, sbSummary({ d }), cardBody(d, p.card_stamps || {}, name) + edit, !p.linked_user);
+}
+// Größen aus den Steckbriefen einer Person als kurze Zeile (für das Ideenformular)
+function sizesLine(uid, p) {
+  const d = Object.assign({}, p && p.card || {}, uid && sbOf(uid) ? sbOf(uid).d : {});
+  return sbFieldsOf('sizes').filter(f => sbFilled(d[f[0]])).map(f => f[3] + ' ' + d[f[0]]).join(' · ');
 }
 
 // Eintrag auf der eigenen Wunschliste (seit 1.17, vorher unter Konto)
@@ -2986,7 +3099,7 @@ function cardHint(gid, uid) {
 const EARLY_DAYS = 14;
 function errandStats() {
   const errands = D.res.filter(r => r.user_id === me() && D.wishes.some(w => w.id === r.wish_id));
-  const ideasDone = (D.ideas || []).filter(i => i.done_at).length;
+  const ideasDone = (D.ideas || []).filter(i => i.done_at && !ideaTaken(i)).length;
   return { n: errands.length + ideasDone, done: errands.filter(r => r.status === 'gekauft').length + ideasDone };
 }
 function earlyToast() {
@@ -3055,6 +3168,10 @@ function viewAccount() {
     ${unsafe ? secureCard() : ''}
     <h2>Profil</h2>
     <div class="card"><form data-form="name" class="inline"><input name="name" maxlength="40" value="${esc(myName())}" required><button class="secondary" type="submit">Name ändern</button></form></div>
+    ${acc && D.friendsOk ? `<div class="card findme"><p class="flabel">So finden dich Freunde</p>
+      <div class="findrow"><b class="uname">${esc(acc.username)}</b><button class="secondary sm withicon" data-act="copyuser">${icon('paste')}Kopieren</button></div>
+      <p class="muted small">Wer deinen Benutzernamen kennt, kann dir unter Freunde eine Anfrage schicken. Oder du teilst deinen Freundes-Link.</p>
+      <button class="link withicon" data-act="friendshare">${icon('share')}Freundes-Link teilen</button></div>` : ''}
     ${bdSection()}
     <h2>Hilfe</h2>
     <ul class="rows plain"><li><a class="row-item" href="#/hilfe"><span class="tile plain">${icon('book')}</span>
@@ -3193,8 +3310,10 @@ function render() {
   if (D.loaded && (!prof || !prof.name)) { app.innerHTML = S.pendingName ? '<p class="boot">Lädt …</p>' : viewName(); return; }
   if (!D.loaded) { app.innerHTML = '<p class="boot">Lädt …</p>'; return; }
   let html;
+  sbT = null;
   if (parts[0] === 'w' && parts[1]) html = viewWishForm(parts[1]);
   else if (parts[0] === 'i' && parts[1]) html = viewIdeaForm(parts[1], parts[2]);
+  else if (parts[0] === 'ideen' && parts[1] === 'p' && parts[2] && parts[3] === 'steckbrief') html = viewIpCard(parts[2], parts[4]);
   else if (parts[0] === 'ideen' && parts[1] === 'p' && parts[2]) html = viewFriend('p:' + parts[2]);
   else if (parts[0] === 'f' && parts[1]) html = viewFriend(parts[1]);
   else if (parts[0] === 'freunde') html = viewFriends();
@@ -3279,6 +3398,21 @@ async function run(fn) {
 /* Steckbrief speichern: sofort lokal anzeigen, dann an die Datenbank */
 async function sbPut(k, v) {
   const empty = !sbFilled(v);
+  if (sbT) {
+    const p = ipById(sbT), pid = sbT;
+    if (!p) return;
+    const data = Object.assign({}, p.card), stamps = Object.assign({}, p.card_stamps);
+    if (empty) { delete data[k]; delete stamps[k]; } else { data[k] = v; stamps[k] = new Date().toISOString(); }
+    p.card = data; p.card_stamps = stamps;
+    render();
+    sbPending++;
+    try {
+      await sb('/rest/v1/rpc/ip_card_put', { method: 'POST', body: { p_person: pid, p_key: k, p_val: empty ? null : v } });
+      saveState();
+    } catch (e) { sbPending--; await sync(true); throw e; }
+    sbPending--;
+    return;
+  }
   D.card = D.card || { data: {}, stamps: {} };
   const data = Object.assign({}, D.card.data), stamps = Object.assign({}, D.card.stamps);
   if (empty) { delete data[k]; delete stamps[k]; } else { data[k] = v; stamps[k] = new Date().toISOString(); }
@@ -3442,6 +3576,7 @@ const forms = {
     const sel = [...f.querySelectorAll('input[name=g]:checked')].map(x => x.value);
     if (!all && !sel.length) throw new Error('Wähle mindestens eine Gruppe aus.');
     const row = { title, url, note, all_groups: all, price, category, priority };
+    if (f.size) row.size = f.size.value.trim() || null;
     // Freunde (1.14): nur wenn die Auswahl angezeigt wurde
     const fv = f.querySelector('input[name=fvis]:checked');
     const allF = !fv || fv.value === 'all';
@@ -3483,6 +3618,7 @@ const forms = {
     } else if (v.startsWith('p:')) person = v.slice(2);
     else throw new Error('Wähle aus, für wen die Idee ist.');
     const row = { person, title, url, price, category: f.category.value || null, note: f.note.value.trim() || null };
+    if (f.size) row.size = f.size.value.trim() || null;
     if (id === 'neu') await sb('/rest/v1/ideas', { method: 'POST', prefer: 'return=minimal', body: row });
     else await sb('/rest/v1/ideas?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: row });
     await sync(true);
@@ -3707,6 +3843,7 @@ const acts = {
     toast('Geburtstag entfernt.');
   },
   /* Direkte Freundschaft (1.14) */
+  copyuser: async () => { if (D.account) await copyText(D.account.username, 'Benutzername kopiert.'); },
   friendshare: async () => {
     if (ui.plus) { delete ui.plus; render(); }
     if (!D.fcode) D.fcode = await sb('/rest/v1/rpc/friend_code', { method: 'POST', body: {} });
@@ -3879,9 +4016,35 @@ const acts = {
     logout('Abgemeldet.');
   },
   askdel: async el => { ui.confirmDel = el.dataset.id; render(); },
+  /* Idee wird „Ich schenke das“ (1.18) */
+  ideapick: async el => { ui.ideaPick = el.dataset.id; render(); },
+  ideapickoff: async () => { delete ui.ideaPick; render(); },
+  ideatake: async el => {
+    await sb('/rest/v1/rpc/idea_take', { method: 'POST', body: { p_idea: el.dataset.id, p_wish: el.dataset.w } }).catch(e => {
+      throw new Error(/duplicate|23505/.test(e.message) ? 'Den hat gerade jemand anderes reserviert.' : e.message);
+    });
+    delete ui.ideaPick;
+    await sync(true);
+    toast('Reserviert. Die Idee zeigt jetzt auf den Wunsch.');
+  },
+  ideaunlink: async el => {
+    await sb('/rest/v1/ideas?id=eq.' + el.dataset.id, { method: 'PATCH', prefer: 'return=minimal', body: { wish_id: null } });
+    await sync(true);
+    toast('Gelöst. Die Reservierung bleibt.');
+  },
   ideadone: async el => {
     const i = (D.ideas || []).find(x => x.id === el.dataset.id);
     if (!i) return;
+    const t = ideaTaken(i);
+    if (t) {   // verknüpft (1.18): abhaken = Wunsch gekauft
+      const st = t.r.status === 'gekauft' ? 'reserviert' : 'gekauft';
+      await sb('/rest/v1/reservations?wish_id=eq.' + t.w.id, { method: 'PATCH', prefer: 'return=minimal', body: { status: st } });
+      t.r.status = st;
+      render();
+      if (st === 'gekauft') earlyToast();
+      sync(true);
+      return;
+    }
     const at = i.done_at ? null : new Date().toISOString();
     await sb('/rest/v1/ideas?id=eq.' + i.id, { method: 'PATCH', prefer: 'return=minimal', body: { done_at: at } });
     i.done_at = at;

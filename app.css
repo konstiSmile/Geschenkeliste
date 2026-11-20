@@ -776,3 +776,16 @@ body.swr main { animation: swr .22s ease-out; }
 .removerow { text-align: center; margin: 26px 0 0; }
 .removerow .link { font-size: 14.5px; padding: 10px 12px; }
 .removerow .link.danger-text { color: var(--danger); }
+
+/* ---------- 1.18 Feinschliff ---------- */
+.findme .flabel { margin: 0 0 6px; }
+.findrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.findrow .uname { font-size: 19px; font-weight: 800; letter-spacing: .01em; word-break: break-all; }
+.findme .small { margin: 10px 0 4px; }
+.findme .link { padding: 6px 0; }
+label small.fhelp { display: block; font-weight: 600; color: var(--text-2); }
+.ideapick { width: 100%; }
+.ideapicker .rows .row-item { gap: 10px; }
+.ideapicker .row-title { margin: 0; }
+.ideatake .acts { display: flex; flex-direction: column; align-items: flex-end; gap: 0; }
+.ideatake .acts .link { padding: 6px 0; }

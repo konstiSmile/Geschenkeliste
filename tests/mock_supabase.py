@@ -13,6 +13,8 @@ JSONB_ARGS = {'p_val'}
 def lit(v):
     if isinstance(v, list):   # uuid[] (Steckbrief-Sichtbarkeit)
         return "'{" + ','.join(str(x) for x in v) + "}'"
+    if isinstance(v, dict):   # jsonb (Gesehen im Konto, 1.18)
+        return "'" + json.dumps(v).replace("'", "''") + "'"
     if v is None:
         return 'null'
     if isinstance(v, bool):
