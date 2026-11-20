@@ -1,4 +1,4 @@
-# Geschenkeliste – Übergabe (Stand 20.11.2026, Version 1.17)
+# Geschenkeliste – Übergabe (Stand 20.11.2026, Version 1.17.1)
 
 **Projekt-Übergabe:** Doc „Übergabe 5 – Geschenkeliste“ im Projekt (Thema 5, Chats heißen „5.<Nr> …“, letzter Chat 5.24). Startsatz: „Thema 5 (Geschenkeliste), Chat 5.<Nr>. Weiter laut ‚Übergabe 5 – Geschenkeliste‘. Nächster Schritt: …“
 
@@ -6,15 +6,15 @@
 Bevor etwas besprochen oder gebaut wird: To-do-Liste aus „Offen beim Nutzer“ als kurze nummerierte Liste zum Abhaken geben, warten, kurz nachfragen, ob etwas aufgefallen ist. Repo erst danach klonen.
 
 ## Stand
-- Version **1.17** (Einfach bedienen) gepusht, Commit `5ba8114`, Cache `geschenkeliste-v26`, `?v=26` (Symbole `?v=24`). Keine schema.sql-Änderung.
-- Tests: 496 RLS, 363 Playwright, 14 Edge Function, 9 Service Worker, alle grün.
+- Version **1.17.1** (Einfach bedienen + Freund entfernen) gepusht, 1.17 = Commit `5ba8114`, Cache `geschenkeliste-v27`, `?v=27` (Symbole `?v=24`). Keine schema.sql-Änderung.
+- Tests: 496 RLS, 367 Playwright, 14 Edge Function, 9 Service Worker, alle grün.
 - App: https://konstismile.github.io/Geschenkeliste/ (Claude kann github.io nicht abrufen).
 
 ## Offen beim Nutzer (To-do-Liste)
-1. App neu laden, unter Konto → Weitere Einstellungen ganz unten prüfen: Version 1.17.
+1. App neu laden, unter Konto → Weitere Einstellungen ganz unten prüfen: Version 1.17.1.
 2. Plus oben unter Gruppen und unter Freunde ausprobieren.
 3. Wischen ausprobieren: auf Start, Wunschliste, Gruppen, Konto nach links/rechts; in der App vom Home-Bildschirm vom linken Rand nach rechts = zurück. Stört es, Bescheid geben.
-4. Einen Wunsch löschen und „Rückgängig“ tippen.
+4. Einen Wunsch löschen und „Rückgängig“ tippen. Bei einem Freund unten „Freund entfernen“ ansehen (Fenster mit Abbrechen).
 5. Unter Konto „So funktioniert es“ und „Erste Schritte noch mal zeigen“ ansehen.
 6. In der Anleitung (Claude Doc) den Vorschlag „Neu mit Version 1.17“ annehmen.
 

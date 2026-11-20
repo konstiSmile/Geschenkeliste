@@ -1,4 +1,4 @@
-# Geschenkeliste – Fahrplan (Stand 20.11.2026, Version 1.17)
+# Geschenkeliste – Fahrplan (Stand 20.11.2026, Version 1.17.1)
 
 Ein Paket = ein Chat. Jedes Paket ist für sich nutzbar. „schema.sql“ heißt: nach dem Push einmal im Supabase SQL-Editor ausführen. Details zu gebauten Paketen: `docs/technik.md`.
 
@@ -18,12 +18,12 @@ Ein Paket = ein Chat. Jedes Paket ist für sich nutzbar. „schema.sql“ heißt
 | 1.14 | 15 | Direkte Freundschaft, Spitznamen | `9977b5a` |
 | 1.15 | 9a | Anlass pro Gruppe, Geburtstag, Schenklisten, neues App-Symbol | `9d3c5cb` |
 | 1.16 | 9b | Geburtstagsgruppe für jemanden (auch ohne App), gemeinsame Ideen, Archiv | `0f60ca4` |
-| 1.17 | Einfach bedienen | Klarere Wörter, Plus-Menü, Gruppenfenster, Mehr Angaben, Erste Schritte, Hilfe, Rückgängig, Wischen | `5ba8114` |
+| 1.17 | Einfach bedienen | Klarere Wörter, Plus-Menü, Gruppenfenster, Mehr Angaben, Erste Schritte, Hilfe, Rückgängig, Wischen; 1.17.1 Freund entfernen | `5ba8114` |
 
 Gestrichen: Pakete 7 und 8 (Chats), Absprachen laufen über WhatsApp und Co.
 
 ## Offen für den Nutzer
-- App neu laden, Version 1.17 prüfen, Neues ausprobieren (keine schema.sql nötig)
+- App neu laden, Version 1.17.1 prüfen, Neues ausprobieren (keine schema.sql nötig)
 - Familie einladen, Wichteln eintragen und auslosen (Anfang Dezember)
 
 ## Als Nächstes

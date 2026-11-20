@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.17';
+const VERSION = '1.17.1';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -1697,10 +1697,7 @@ function viewFriend(key) {
     parts.push(`<div class="field"><span class="flabel">Spitzname</span>${nickForm(uid)}<p class="muted fhelp">Nur du siehst ihn. Er steht überall statt ${esc(realName(uid) || 'des Namens')}.</p></div>`);
     sub.push(nickOf(uid) ? 'Spitzname ' + nickOf(uid) : 'Spitzname');
     if (friend) {
-      parts.push(ui.confirmUnfriend === uid
-        ? `<p class="small">Ihr seht dann gegenseitig keine Wünsche mehr, außer über gemeinsame Gruppen. Reservierungen bleiben.</p><button class="danger" data-act="unfriend" data-id="${uid}">Freundschaft wirklich beenden</button>`
-        : `<button class="ghost danger-text" data-act="askunfriend" data-id="${uid}">Freundschaft beenden</button>`);
-      sub.push('befreundet');
+      sub.push('befreundet');   // Entfernen seit 1.17.1 unten auf der Seite
     } else if (incoming) {
       parts.push(`<button class="primary sm" data-act="freqyes" data-id="${incoming.id}">Freundschaft annehmen</button>`);
     } else if (reqTo(uid)) {
@@ -1720,15 +1717,29 @@ function viewFriend(key) {
         <label>Ist ${esc(name)} inzwischen dabei?<select name="u" required><option value="">Person auswählen</option>${opts}</select></label>
         <button class="secondary sm" type="submit">Mit Konto verbinden</button></form>`);
     if (p.linked_user) parts.push(`<button class="ghost sm" data-act="ipunlink" data-id="${p.id}">Verknüpfung mit dem Konto lösen</button>`);
-    del = ui.confirmDelIp === p.id
+    // Person ohne App: Entfernen unten auf der Seite (1.17.1); verknüpft: nur die Ideen löschen
+    if (linked) del = ui.confirmDelIp === p.id
       ? `<button class="danger" data-act="delip" data-id="${p.id}">${ideas.length ? `Mit ${plural(ideas.length, 'Idee', 'Ideen')} löschen` : 'Wirklich löschen'}</button>`
-      : `<button class="ghost danger-text" data-act="askdelip" data-id="${p.id}">${linked ? 'Ideen für diese Person löschen' : 'Person löschen'}</button>`;
-    if (!uid) sub = ['Umbenennen, verknüpfen, löschen'];
+      : `<button class="ghost danger-text" data-act="askdelip" data-id="${p.id}">Ideen für diese Person löschen</button>`;
+    if (!uid) sub = ['Umbenennen, verknüpfen'];
   }
   if (parts.length || del) {
     html += fold('fr-manage', 'user', 't0', 'Verwalten', sub.join(' · ') || 'Verknüpft mit dem Konto', `<div class="card stack manage">${parts.join('')}</div>${del}`);
   }
-  return shell(name, bdayLinkAsk(p) + reqBanner + head + dup + html + privacyFoot(name), { tab: 'groups', back });
+  // Freund bzw. Person ohne App entfernen (1.17.1): klein unten, Bestätigung im Fenster
+  const rmKind = uid && friend && D.friendsOk ? 'f' : (!uid && p ? 'p' : '');
+  const rm = rmKind ? `<p class="removerow"><button class="link danger-text" data-act="askremove">${rmKind === 'f' ? 'Freund entfernen' : 'Person entfernen'}</button></p>` : '';
+  const dlg = rmKind && ui.removeDlg ? `<div class="modalwrap"><div class="modalbg" data-act="removecancel"></div>
+    <div class="modal card stack" role="alertdialog" aria-modal="true" aria-labelledby="rmt" aria-describedby="rmd">
+      <span class="tile t2 modalicon">${icon('trash')}</span>
+      <h2 class="modaltitle" id="rmt">${esc(name)} ${rmKind === 'f' ? 'als Freund entfernen?' : 'entfernen?'}</h2>
+      <p id="rmd">${rmKind === 'f'
+        ? 'Ihr seht dann gegenseitig keine Wünsche mehr, außer über gemeinsame Gruppen. Reservierungen bleiben.'
+        : (ideas.length ? `Deine ${plural(ideas.length, 'Idee', 'Ideen')} für ${esc(name)} werden mit gelöscht.` : `${esc(name)} verschwindet aus deiner Liste.`)}</p>
+      <button class="danger" data-act="${rmKind === 'f' ? 'unfriend' : 'delip'}" data-id="${rmKind === 'f' ? uid : p.id}">Entfernen</button>
+      <button class="ghost" data-act="removecancel">Abbrechen</button>
+    </div></div>` : '';
+  return shell(name, bdayLinkAsk(p) + reqBanner + head + dup + html + rm + privacyFoot(name) + dlg, { tab: 'groups', back });
 }
 
 // Geburtstagsgruppe anlegen oder öffnen (1.16)
@@ -3739,12 +3750,14 @@ const acts = {
     await sync(true);
     toast(r === 'accepted' ? 'Ihr seid jetzt befreundet.' : 'Anfrage verschickt.');
   },
-  askunfriend: async el => { ui.confirmUnfriend = el.dataset.id; render(); },
+  askremove: async () => { ui.removeDlg = 1; render(); const b = $('.modal .ghost'); if (b) b.focus(); },
+  removecancel: async () => { delete ui.removeDlg; render(); },
   unfriend: async el => {
     await sb('/rest/v1/rpc/friend_remove', { method: 'POST', body: { p_user: el.dataset.id } });
-    delete ui.confirmUnfriend;
+    ui = {};
     await sync(true);
-    toast('Freundschaft beendet.');
+    toast('Freund entfernt.');
+    go('#/freunde');
   },
   theme: async el => { if (window.GLTheme) GLTheme.set(el.dataset.v); render(); },
   mode: async el => { if (window.GLTheme) GLTheme.setMode(el.dataset.v); render(); },
@@ -4243,6 +4256,7 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && ui.delAccDlg) { delete ui.delAccDlg; delete ui.confirmDelAcc; render(); }
+  if (e.key === 'Escape' && (ui.removeDlg || ui.plus)) { delete ui.removeDlg; delete ui.plus; render(); }
 });
 window.addEventListener('hashchange', () => {
   ui = {};

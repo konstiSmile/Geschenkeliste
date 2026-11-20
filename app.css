@@ -773,3 +773,6 @@ body.swl main { animation: swl .22s ease-out; }
 body.swr main { animation: swr .22s ease-out; }
 @media (prefers-reduced-motion: reduce) { body.swl main, body.swr main { animation: none; } }
 #toast.withundo span { white-space: nowrap; }
+.removerow { text-align: center; margin: 26px 0 0; }
+.removerow .link { font-size: 14.5px; padding: 10px 12px; }
+.removerow .link.danger-text { color: var(--danger); }
