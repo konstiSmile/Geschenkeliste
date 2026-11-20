@@ -42,6 +42,9 @@ def newpage(browser, errors, ua=None, init=None):
         ctx.add_init_script(f"localStorage.setItem('geschenkeliste-theme', '{os.environ['GL_THEME']}')")
     if init:
         ctx.add_init_script(init)
+    # 1.17: „Mehr Angaben“ und „Weitere Einstellungen“ für die alten Prüfungen automatisch aufklappen
+    # (window.__keepFolds = true schaltet das für die 1.17-Prüfungen ab)
+    ctx.add_init_script(AUTO_OPEN)
     ctx.route('https://qbdpzamygonpruaafcrt.supabase.co/**', mock.handle)
     p = ctx.new_page()
     p.on('pageerror', lambda e: errors.append(str(e)))
@@ -49,10 +52,34 @@ def newpage(browser, errors, ua=None, init=None):
     return p
 
 
-def start_anon(p, name, url=BASE):
+AUTO_OPEN = """window.GL_UNDO_MS = 400;
+new MutationObserver(() => { if (window.__keepFolds) return;
+  document.querySelectorAll('details[id*="-more-"]:not([open]), details#k-more:not([open])').forEach(d => { d.open = true; });
+}).observe(document, { childList: true, subtree: true });"""
+
+
+def start_anon(p, name, url=BASE, tour=False):
     p.goto(url)
     p.fill('form[data-form=start] input[name=name]', name)
     p.click('form[data-form=start] button')
+    if not tour:   # 1.17: Erste Schritte überspringen
+        p.wait_for_selector('.tour')
+        p.click('.tour button:has-text("Überspringen")')
+        p.wait_for_selector('.tour', state='detached')
+
+
+FORM_BTN = {'newgroup': ('gform', 'new'), 'join': ('gform', 'join'), 'friendadd': ('fform', 'ask'), 'newfriend': ('fform', 'noapp')}
+
+
+def openform(p, form):
+    """1.17: Formular unter Gruppen/Freunde erst per Knopf öffnen (ohne Einträge ist es schon offen)."""
+    sel = f'form[data-form={form}]'
+    p.wait_for_selector(f'{sel}, .addbar')
+    if p.locator(sel).count() == 0:
+        act, v = FORM_BTN[form]
+        p.click(f'.addbar button[data-act={act}][data-v={v}]')
+        p.wait_for_selector(sel)
+    return sel
 
 
 def unfold(p, fid):
@@ -94,14 +121,14 @@ with sync_playwright() as pw:
 
     # Gruppen anlegen
     a.click('.tabs >> text=Gruppen')
-    a.fill('form[data-form=newgroup] input', 'Familie')
+    a.fill(openform(a, 'newgroup') + ' input', 'Familie')
     a.click('button:has-text("Anlegen")')
     a.wait_for_selector('h1:has-text("Familie")')
     code = a.inner_text('#gcode').strip()
     check('Code angezeigt', len(code) == 9 and code[4] == '-')
     shot(a, '3-gruppe')
     a.click('.tabs >> text=Gruppen')
-    a.fill('form[data-form=newgroup] input', 'Freunde')
+    a.fill(openform(a, 'newgroup') + ' input', 'Freunde')
     a.click('button:has-text("Anlegen")')
     a.wait_for_selector('h1:has-text("Freunde")')
 
@@ -142,13 +169,13 @@ with sync_playwright() as pw:
     b.wait_for_selector('.profile')
     check('Link ergänzt https', b.get_attribute('.wish a.link-out', 'href') == 'https://www.example.org/buch')
     check('Ben sieht nur Kochbuch', b.locator('.wish').count() == 1 and b.locator('text=Konzertkarte').count() == 0)
-    b.click('button:has-text("Reservieren")')
+    b.click('button:has-text("Ich schenke das")')
     b.wait_for_selector('text=Von dir reserviert')
     b.click('button:has-text("Als gekauft markieren")')
     b.wait_for_selector('text=Von dir gekauft')
     shot(b, '4-liste-ben')
     b.goto(BASE + '#/')
-    b.wait_for_selector('text=Deine Besorgungen')
+    b.wait_for_selector('text=Was du schenkst')
     check('Besorgung auf der Startseite', b.locator('.row-item.done:has-text("Kochbuch")').count() == 1)
     shot(b, '1b-start-ben')
     b.click('.row-item:has-text("Kochbuch") .tick')
@@ -188,9 +215,9 @@ with sync_playwright() as pw:
 
     # Ben gibt frei, Clara reserviert
     b.click('button:has-text("Freigeben")')
-    b.wait_for_selector('button:has-text("Reservieren")')
+    b.wait_for_selector('button:has-text("Ich schenke das")')
     c.click('.top [data-act=sync]')
-    c.click('button:has-text("Reservieren")')
+    c.click('button:has-text("Ich schenke das")')
     c.wait_for_selector('text=Von dir reserviert')
     b.click('.top [data-act=sync]')
     b.wait_for_selector('text=Reserviert von Clara')
@@ -211,7 +238,6 @@ with sync_playwright() as pw:
     check('Nach Umstellen auf „alle“ sieht Ben die Karte', True)
     a.click('a.wish:has-text("Konzertkarte Jazz")')
     a.click('button:has-text("Wunsch löschen")')
-    a.click('button:has-text("Wirklich löschen")')
     a.wait_for_selector('h1:has-text("Meine Wunschliste")')
     check('Gelöscht', a.locator('text=Konzertkarte Jazz').count() == 0)
 
@@ -272,16 +298,16 @@ with sync_playwright() as pw:
     check('Kein Überlauf (Filter)', overflow(b))
     b.click('.chip:has-text("bis 25 €")')
     b.wait_for_selector('text=Nichts passt zum Filter')
-    b.click('button:has-text("Filter aufheben")')
+    b.click('button:has-text("Alle anzeigen")')
     check('1.7: Filter aufheben', b.locator('.cards .wish').count() == 4)
-    b.click('.wish:has-text("LEGO") button:has-text("Reservieren")')
+    b.click('.wish:has-text("LEGO") button:has-text("Ich schenke das")')
     b.wait_for_selector('.wish:has-text("LEGO") >> text=Von dir reserviert')
 
     # „Hab ich schon“
     a.goto(BASE + '#/liste')
     a.click('a.wish:has-text("LEGO")')
-    a.click('button:has-text("Hab ich schon")')
-    a.wait_for_selector('h2:has-text("Hab ich schon")')
+    a.click('button:has-text("Habe ich schon bekommen")')
+    a.wait_for_selector('h2:has-text("Habe ich schon bekommen")')
     check('1.7: Anna sieht LEGO unter „Hab ich schon“', a.locator('.wish.had:has-text("LEGO")').count() == 1 and 'seit' in a.inner_text('.wish.had .row-meta'))
     shot(a, '16-hab-ich-schon')
     b.goto(BASE + '#/')
@@ -303,7 +329,7 @@ with sync_playwright() as pw:
     a.click('a.wish:has-text("LEGO")')
     a.click('button:has-text("Doch wieder wünschen")')
     a.wait_for_selector('h1:has-text("Meine Wunschliste")')
-    check('1.7: Doch wieder wünschen', a.locator('h2:has-text("Hab ich schon")').count() == 0 and a.locator('.wish:has-text("LEGO")').count() == 1)
+    check('1.7: Doch wieder wünschen', a.locator('h2:has-text("Habe ich schon bekommen")').count() == 0 and a.locator('.wish:has-text("LEGO")').count() == 1)
 
     # Teilen aus einer anderen App (Android) und Einfügen von Text mit Link
     a.goto(BASE + '?title=&text=' + quote('Toller Schal https://shop.example.com/schal-rot') + '&url=')
@@ -323,7 +349,6 @@ with sync_playwright() as pw:
     a.goto(BASE + '#/liste')
     a.click('a.wish:has-text("Toller Schal")')
     a.click('button:has-text("Wunsch löschen")')
-    a.click('button:has-text("Wirklich löschen")')
     a.wait_for_selector('h1:has-text("Meine Wunschliste")')
 
     # Anna sichert ihr Konto mit Benutzername und Passwort
@@ -480,10 +505,10 @@ with sync_playwright() as pw:
     check('Wichteln: Gründer sieht drei Teilnehmer', a.locator('.rows .tick.on').count() == 3 and a.locator('text=3 Personen machen mit').count() == 1)
     a.select_option('form[data-form=wex] select[name=a]', label='Ben')
     a.select_option('form[data-form=wex] select[name=b]', label='Ben')
-    a.click('button:has-text("Ausschluss hinzufügen")')
+    a.click('button:has-text("Zwei, die sich nicht ziehen sollen")')
     toast(a, 'zwei verschiedene')
     a.select_option('form[data-form=wex] select[name=b]', label='Clara')
-    a.click('button:has-text("Ausschluss hinzufügen")')
+    a.click('button:has-text("Zwei, die sich nicht ziehen sollen")')
     a.wait_for_selector('.row-item:has-text("Ben und Clara")')
     shot(a, '11-wichteln-gruender')
     a.click('button:has-text("Jetzt auslosen")')
@@ -700,7 +725,7 @@ with sync_playwright() as pw:
     start_anon(j, 'Jonas')
     j.wait_for_selector('h1:has-text("Hallo Jonas")')
     j.click('.tabs >> text=Gruppen')
-    j.fill('form[data-form=newgroup] input', 'Nachbarn')
+    j.fill(openform(j, 'newgroup') + ' input', 'Nachbarn')
     j.click('button:has-text("Anlegen")')
     j.wait_for_selector('h1:has-text("Nachbarn")')
     ncode = j.inner_text('#gcode').strip()
@@ -742,7 +767,7 @@ with sync_playwright() as pw:
     check('1.8: Liste: neue Wünsche markiert', j.locator('.card.wish.isnew .tag.new').count() == 2)
     check('1.8: nach dem Ansehen: Zähler weg', j.locator('.tabs .count').count() == 0 and j.evaluate('window.__badge') == 0)
     shot(j, '22-neu-liste')
-    j.click('button:has-text("Reservieren") >> nth=0')
+    j.click('button:has-text("Ich schenke das") >> nth=0')
     j.wait_for_selector('text=Von dir reserviert')
     check('1.8: Markierung bleibt beim Reservieren auf der Seite', j.locator('.tag.new').count() == 2)
     j.click('.back')
@@ -870,7 +895,7 @@ with sync_playwright() as pw:
     j.wait_for_selector('.wish:has-text("Tee")')
     check('1.11.1: Gruppe führt zur Liste in der Gruppe', f'/p/{kim}' in j.url)
     j.goto(BASE + '#/freunde')
-    j.fill('form[data-form=newfriend] input', 'Onkel Ben')
+    j.fill(openform(j, 'newfriend') + ' input', 'Onkel Ben')
     j.click('form[data-form=newfriend] button')
     j.wait_for_selector('h1:has-text("Onkel Ben")')
     check('1.11.1: Person ohne App hinzugefügt', j.locator('#fr-wishes').count() == 0 and j.locator('#fr-ideas').count() == 1)
@@ -906,8 +931,7 @@ with sync_playwright() as pw:
     check('1.11: bearbeitet, zurück zur Person', j.locator('h1:has-text("Oma Ruth")').count() == 1)
     j.click('.row-item:has-text("Kinogutschein") .row-main')
     j.click('text=Idee löschen')
-    j.click('text=Wirklich löschen')
-    toast(j, 'Gelöscht')
+    toast(j, 'Idee gelöscht')
     j.wait_for_selector('h1:has-text("Oma Ruth")')
     check('1.11: Idee gelöscht', j.locator('.row-item:has-text("Kinogutschein")').count() == 0)
     j.click('text=Person löschen')
@@ -919,9 +943,9 @@ with sync_playwright() as pw:
 
 
     # ---------- 1.12 Steckbrief ----------
-    k.goto(BASE + '#/konto')
+    k.goto(BASE + '#/liste')
     k.wait_for_selector('.sblink')
-    check('1.12: Steckbrief unter Konto', 'Größen, Lieblingsdinge' in k.inner_text('.sblink'))
+    check('1.17: Steckbrief auf der Wunschliste', 'Größen, Lieblingsdinge' in k.inner_text('.sblink'))
     k.click('.sblink')
     k.wait_for_selector('.quiz.intro')
     check('1.12: beim ersten Mal Einstieg ins Quiz', k.locator('a.primary:has-text("Los geht")').count() == 1)
@@ -1091,7 +1115,7 @@ with sync_playwright() as pw:
     start_anon(ri, 'Rita')
     ri.wait_for_selector('h1:has-text("Hallo Rita")')
     ri.click('.tabs >> text=Gruppen')
-    ri.fill('form[data-form=newgroup] input', 'Clique')
+    ri.fill(openform(ri, 'newgroup') + ' input', 'Clique')
     ri.click('button:has-text("Anlegen")')
     ri.wait_for_selector('h1:has-text("Clique")')
     cq = ri.url.split('#/g/')[1]
@@ -1242,7 +1266,7 @@ with sync_playwright() as pw:
 
     # Eigene Reservierung umwandeln, gleich aufteilen, „Nein danke“
     ul.goto(rlist)
-    ul.click('.wish:has-text("Buch") button:has-text("Reservieren")')
+    ul.click('.wish:has-text("Buch") button:has-text("Ich schenke das")')
     ul.wait_for_selector('.wish:has-text("Buch") .poolconv')
     ul.click('.wish:has-text("Buch") .poolconv')
     ul.wait_for_selector('form[data-form=poolstart]')
@@ -1353,7 +1377,7 @@ with sync_playwright() as pw:
     check('1.9: App meldet die Zahl am Symbol an den Service Worker', m.evaluate('window.__swmsg && window.__swmsg.type') == 'badge')
 
     m.click('.tabs >> text=Gruppen')
-    m.fill('form[data-form=newgroup] input', 'Glocke')
+    m.fill(openform(m, 'newgroup') + ' input', 'Glocke')
     m.click('button:has-text("Anlegen")')
     m.wait_for_selector('h1:has-text("Glocke")')
     pcode = m.inner_text('#gcode').strip()
@@ -1539,7 +1563,7 @@ with sync_playwright() as pw:
     lo.wait_for_selector('h1:has-text("Hallo Lotte")')
     uid_lo = uid_of(lo)
     lo.click('.tabs >> text=Gruppen')
-    lo.fill('form[data-form=newgroup] input', 'Bleibt')
+    lo.fill(openform(lo, 'newgroup') + ' input', 'Bleibt')
     lo.click('button:has-text("Anlegen")')
     lo.wait_for_selector('h1:has-text("Bleibt")')
     lcode = lo.inner_text('#gcode').strip()
@@ -1607,6 +1631,7 @@ with sync_playwright() as pw:
     check('1.14: Link vor der Anmeldung: Hinweis auf Einladung', gu.locator('.banner:has-text("Freundschaftseinladung")').count() == 1)
     gu.fill('form[data-form=start] input[name=name]', 'Gustav')
     gu.click('form[data-form=start] button')
+    gu.click('.tour button:has-text("Überspringen")')
     gu.wait_for_selector('.friendinvite .reveal-name:has-text("Frieda")')
     uid_gu = uid_of(gu)
     check('1.14: nach der Anmeldung Bestätigungsseite', gu.locator('[data-act=friendcode]').count() == 1)
@@ -1661,13 +1686,13 @@ with sync_playwright() as pw:
     q(f"insert into public.accounts (user_id, username) values ('{uid_le}', 'lena.b')")
     fi.goto(BASE + '#/freunde')
     fi.reload()
-    fi.wait_for_selector('form[data-form=friendadd]')
-    fi.fill('form[data-form=friendadd] input', '@Lena.B')
+    openform(fi, 'friendadd')
+    fi.fill(openform(fi, 'friendadd') + ' input', '@Lena.B')
     fi.click('form[data-form=friendadd] button')
     toast(fi, 'Anfrage verschickt')
     fi.wait_for_selector('h2:has-text("Gesendete Anfragen")')
     check('1.14: gesendete Anfrage mit Benutzername', fi.locator('.row-item:has-text("@lena.b")').count() == 1)
-    fi.fill('form[data-form=friendadd] input', 'gibtsnicht')
+    fi.fill(openform(fi, 'friendadd') + ' input', 'gibtsnicht')
     fi.click('form[data-form=friendadd] button')
     toast(fi, 'Anfrage verschickt')
     le.reload()
@@ -1684,7 +1709,7 @@ with sync_playwright() as pw:
 
     # Gleiche Namen und Spitzname
     fi.goto(BASE + '#/gruppen')
-    fi.fill('form[data-form=newgroup] input', 'Chor')
+    fi.fill(openform(fi, 'newgroup') + ' input', 'Chor')
     fi.click('button:has-text("Anlegen")')
     fi.wait_for_selector('h1:has-text("Chor")')
     chor = fi.inner_text('#gcode').strip()
@@ -1733,7 +1758,7 @@ with sync_playwright() as pw:
     an.wait_for_selector('h1:has-text("Hallo Anna")')
     uid_an = uid_of(an)
     an.goto(BASE + '#/gruppen')
-    an.fill('form[data-form=newgroup] input', 'Hochzeitsrunde')
+    an.fill(openform(an, 'newgroup') + ' input', 'Hochzeitsrunde')
     an.click('button:has-text("Anlegen")')
     an.wait_for_selector('h1:has-text("Hochzeitsrunde")')
     hcode = an.inner_text('#gcode').strip()
@@ -1829,7 +1854,7 @@ with sync_playwright() as pw:
     el.wait_for_selector('h1:has-text("Hallo Ella")')
     uid_el = uid_of(el)
     el.goto(BASE + '#/gruppen')
-    el.fill('form[data-form=newgroup] input', 'Familie E')
+    el.fill(openform(el, 'newgroup') + ' input', 'Familie E')
     el.click('button:has-text("Anlegen")')
     el.wait_for_selector('h1:has-text("Familie E")')
     ecode = el.inner_text('#gcode').strip()
@@ -1888,7 +1913,7 @@ with sync_playwright() as pw:
     el.goto(BASE + '#/gruppen')
     el.wait_for_selector('.row-item.group')
     check('1.16: Ella sieht die Gruppe nicht', el.locator('.row-item.group').count() == 1 and 'Geburtstag' not in el.inner_text('.rows'))
-    el.fill('form[data-form=join] input', bcode)
+    el.fill(openform(el, 'join') + ' input', bcode)
     el.click('form[data-form=join] button')
     toast(el, 'Diesen Gruppen-Code gibt es nicht')
     el.goto(BASE + '#/konto')
@@ -1955,6 +1980,131 @@ with sync_playwright() as pw:
     check('Kein Überlauf (1.16)', overflow(fr_) and overflow(gi_) and overflow(el))
     for x in (el, fr_, gi_):
         x.context.close()
+
+    # ---------- 1.17 Einfach bedienen ----------
+    uw = newpage(browser, errs)
+    start_anon(uw, 'Uwe', tour=True)
+    uw.wait_for_selector('.tour')
+    check('1.17: Erste Schritte nach dem Anlegen', 'Deine Wunschliste' in uw.inner_text('.tour') and uw.locator('.tourdots li').count() == 3)
+    shot(uw, '63-erste-schritte')
+    uw.click('.tour button:has-text("Weiter")')
+    uw.click('.tour button:has-text("Weiter")')
+    check('1.17: dritte Karte: Ich schenke das', 'Ich schenke das' in uw.inner_text('.tour') and uw.locator('.tour [data-act=tourskip]').count() == 1)
+    uw.click('.tour button:has-text("Los geht")')
+    uw.wait_for_selector('.tour', state='detached')
+    uw.reload()
+    uw.wait_for_selector('h1:has-text("Hallo Uwe")')
+    check('1.17: Erste Schritte nur einmal', uw.locator('.tour').count() == 0)
+    uw.evaluate('window.__keepFolds = true')
+    uw.goto(BASE + '#/konto')
+    uw.wait_for_selector('#k-more')
+    check('1.17: Konto: weitere Einstellungen zugeklappt', not uw.evaluate("document.getElementById('k-more').open")
+          and not uw.locator('button:has-text("Abmelden")').is_visible())
+    shot(uw, '64-konto')
+    uw.click('[data-act=tourshow]')
+    uw.wait_for_selector('.tour')
+    uw.click('.tour button:has-text("Überspringen")')
+    uw.click('a:has-text("So funktioniert es")')
+    uw.wait_for_selector('.helpq')
+    check('1.17: Hilfe-Seite mit 6 Fragen, Zurück zu Konto', uw.locator('.helpq').count() == 6 and uw.inner_text('.topbar .back').strip() == 'Konto')
+    uw.click('.helpq >> nth=3')
+    check('1.17: Antwort klappt auf', 'beschenkte Person sieht es nie' in uw.inner_text('.helpq >> nth=3'))
+    shot(uw, '65-hilfe')
+
+    # Gruppen: ohne Gruppe Formulare offen, danach Knöpfe und Plus
+    uw.goto(BASE + '#/gruppen')
+    uw.wait_for_selector('form[data-form=newgroup]')
+    check('1.17: ohne Gruppe gleich das Formular', uw.locator('.addbar').count() == 0 and uw.locator('.top [data-act=plus]').count() == 1)
+    for k in range(6):
+        if k:
+            uw.goto(BASE + '#/gruppen')
+            uw.wait_for_selector('.addbar')
+            if k == 1:
+                check('1.17: mit Gruppe nur Knöpfe', uw.locator('form[data-form=newgroup]').count() == 0 and uw.locator('form[data-form=join]').count() == 0)
+                uw.click('.top [data-act=plus]')
+                uw.wait_for_selector('.plusmenu')
+                check('1.17: Plus: Gruppe, Code, Geburtstagsgruppe', uw.locator('.plusmenu .row-item').count() == 3)
+                shot(uw, '66-plus-gruppen')
+                uw.click('.plusmenu [data-act=plusclose].ghost')
+                uw.wait_for_selector('.plusmenu', state='detached')
+            uw.click('.top [data-act=plus]')
+            uw.click('.plusmenu [data-act=gform][data-v=new]')
+            uw.wait_for_selector('form[data-form=newgroup]')
+            if k == 1:
+                check('1.17: Plus öffnet das Formular mit Fokus', uw.evaluate("document.activeElement.name") == 'name')
+        uw.fill('form[data-form=newgroup] input', f'Runde {k + 1}')
+        uw.click('form[data-form=newgroup] button')
+        uw.wait_for_selector(f'h1:has-text("Runde {k + 1}")')
+    uw.goto(BASE + '#/gruppen')
+    uw.wait_for_selector('.scrollbox')
+    box = uw.evaluate("(() => { const b = document.querySelector('.scrollbox'); const r = [...b.children].slice(0, 5).reduce((n, x) => n + x.getBoundingClientRect().height, 0); return { h: b.clientHeight, sh: b.scrollHeight, five: r }; })()")
+    check('1.17: Gruppen im Fenster: 5 sichtbar, Rest scrollt', box['sh'] > box['h'] and box['five'] < box['h'] < box['five'] + 40)
+    check('1.17: Neue Gruppe ohne Scrollen sichtbar', uw.locator('.addbar').is_visible() and uw.evaluate("document.querySelector('.addbar').getBoundingClientRect().bottom") < 780)
+    shot(uw, '67-gruppenfenster')
+    uw.click('.subtabs a:has-text("Freunde")')
+    uw.wait_for_selector('h1:has-text("Freunde")')
+    uw.click('.top [data-act=plus]')
+    uw.wait_for_selector('.plusmenu')
+    check('1.17: Plus bei Freunden: Link, Anfrage, ohne App', uw.locator('.plusmenu .row-item').count() == 3)
+    uw.click('.plusmenu [data-act=fform][data-v=noapp]')
+    uw.fill('form[data-form=newfriend] input', 'Tante Ilse')
+    uw.click('form[data-form=newfriend] button')
+    uw.wait_for_selector('h1:has-text("Tante Ilse")')
+    check('1.17: Zurück mit Ziel', uw.inner_text('.topbar .back').strip() == 'Freunde')
+
+    # Wunsch: nur das Wichtigste, Rest unter „Mehr Angaben“; Löschen mit Rückgängig
+    uw.goto(BASE + '#/liste')
+    check('1.17: Steckbrief auf der Wunschliste', uw.locator('.sblink:has-text("Mein Steckbrief")').count() == 1)
+    uw.click('text=Wunsch hinzufügen')
+    uw.wait_for_selector('form[data-form=wish]')
+    check('1.17: Wunschformular: Notiz und Sichtbarkeit zugeklappt', uw.locator('input[name=price]').is_visible()
+          and not uw.locator('textarea[name=note]').is_visible() and uw.locator('#w-more-neu summary:has-text("Mehr Angaben")').count() == 1)
+    shot(uw, '68-wunschformular')
+    uw.fill('input[name=title]', 'Gartenschere')
+    uw.click('button:has-text("Speichern")')
+    uw.wait_for_selector('a.wish:has-text("Gartenschere")')
+    uw.evaluate('window.GL_UNDO_MS = 8000')
+    uw.click('a.wish:has-text("Gartenschere")')
+    uw.click('button:has-text("Wunsch löschen")')
+    uw.wait_for_selector('#toast .undo')
+    check('1.17: Löschen ohne Nachfrage, Wunsch weg', uw.locator('a.wish:has-text("Gartenschere")').count() == 0 and 'Wunsch gelöscht' in uw.inner_text('#toast'))
+    shot(uw, '69-rueckgaengig')
+    uw.click('#toast .undo')
+    uw.wait_for_selector('a.wish:has-text("Gartenschere")')
+    check('1.17: Rückgängig holt ihn zurück', q("select count(*) from public.wishes where title = 'Gartenschere'") == '1')
+    uw.evaluate('window.GL_UNDO_MS = 300')
+    uw.click('a.wish:has-text("Gartenschere")')
+    uw.click('button:has-text("Wunsch löschen")')
+    uw.wait_for_timeout(1200)
+    check('1.17: nach Ablauf gelöscht', q("select count(*) from public.wishes where title = 'Gartenschere'") == '0')
+
+    # Wischen: links/rechts zwischen den Bereichen, vom Rand zurück (nur als App)
+    def swipe(p, x0, x1, y=400):
+        p.evaluate("""([x0, x1, y]) => { const el = document.querySelector('main');
+          const t = x => new Touch({ identifier: 1, target: el, clientX: x, clientY: y });
+          el.dispatchEvent(new TouchEvent('touchstart', { touches: [t(x0)], changedTouches: [t(x0)], bubbles: true }));
+          el.dispatchEvent(new TouchEvent('touchend', { touches: [], changedTouches: [t(x1)], bubbles: true })); }""", [x0, x1, y])
+    uw.goto(BASE + '#/liste')
+    uw.wait_for_selector('h1:has-text("Meine Wunschliste")')
+    swipe(uw, 300, 150)
+    uw.wait_for_selector('h1:has-text("Gruppen")')
+    check('1.17: nach links wischen: nächster Bereich', uw.evaluate('location.hash') == '#/gruppen')
+    swipe(uw, 100, 280)
+    uw.wait_for_selector('h1:has-text("Meine Wunschliste")')
+    check('1.17: nach rechts wischen: voriger Bereich', uw.evaluate('location.hash') == '#/liste')
+    swipe(uw, 200, 220)
+    check('1.17: kurzes Wischen tut nichts', uw.evaluate('location.hash') == '#/liste')
+    uw.goto(BASE + '#/hilfe')
+    uw.wait_for_selector('.helpq')
+    swipe(uw, 10, 200)
+    uw.wait_for_timeout(200)
+    check('1.17: im Browser kein Randwischen (macht der Browser)', uw.evaluate('location.hash') == '#/hilfe')
+    uw.evaluate("Object.defineProperty(navigator, 'standalone', { value: true })")
+    swipe(uw, 10, 200)
+    uw.wait_for_selector('h1:has-text("Konto")')
+    check('1.17: als App vom Rand zurück', uw.evaluate('location.hash') == '#/konto')
+    check('Kein Überlauf (1.17)', overflow(uw))
+    uw.context.close()
 
     # Start aus Cache ohne Netz: Daten bleiben sichtbar
     a.context.unroute('https://qbdpzamygonpruaafcrt.supabase.co/**')

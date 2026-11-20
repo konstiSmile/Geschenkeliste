@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.16';
+const VERSION = '1.17';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -30,15 +30,32 @@ function saveState() {
 
 /* ---------- Hilfen ---------- */
 const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 function toast(msg) {
   const t = $('#toast');
   t.textContent = msg;
+  t.classList.remove('withundo');
   t.classList.add('show');
   clearTimeout(toast.t);
   toast.t = setTimeout(() => t.classList.remove('show'), 2600);
+}
+// Meldung mit „Rückgängig“ (1.17)
+function toastUndo(msg, ms) {
+  const t = $('#toast');
+  t.textContent = '';
+  const span = document.createElement('span');
+  span.textContent = msg;
+  const b = document.createElement('button');
+  b.className = 'undo';
+  b.dataset.act = 'undo';
+  b.textContent = 'Rückgängig';
+  t.append(span, b);
+  t.classList.add('show', 'withundo');
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => t.classList.remove('show', 'withundo'), ms);
 }
 function go(hash) {
   if (location.hash === hash) render(); else location.hash = hash;
@@ -240,7 +257,7 @@ async function sb(path, opt = {}) {
   if (prefer) h.Prefer = prefer;
   let r;
   try {
-    r = await fetch(SB_URL + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'omit', referrerPolicy: 'no-referrer' });
+    r = await fetch(SB_URL + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'omit', referrerPolicy: 'no-referrer', keepalive: !!opt.keepalive });
   } catch (e) {
     throw new Error('Keine Verbindung. Bitte später nochmal versuchen.');
   }
@@ -390,6 +407,7 @@ async function sync(quiet) {
       occOk: !!(groups[0] ? 'occ_kind' in groups[0] : bd), bd: bd || [], bdOk: !!bd, gl: gl || [], glp: glp || [], glOk: !!(gl && glp),
       gi: gi || [], bdgOk: !!(gi && bdo), bdOff: !!(bdo && bdo.length),
       fcode: D.fcode, at: Date.now(), loaded: true };
+    hidePendingDel();
     S.cache = { uid: me(), D };
     saveState();
     seenSync();
@@ -776,15 +794,38 @@ function visLabel(w) {
 }
 
 /* ---------- Ansichten ---------- */
+// Zurück-Knopf mit Ziel (1.17): aus dem Ziel-Link einen Namen machen
+function backName(h) {
+  const p = String(h || '').replace(/^#\/?/, '').split('?')[0].split('/');
+  const fixed = { '': 'Start', liste: 'Wunschliste', ideen: 'Ideen', gruppen: 'Gruppen', freunde: 'Freunde', konto: 'Konto', mehr: 'Konto', steckbrief: 'Steckbrief' };
+  try {
+    if (p.length === 1 && p[0] in fixed) return fixed[p[0]];
+    if (p[0] === 'steckbrief') return 'Steckbrief';
+    if (p[0] === 'g' && p[2] === 'p' && p[3]) return nameOf(p[3]);
+    if (p[0] === 'g' && p[2] === 'wichteln') return 'Wichteln';
+    if (p[0] === 'g' && p[1]) return (D.groups.find(x => x.id === p[1]) || {}).name || 'Gruppe';
+    if (p[0] === 'p' && p[1]) return nameOf(p[1]);
+    if (p[0] === 'f' && p[1]) {
+      if (p[1].startsWith('u:')) return nameOf(p[1].slice(2));
+      const ip = ipById(p[1].slice(2));
+      return ip ? ipName(ip) : 'Freunde';
+    }
+    if (p[0] === 'ideen' && p[1] === 'p' && p[2]) { const ip = ipById(p[2]); return ip ? ipName(ip) : 'Ideen'; }
+    if (p[0] === 'schenken') return 'Schenkliste';
+    if (p[0] === 'gemeinsam') return 'Gemeinsam schenken';
+    if (p[0] === 'w') return 'Wunsch';
+  } catch (e) { /* fällt auf Zurück */ }
+  return 'Zurück';
+}
 function shell(title, body, opt = {}) {
   const tab = opt.tab || '';
-  const back = opt.back ? `<a class="back" href="${opt.back[0]}">${icon('back')}<span>${esc(opt.back[1])}</span></a>` : '<span></span>';
+  const back = opt.back ? `<a class="back" href="${opt.back[0]}">${icon('back')}<span>${esc(opt.back[1] === 'Zurück' ? backName(opt.back[0]) : opt.back[1])}</span></a>` : '<span></span>';
   const T = (h, t, n, label) => `<a href="${h}" class="${tab === t ? 'on' : ''}">${icon(n)}<span>${label}</span></a>`;
   return `
   <header class="top">
     ${opt.back ? `<div class="topbar">${back}</div>` : ''}
     <div class="titlerow"><div class="titletext">${opt.eyebrow ? `<p class="eyebrow">${esc(opt.eyebrow)}</p>` : ''}
-    <h1 class="title">${esc(title)}</h1></div><button class="iconbtn" data-act="sync" aria-label="Aktualisieren">${icon('sync')}</button></div>
+    <h1 class="title">${esc(title)}</h1></div><div class="topbtns">${opt.plus ? `<button class="iconbtn" data-act="plus" data-v="${opt.plus}" aria-label="Hinzufügen">${icon('plus')}</button>` : ''}<button class="iconbtn" data-act="sync" aria-label="Aktualisieren">${icon('sync')}</button></div></div>
     ${opt.sub ? `<p class="subtitle">${opt.sub}</p>` : ''}
   </header>
   <main>${body}</main>
@@ -1269,7 +1310,7 @@ function viewHome() {
   }
 
   return shell('Hallo ' + myName(), `${secure}${freq}${notifyBanner()}${hero}${stats}${wichtelHtml}${poolHome()}
-    <h2>Deine Besorgungen</h2>${errHtml}
+    <h2>Was du schenkst</h2>${errHtml}
     ${feedHead}${feedHtml}`, { tab: 'home', eyebrow: today });
 }
 
@@ -1339,10 +1380,10 @@ function viewList() {
       <span class="row-main"><span class="row-title">${prioMark(w)}${esc(w.title)}</span>
       <span class="row-meta">${esc(w.have_at ? 'seit ' + fmtDay(w.have_at) : wishMeta(w, [prio(w) === 1 ? 'Idee' : '', w.url ? domain(w.url) : '', visLabel(w)]))}</span></span>${icon('chev', 'chev')}</a></li>`;
   const add = `<a class="primary withicon" href="#/w/neu">${icon('plus')}Wunsch hinzufügen</a>`;
-  const haveHtml = have.length ? `<h2>Hab ich schon</h2><ul class="cards">${have.map(row).join('')}</ul>` : '';
+  const haveHtml = have.length ? `<h2>Habe ich schon bekommen</h2><ul class="cards">${have.map(row).join('')}</ul>` : '';
   const body = all.length
-    ? `${add}${list.length ? `<ul class="cards">${list.map(row).join('')}</ul>` : '<p class="empty-line">Alles auf deiner Liste hast du schon.</p>'}${haveHtml}<p class="foot">${icon('eyeoff')}<span>Ob etwas reserviert ist, siehst du nicht. So bleibt es eine Überraschung.</span></p>${cardLink(true)}`
-    : emptyState('gift', 'Deine Liste ist noch leer', 'Trag ein, worüber du dich freuen würdest. Ein Link hilft den anderen, genau das Richtige zu finden.', add);
+    ? `${add}${list.length ? `<ul class="cards">${list.map(row).join('')}</ul>` : '<p class="empty-line">Alles auf deiner Liste hast du schon.</p>'}${haveHtml}${cardLink(true)}<p class="foot">${icon('eyeoff')}<span>Ob etwas reserviert ist, siehst du nicht. So bleibt es eine Überraschung.</span></p>`
+    : emptyState('gift', 'Deine Liste ist noch leer', 'Trag ein, worüber du dich freuen würdest. Ein Link hilft den anderen, genau das Richtige zu finden.', add) + cardLink(true);
   return shell('Meine Wunschliste', listSwitch('w') + body, { tab: 'list', eyebrow: theme() === 'weihnachten' ? 'Weihnachten ' + xmasYear() : 'Alle Anlässe', sub: plural(list.length, 'Wunsch', 'Wünsche') });
 }
 
@@ -1526,6 +1567,35 @@ function friendReqCards() {
       <span class="acts"><button class="primary sm" data-act="freqyes" data-id="${r.id}">Annehmen</button><button class="ghost sm" data-act="freqno" data-id="${r.id}">Ablehnen</button></span></li>`).join('')}</ul>`;
 }
 
+// Plus oben rechts (1.17): Auswahl als Fenster
+function openForm(key, v) {
+  const fromMenu = !!ui.plus;
+  delete ui.plus;
+  ui[key] = !fromMenu && ui[key] === v ? '' : v;   // zweites Tippen klappt wieder zu
+  render();
+  const f = ui[key] && $('form[data-form="' + ({ new: 'newgroup', join: 'join', ask: 'friendadd', noapp: 'newfriend' })[v] + '"]');
+  if (f) { f.scrollIntoView({ block: 'center', behavior: 'smooth' }); f.querySelector('input').focus({ preventScroll: true }); }
+}
+function plusMenu(kind) {
+  if (ui.plus !== kind) return '';
+  const it = (act, v, ic, label, sub) => `<li><button class="row-item" data-act="${act}" data-v="${v}"><span class="tile plain">${icon(ic)}</span>
+      <span class="row-main"><span class="row-title">${label}</span><span class="row-meta">${sub}</span></span></button></li>`;
+  const items = kind === 'g'
+    ? it('gform', 'new', 'plus', 'Neue Gruppe', 'Für Familie oder Freunde')
+      + it('gform', 'join', 'key', 'Einladungscode eingeben', 'Einer Gruppe beitreten')
+      + (D.bdgOk ? `<li><a class="row-item" href="#/geburtstag/neu" data-act="plusclose"><span class="tile plain">${icon('cake')}</span>
+      <span class="row-main"><span class="row-title">Geburtstagsgruppe</span><span class="row-meta">Gemeinsam für jemanden schenken</span></span></a></li>` : '')
+    : (D.friendsOk ? it('friendshare', '', 'share', 'Freundes-Link teilen', 'Per WhatsApp, Mail oder SMS')
+      + it('fform', 'ask', 'user', 'Mit Benutzername anfragen', 'Wenn du den Benutzernamen kennst') : '')
+      + (D.ideasOk ? it('fform', 'noapp', 'plus', 'Person ohne App', 'Nur für deine Ideen') : '');
+  return `<div class="modalwrap"><div class="modalbg" data-act="plusclose"></div>
+    <div class="modal card stack plusmenu" role="dialog" aria-modal="true" aria-labelledby="plust">
+      <h2 class="modaltitle" id="plust">Hinzufügen</h2>
+      <ul class="rows plain">${items}</ul>
+      <button class="ghost" data-act="plusclose">Abbrechen</button>
+    </div></div>`;
+}
+
 function viewFriends() {
   const list = friendsList();
   const row = f => {
@@ -1537,23 +1607,33 @@ function viewFriends() {
     return `<li><a class="row-item" href="#/f/${f.key}">${f.uid ? avatar(f.uid) : ipAvatar(f.p)}
       <span class="row-main"><span class="row-title">${esc(f.name)}</span><span class="row-meta">${esc(meta.join(' · '))}</span></span>${icon('chev', 'chev')}</a></li>`;
   };
-  const addFriend = D.friendsOk ? `<h2>Freund hinzufügen</h2>
+  // 1.17: Knöpfe statt offener Formulare (ohne Personen gleich offen), Liste als Fenster mit 5 Personen
+  const open = list.length ? ui.fform : 'all';
+  const newCode = ui.confirmNewCode ? `<button class="danger sm" data-act="friendnewcode">Neuen Link erzeugen, alter gilt nicht mehr</button>` : `<button class="link newcode" data-act="asknewcode">Alten Link ungültig machen</button>`;
+  const fAsk = `<div class="card stack"><form data-form="friendadd" class="inline"><input name="q" maxlength="80" placeholder="Benutzername oder Freundes-Code" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" required aria-label="Benutzername oder Freundes-Code"><button class="secondary" type="submit">Anfragen</button></form></div>`;
+  const fNoApp = D.ideasOk ? `<div class="card"><form data-form="newfriend" class="inline"><input name="name" maxlength="40" placeholder="Name, z. B. Oma Ruth" aria-label="Name" required><button class="secondary" type="submit">Hinzufügen</button></form></div>` : '';
+  let addFriend;
+  if (!D.friendsOk) addFriend = `<h2>Freund hinzufügen</h2>${dbHint()}`;
+  else if (open === 'all') addFriend = `<h2>Freund hinzufügen</h2>
     <div class="card stack friendadd">
       <p class="small muted">Teile deinen Freundes-Link. Wer ihn öffnet und bestätigt, ist mit dir befreundet, auch ohne gemeinsame Gruppe.</p>
       <button class="primary withicon" data-act="friendshare">${icon('share')}Freundes-Link teilen</button>
-      ${ui.confirmNewCode ? `<button class="danger sm" data-act="friendnewcode">Neuen Link erzeugen, alter gilt nicht mehr</button>` : `<button class="link newcode" data-act="asknewcode">Alten Link ungültig machen</button>`}
+      ${newCode}
       <form data-form="friendadd" class="inline"><input name="q" maxlength="80" placeholder="Benutzername oder Freundes-Code" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" required aria-label="Benutzername oder Freundes-Code"><button class="secondary" type="submit">Anfragen</button></form>
-    </div>` : `<h2>Freund hinzufügen</h2>${dbHint()}`;
+    </div>`;
+  else addFriend = `<div class="addbar friendadd"><button class="secondary withicon" data-act="friendshare">${icon('share')}Freundes-Link teilen</button>
+      <button class="${open === 'ask' ? 'secondary on' : 'secondary'} withicon" data-act="fform" data-v="ask" aria-expanded="${open === 'ask'}">${icon('user')}Mit Benutzername anfragen</button>
+      ${D.ideasOk ? `<button class="${open === 'noapp' ? 'secondary on' : 'secondary'} withicon" data-act="fform" data-v="noapp" aria-expanded="${open === 'noapp'}">${icon('plus')}Person ohne App</button>` : ''}</div>
+    ${open === 'ask' ? fAsk : open === 'noapp' ? fNoApp : ''}${newCode}`;
   const out = friendReqsOut();
   const outHtml = out.length ? `<h2>Gesendete Anfragen</h2><ul class="rows plain">${out.map(r => `<li class="row-item">
       <span class="row-main"><span class="row-title">${esc(r.user ? nameOf(r.user) : '@' + r.name)}</span><span class="row-meta">wartet · ${esc(ago(r.at))}</span></span>
       <button class="ghost sm" data-act="freqwithdraw" data-id="${r.id}">Zurückziehen</button></li>`).join('')}</ul>` : '';
-  const add = D.ideasOk ? `<h2>Person ohne App</h2>
-    <div class="card"><form data-form="newfriend" class="inline"><input name="name" maxlength="40" placeholder="Name, z. B. Oma Ruth" required><button class="secondary" type="submit">Hinzufügen</button></form></div>` : '';
+  const add = open === 'all' && fNoApp ? `<h2>Person ohne App</h2>${fNoApp}` : '';
   const body = list.length
-    ? `${friendReqCards()}<ul class="rows">${list.map(row).join('')}</ul>${addFriend}${outHtml}${add}<p class="foot">${icon('eyeoff')}<span>Leute ohne App, Spitznamen und deine Ideen siehst nur du.</span></p>`
+    ? `${friendReqCards()}<ul class="rows${list.length > 5 ? ' scrollbox' : ''}" data-box="f">${list.map(row).join('')}</ul>${addFriend}${outHtml}${add}<p class="foot">${icon('eyeoff')}<span>Leute ohne App, Spitznamen und deine Ideen siehst nur du.</span></p>`
     : friendReqCards() + emptyState('people', 'Noch niemand hier', 'Hier erscheinen alle aus deinen Gruppen, deine Freunde und Leute ohne App, die du selbst anlegst.') + addFriend + outHtml + add;
-  return shell('Freunde', groupsSwitch('f') + body, { tab: 'groups', sub: list.length ? plural(list.length, 'Person', 'Personen') : '' });
+  return shell('Freunde', groupsSwitch('f') + body + plusMenu('f'), { tab: 'groups', plus: 'f', sub: list.length ? plural(list.length, 'Person', 'Personen') : '' });
 }
 
 // Spitzname vergeben (nur für mich sichtbar); leer = entfernen
@@ -1638,7 +1718,7 @@ function viewFriend(key) {
         <input name="name" maxlength="40" required value="${esc(p.name)}" aria-label="Name"><button class="secondary sm" type="submit">Umbenennen</button></form>`);
     if (!linked && cands.length) parts.push(`<form data-form="iplink" data-id="${p.id}" class="stack tight">
         <label>Ist ${esc(name)} inzwischen dabei?<select name="u" required><option value="">Person auswählen</option>${opts}</select></label>
-        <button class="secondary sm" type="submit">Verknüpfen</button></form>`);
+        <button class="secondary sm" type="submit">Mit Konto verbinden</button></form>`);
     if (p.linked_user) parts.push(`<button class="ghost sm" data-act="ipunlink" data-id="${p.id}">Verknüpfung mit dem Konto lösen</button>`);
     del = ui.confirmDelIp === p.id
       ? `<button class="danger" data-act="delip" data-id="${p.id}">${ideas.length ? `Mit ${plural(ideas.length, 'Idee', 'Ideen')} löschen` : 'Wirklich löschen'}</button>`
@@ -1719,9 +1799,7 @@ function viewIdeaForm(id, key) {
   const done = neu ? '' : (i.done_at
     ? `<button type="button" class="secondary" data-act="ideadone" data-id="${id}">Doch nicht besorgt</button>`
     : `<button type="button" class="secondary withicon" data-act="ideadone" data-id="${id}">${icon('check')}Besorgt</button>`);
-  const del = neu ? '' : (ui.confirmDel === id
-    ? `<button type="button" class="danger" data-act="delidea" data-id="${id}">Wirklich löschen</button>`
-    : `<button type="button" class="ghost danger-text" data-act="askdel" data-id="${id}">Idee löschen</button>`);
+  const del = neu ? '' : `<button type="button" class="ghost danger-text" data-act="delidea" data-id="${id}">Idee löschen</button>`;
   const doneNote = i.done_at ? `<div class="banner">${icon('check')}<span><b>Besorgt am ${esc(fmtDay(i.done_at))}</b></span></div>` : '';
   return shell(neu ? 'Neue Idee' : 'Idee bearbeiten', `${doneNote}
     <form data-form="idea" data-id="${id}" class="stack">
@@ -1729,6 +1807,8 @@ function viewIdeaForm(id, key) {
         <label>Für wen?<select name="person" required>${sel}</select></label>
         <label class="${cur === 'new' ? '' : 'hide'}" id="pnew">Name<input name="pname" maxlength="40" autocomplete="off" placeholder="z. B. Oma Ruth"></label>
         <label>Was könnte passen?<input name="title" maxlength="120" required value="${esc(i.title)}" placeholder="z. B. Fotobuch vom Urlaub"></label>
+      </div>
+      ${fold('i-more-' + id, 'more', 't1', 'Mehr Angaben', 'Link, Preis, Kategorie, Notiz', `<div class="card fields">
         <div class="field"><div class="fieldhead"><label for="f-url">Link</label><button type="button" class="link withicon" data-act="pasteurl">${icon('paste')}Einfügen</button></div>
           <input id="f-url" name="url" inputmode="url" autocomplete="off" value="${esc(i.url || '')}" placeholder="https://"></div>
         <div class="two">
@@ -1736,7 +1816,7 @@ function viewIdeaForm(id, key) {
           <label>Kategorie<select name="category">${cats}</select></label>
         </div>
         <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Wo gesehen, Größe, Farbe">${esc(i.note || '')}</textarea></label>
-      </div>
+      </div>`, !!(i.url || i.price != null || i.category || i.note))}
       <button class="primary" type="submit">Speichern</button>
       ${done}
       ${del}
@@ -2113,17 +2193,15 @@ function viewWishForm(id) {
       <label class="check"><input type="radio" name="fvis" value="some" ${allF ? '' : 'checked'}><span>Nur ausgewählte Freunde<small>Ohne Auswahl sieht ihn kein direkter Freund</small></span></label>
       <div class="sub ${allF ? 'hide' : ''}" id="fsel">${fboxes}</div>
     </div>` : '';
-  const vis = gs.length || fids.length ? `<h2>Sichtbar für</h2>${gCard}${fCard}`
+  const vis = gs.length || fids.length ? `<h2>Wer darf das sehen?</h2>${gCard}${fCard}`
     : `<p class="foot">${icon('people')}<span>Sichtbar für alle Gruppen und Freunde, die später dazukommen.</span></p>`;
   const cats = '<option value="">Keine</option>' + CATS.map(([k, n]) => `<option value="${k}" ${w.category === k ? 'selected' : ''}>${esc(n)}</option>`).join('');
   const prios = PRIOS.map(([v, n]) => `<label><input type="radio" name="prio" value="${v}" ${prio(w) === v ? 'checked' : ''}><span>${n}</span></label>`).join('');
   const have = id === 'neu' ? '' : (w.have_at
     ? `<button type="button" class="secondary" data-act="unhave" data-id="${id}">Doch wieder wünschen</button>`
-    : `<button type="button" class="secondary withicon" data-act="have" data-id="${id}">${icon('check')}Hab ich schon</button>`);
+    : `<button type="button" class="secondary withicon" data-act="have" data-id="${id}">${icon('check')}Habe ich schon bekommen</button>`);
   const haveNote = w.have_at ? `<div class="banner">${icon('check')}<span><b>Hast du schon seit ${esc(fmtDay(w.have_at))}</b><small>Die anderen sehen das und können es nicht mehr reservieren.</small></span></div>` : '';
-  const del = id === 'neu' ? '' : (ui.confirmDel === id
-    ? `<button type="button" class="danger" data-act="delwish" data-id="${id}">Wirklich löschen</button>`
-    : `<button type="button" class="ghost danger-text" data-act="askdel" data-id="${id}">Wunsch löschen</button>`);
+  const del = id === 'neu' ? '' : `<button type="button" class="ghost danger-text" data-act="delwish" data-id="${id}">Wunsch löschen</button>`;
   return shell(id === 'neu' ? 'Neuer Wunsch' : 'Wunsch bearbeiten', `
     ${haveNote}
     <form data-form="wish" data-id="${id}" class="stack">
@@ -2131,14 +2209,15 @@ function viewWishForm(id) {
         <label>Was wünschst du dir?<input name="title" maxlength="120" required value="${esc(w.title)}" placeholder="z. B. Kochbuch „Simple“"></label>
         <div class="field"><div class="fieldhead"><label for="f-url">Link</label><button type="button" class="link withicon" data-act="pasteurl">${icon('paste')}Einfügen</button></div>
           <input id="f-url" name="url" inputmode="url" autocomplete="off" value="${esc(w.url || '')}" placeholder="https://"></div>
-        <div class="two">
-          <label>Preis<span class="money"><input name="price" inputmode="decimal" autocomplete="off" maxlength="12" value="${esc(priceInput(w.price))}" placeholder="ca."><span>€</span></span></label>
-          <label>Kategorie<select name="category">${cats}</select></label>
-        </div>
-        <div class="field"><span class="flabel">Wie sehr wünschst du es dir?</span><div class="seg">${prios}</div></div>
-        <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Größe, Farbe, Alternativen">${esc(w.note || '')}</textarea></label>
+        <label class="pricefield">Preis<span class="money"><input name="price" inputmode="decimal" autocomplete="off" maxlength="12" value="${esc(priceInput(w.price))}" placeholder="ca."><span>€</span></span></label>
       </div>
-      ${vis}
+      ${fold('w-more-' + id, 'more', 't1', 'Mehr Angaben', 'Notiz, Kategorie, wer es sehen darf', `<div class="stack">
+      <div class="card fields">
+        <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Größe, Farbe, Alternativen">${esc(w.note || '')}</textarea></label>
+        <label>Kategorie<select name="category">${cats}</select></label>
+        <div class="field"><span class="flabel">Wie sehr wünschst du es dir?</span><div class="seg">${prios}</div></div>
+      </div>
+      ${vis}</div>`, !!(w.note || w.category || prio(w) !== 2 || !w.all_groups || w.all_friends === false))}
       <button class="primary" type="submit">Speichern</button>
       ${have}
       ${del}
@@ -2158,19 +2237,25 @@ function viewGroups() {
       <span class="row-main"><span class="row-title">${esc(g.name)}</span><span class="row-meta">${occLine(g) ? esc(occLine(g)) + ' · ' : ''}${plural(ms.length, 'Mitglied', 'Mitglieder')} · ${plural(n, 'Wunsch', 'Wünsche')}${nnew ? ` · <b class="newtxt">${nnew} neu</b>` : ''}</span></span>
       ${nnew ? countBadge(nnew) : avStack(ms)}${icon('chev', 'chev')}</a></li>`;
   }).join('');
-  const forms = `
-    <h2>Neue Gruppe</h2>
-    <div class="card"><form data-form="newgroup" class="inline"><input name="name" maxlength="40" placeholder="Name, z. B. Familie" required><button class="primary" type="submit">Anlegen</button></form></div>
+  // 1.17: Formulare erst nach Tippen (ohne Gruppen gleich offen), Liste als Fenster mit 5 Gruppen
+  const open = gs.length || archived.length ? ui.gform : 'all';
+  const fNew = `<div class="card"><form data-form="newgroup" class="inline"><input name="name" maxlength="40" placeholder="Name, z. B. Familie" aria-label="Name der Gruppe" required><button class="primary" type="submit">Anlegen</button></form></div>`;
+  const fJoin = `<div class="card"><form data-form="join" class="inline"><input name="code" maxlength="12" placeholder="ABCD-1234" aria-label="Einladungscode" autocapitalize="characters" autocomplete="off" required><button class="secondary" type="submit">Beitreten</button></form></div>`;
+  const forms = open === 'all'
+    ? `<h2>Neue Gruppe</h2>${fNew}
     ${D.bdgOk ? `<a class="link withicon bdnewlink" href="#/geburtstag/neu">${icon('cake')}Geburtstagsgruppe für jemanden</a>` : ''}
-    <h2>Mit Code beitreten</h2>
-    <div class="card"><form data-form="join" class="inline"><input name="code" maxlength="12" placeholder="ABCD-1234" autocapitalize="characters" autocomplete="off" required><button class="secondary" type="submit">Beitreten</button></form></div>`;
+    <h2>Einladungscode eingeben</h2>${fJoin}`
+    : `<div class="addbar"><button class="${open === 'new' ? 'secondary on' : 'secondary'} withicon" data-act="gform" data-v="new" aria-expanded="${open === 'new'}">${icon('plus')}Neue Gruppe</button>
+      <button class="${open === 'join' ? 'secondary on' : 'secondary'} withicon" data-act="gform" data-v="join" aria-expanded="${open === 'join'}">${icon('key')}Einladungscode eingeben</button></div>
+    ${open === 'new' ? fNew : open === 'join' ? fJoin : ''}
+    ${D.bdgOk ? `<a class="link withicon bdnewlink" href="#/geburtstag/neu">${icon('cake')}Geburtstagsgruppe für jemanden</a>` : ''}`;
   const arch = archived.length ? fold('g-archiv', 'cake', 't0', 'Archiv', plural(archived.length, 'Geburtstagsgruppe', 'Geburtstagsgruppen'),
     `<ul class="rows plain">${archived.map(bdayRow).join('')}</ul>`) : '';
   const body = gs.length
-    ? `<ul class="rows">${rows}</ul>${arch}${forms}`
+    ? `<ul class="rows${gs.length > 5 ? ' scrollbox' : ''}" data-box="g">${rows}</ul>${arch}${forms}`
     : archived.length ? arch + forms
     : emptyState('people', 'Noch in keiner Gruppe', 'Lege eine Gruppe an und lade andere mit dem Code ein, oder tritt einer bestehenden Gruppe bei.') + forms;
-  return shell('Gruppen', groupsSwitch('g') + body, { tab: 'groups', sub: gs.length ? plural(gs.length, 'Gruppe', 'Gruppen') : '' });
+  return shell('Gruppen', groupsSwitch('g') + body + plusMenu('g'), { tab: 'groups', plus: 'g', sub: gs.length ? plural(gs.length, 'Gruppe', 'Gruppen') : '' });
 }
 
 /* ---------- Geburtstagsgruppen (1.16) ---------- */
@@ -2212,7 +2297,7 @@ function giCard(g, i) {
   let pill = '', acts = '';
   if (!i.taken_by) {
     pill = '<span class="pill open">Offen</span>';
-    if (!g.archived_at) acts = `<button class="primary sm" data-act="gtake" data-id="${i.id}" data-s="reserviert">Übernehme ich</button>`;
+    if (!g.archived_at) acts = `<button class="primary sm" data-act="gtake" data-id="${i.id}" data-s="reserviert">Ich schenke das</button>`;
   } else if (mine) {
     pill = `<span class="pill green">${icon(bought ? 'check' : 'lock')}${bought ? 'Von dir gekauft' : 'Übernimmst du'}</span>`;
     if (!g.archived_at) acts = (bought
@@ -2455,7 +2540,7 @@ function viewPerson(gid, uid) {
       if (pool && inPool(w.id)) acts = `<a class="secondary sm" href="#/gemeinsam/${w.id}${ret}">Gemeinsames Geschenk</a>`;
     } else if (!r) {
       pill = '<span class="pill open">Offen</span>';
-      acts = `<button class="primary sm" data-act="reserve" data-id="${w.id}">Reservieren</button>`
+      acts = `<button class="primary sm" data-act="reserve" data-id="${w.id}">Ich schenke das</button>`
         + (D.poolsOk ? `<a class="secondary sm withicon" href="#/gemeinsam/${w.id}/neu${ret}">${icon('people')}Gemeinsam</a>` : '');
     } else if (pool) {
       const mine = inPool(w.id);
@@ -2496,7 +2581,7 @@ function viewPerson(gid, uid) {
       ${cats.length >= 2 ? `<div class="chips">${cats.map(c => chip('cat', c[0], c[1], f.cat === c[0])).join('')}</div>` : ''}` : '';
   const filtered = f.free || f.price || f.cat;
   const list = shown.length ? `<ul class="cards">${shown.map(card).join('')}</ul>`
-    : (ws.length ? `<p class="empty-line">Nichts passt zum Filter. <button class="link" data-act="filtreset">Filter aufheben</button></p>` : '');
+    : (ws.length ? `<p class="empty-line">Nichts passt zum Filter. <button class="link" data-act="filtreset">Alle anzeigen</button></p>` : '');
   const hadHtml = had.length && !filtered ? `<h2>Hat ${esc(name)} schon</h2><ul class="cards">${had.map(card).join('')}</ul>` : '';
 
   const head = `<section class="profile">${avatar(uid, 'lg')}<div class="profile-main">
@@ -2567,7 +2652,7 @@ function viewWichteln(gid) {
   const opts = '<option value="">Person</option>' + ms.map(u => `<option value="${u}">${esc(who(u))}</option>`).join('');
   const exForm = ms.length >= 2 ? `<form data-form="wex" data-id="${gid}" class="card stack">
       <div class="pair"><select name="a" aria-label="Erste Person" required>${opts}</select><span class="muted">und</span><select name="b" aria-label="Zweite Person" required>${opts}</select></div>
-      <button class="secondary" type="submit">Ausschluss hinzufügen</button>
+      <button class="secondary" type="submit">Zwei, die sich nicht ziehen sollen</button>
     </form>` : '';
   let action;
   if (!st.drawn) {
@@ -2716,7 +2801,7 @@ function sbControl(f, next) {
 }
 
 function sbMissing() {
-  return shell('Steckbrief', `<div class="banner warn">${icon('shield')}<span><b>Noch nicht eingerichtet</b><small>Für den Steckbrief muss die neue schema.sql einmal im Supabase SQL Editor ausgeführt werden.</small></span></div>`, { tab: 'acc', back: ['#/konto', 'Konto'] });
+  return shell('Steckbrief', `<div class="banner warn">${icon('shield')}<span><b>Noch nicht eingerichtet</b><small>Für den Steckbrief muss die neue schema.sql einmal im Supabase SQL Editor ausgeführt werden.</small></span></div>`, { tab: 'list', back: ['#/liste', 'Wunschliste'] });
 }
 
 function viewCard(parts) {
@@ -2745,7 +2830,7 @@ function viewQuiz(i) {
         <p class="quizq">Dein Steckbrief steht</p>
         <p class="small">${c} von ${n} Fragen beantwortet. Sichtbar für: ${esc(sbVisText('all'))}.</p>
         <p class="small muted">Ändern, ergänzen oder einzelne Teile verbergen kannst du jederzeit.</p></section>
-      <a class="primary" href="#/steckbrief">Zum Steckbrief</a>`, { tab: 'acc', back, eyebrow: 'Steckbrief' });
+      <a class="primary" href="#/steckbrief">Zum Steckbrief</a>`, { tab: 'list', back, eyebrow: 'Steckbrief' });
   }
   const f = SB_FIELDS[i];
   const sec = sbSec(f[0].split('.')[0]);
@@ -2761,7 +2846,7 @@ function viewQuiz(i) {
     <section class="card quiz q-${f[1]}"><p class="quizcount">${pos} von ${inSec.length}</p>
       <p class="quizq">${esc(f[2])}</p>${sbControl(f, next)}</section>
     <div class="quiznav"><a class="ghost" href="${next}">Überspringen</a>${go}</div>
-    <p class="linkrow"><a class="link" href="#/steckbrief">Später weiter</a></p>`, { tab: 'acc', back, eyebrow: `Steckbrief · ${i + 1} von ${n}` });
+    <p class="linkrow"><a class="link" href="#/steckbrief">Später weiter</a></p>`, { tab: 'list', back, eyebrow: `Steckbrief · ${i + 1} von ${n}` });
 }
 
 function viewCardHome() {
@@ -2773,7 +2858,7 @@ function viewCardHome() {
         <p class="small">${n} kurze Fragen, fast alle mit einem Tipp beantwortet. Alles lässt sich überspringen und später ändern.</p></section>
       <a class="primary" href="#/steckbrief/quiz/0">Los geht’s</a>
       <p class="foot">${icon('eye')}<span>Sichtbar für alle aus deinen Gruppen und deine Freunde. Einzelne Teile kannst du später verbergen.</span></p>`,
-    { tab: 'acc', back: ['#/konto', 'Konto'] });
+    { tab: 'list', back: ['#/liste', 'Wunschliste'] });
   }
   const stamps = (D.card && D.card.stamps) || {};
   const staleSizes = sbFieldsOf('sizes').filter(f => sbFilled(data[f[0]]) && sbStale(stamps, f[0]));
@@ -2800,7 +2885,7 @@ function viewCardHome() {
   const del = ui.confirmDelCard
     ? `<button class="danger" data-act="sbdelete">Steckbrief wirklich löschen</button>`
     : `<button class="ghost danger-text" data-act="sbaskdel">Steckbrief löschen</button>`;
-  return shell('Steckbrief', `${stale}${top}${vis}${secs}<div class="card stack">${del}</div>`, { tab: 'acc', back: ['#/konto', 'Konto'], sub: 'So wissen die anderen, was zu dir passt.' });
+  return shell('Steckbrief', `${stale}${top}${vis}${secs}<div class="card stack">${del}</div>`, { tab: 'list', back: ['#/liste', 'Wunschliste'], sub: 'So wissen die anderen, was zu dir passt.' });
 }
 
 function viewCardSec(s) {
@@ -2815,7 +2900,7 @@ function viewCardSec(s) {
       <div class="sbffoot">${st && sbFilled(data[f[0]]) ? `<span class="muted small">Zuletzt geändert im ${esc(fmtMonth(st))}</span>` : '<span></span>'}${sbVisLink(f[0], ret)}</div></section>`;
   }).join('');
   return shell(name, `<div class="sbsecbar">${sbVisLink(s, ret)}<a class="link" href="#/steckbrief/quiz/${first}">Als Quiz</a></div>${items}`,
-    { tab: 'acc', back: ['#/steckbrief', 'Steckbrief'], eyebrow: 'Steckbrief' });
+    { tab: 'list', back: ['#/steckbrief', 'Steckbrief'], eyebrow: 'Steckbrief' });
 }
 
 function viewCardVis(item) {
@@ -2836,7 +2921,7 @@ function viewCardVis(item) {
       </div>
       ${parent ? `<p class="foot">${icon('eye')}<span>${parent}</span></p>` : ''}
       <button class="primary" type="submit">Speichern</button></form>`;
-  return shell('Wer sieht das?', body, { tab: 'acc', back: [ret, 'Zurück'], eyebrow: sbItemName(item) });
+  return shell('Wer sieht das?', body, { tab: 'list', back: [ret, 'Zurück'], eyebrow: sbItemName(item) });
 }
 
 /* Ansicht für andere (Freundesseite) */
@@ -2869,14 +2954,13 @@ function cardFold(uid, name) {
   return fold('fr-card', 'idcard', 't1', 'Steckbrief', sbSummary(c), inner, true);
 }
 
-// Eintrag unter Konto (und dezent unter der eigenen Wunschliste, solange er nicht fertig ist)
+// Eintrag auf der eigenen Wunschliste (seit 1.17, vorher unter Konto)
 function cardLink(listHint) {
   if (!D.cardOk) return '';
   const n = SB_FIELDS.length, c = sbCount(sbMine());
-  if (listHint && c >= n) return '';
   const sub = !c ? 'Größen, Lieblingsdinge und was lieber nicht' : (c < n ? `${c} von ${n} beantwortet` : 'Vollständig');
   return `<a class="card row-item sblink ${listHint ? 'inlist' : ''}" href="#/steckbrief"><span class="tile t1">${icon('idcard')}</span>
-      <span class="row-main"><span class="row-title">${listHint ? 'Dein Steckbrief' : 'Steckbrief'}</span><span class="row-meta">${sub}</span></span>${icon('chev', 'chev')}</a>`;
+      <span class="row-main"><span class="row-title">Mein Steckbrief</span><span class="row-meta">${sub}</span></span>${icon('chev', 'chev')}</a>`;
 }
 // Auf der Liste einer Person in der Gruppe: Hinweis auf ihren Steckbrief (Allergien zuerst)
 function cardHint(gid, uid) {
@@ -2961,8 +3045,13 @@ function viewAccount() {
     <h2>Profil</h2>
     <div class="card"><form data-form="name" class="inline"><input name="name" maxlength="40" value="${esc(myName())}" required><button class="secondary" type="submit">Name ändern</button></form></div>
     ${bdSection()}
+    <h2>Hilfe</h2>
+    <ul class="rows plain"><li><a class="row-item" href="#/hilfe"><span class="tile plain">${icon('book')}</span>
+      <span class="row-main"><span class="row-title">So funktioniert es</span><span class="row-meta">Kurze Antworten auf die wichtigsten Fragen</span></span>${icon('chev', 'chev')}</a></li>
+      <li><button class="row-item" data-act="tourshow"><span class="tile plain">${icon('play')}</span>
+      <span class="row-main"><span class="row-title">Erste Schritte noch mal zeigen</span><span class="row-meta">Die drei Karten vom ersten Start</span></span></button></li></ul>
+    ${fold('k-more', 'more', 't1', 'Weitere Einstellungen', 'Aussehen, Anmeldung, Benachrichtigungen, Abmelden', `<div class="foldin">
     ${bdaySwitch()}
-    ${cardLink()}
     ${themeSection()}
     ${acc ? `<h2>Anmeldung</h2>${codeCard()}` : ''}
     ${adminSection()}
@@ -2987,6 +3076,7 @@ function viewAccount() {
         ? `<button class="danger withicon" id="delacc" data-act="delaccdlg">${icon('trash')}Sicher?</button>`
         : `<button class="ghost danger-text withicon" id="delacc" data-act="askdelacc">${icon('trash')}Konto löschen</button>`}
     </div>
+    </div>`)}
     <p class="version">Geschenkeliste ${VERSION}</p>
     ${ui.delAccDlg ? delAccDialog() : ''}`, { tab: 'acc' });
 }
@@ -3028,6 +3118,40 @@ function delAccDialog() {
       <button class="danger" data-act="delacc">Ja, löschen</button>
       <button class="ghost" data-act="delacccancel">Abbrechen</button>
     </div></div>`;
+}
+
+/* ---------- Erste Schritte und Hilfe (1.17) ---------- */
+const TOUR = [
+  ['gift', 'Deine Wunschliste', 'Schreib auf, was du dir wünschst.'],
+  ['people', 'Gruppen und Freunde', 'Lade deine Familie in eine Gruppe ein oder füge Freunde hinzu.'],
+  ['lock', 'Geheim schenken', 'Tippe bei anderen auf „Ich schenke das“. Die Person sieht es nicht.'],
+];
+function tourDialog() {
+  const i = Math.min(Math.max((S.tour || 1) - 1, 0), TOUR.length - 1);
+  const [ic, title, text] = TOUR[i];
+  const last = i === TOUR.length - 1;
+  return `<div class="modalwrap"><div class="modalbg"></div>
+    <div class="modal card stack tour" role="dialog" aria-modal="true" aria-labelledby="tourt" aria-describedby="tourd">
+      <span class="tile t${i} modalicon">${icon(ic)}</span>
+      <h2 class="modaltitle" id="tourt">${title}</h2>
+      <p id="tourd">${text}</p>
+      <ol class="tourdots" aria-label="Schritt ${i + 1} von ${TOUR.length}">${TOUR.map((_, k) => `<li class="${k === i ? 'cur' : ''}"></li>`).join('')}</ol>
+      <button class="primary" data-act="${last ? 'tourskip' : 'tournext'}">${last ? 'Los geht’s' : 'Weiter'}</button>
+      ${last ? '' : '<button class="ghost" data-act="tourskip">Überspringen</button>'}
+    </div></div>`;
+}
+const HELP = [
+  ['Wie lege ich einen Wunsch an?', 'Tippe unten auf Wunschliste und dann auf „Wunsch hinzufügen“. Ein Name reicht. Link und Preis helfen den anderen, genau das Richtige zu finden.'],
+  ['Wie komme ich in eine Gruppe?', 'Lass dir von jemandem aus der Gruppe den Einladungslink schicken und öffne ihn. Oder tippe unter Gruppen oben auf das Plus und dann auf „Einladungscode eingeben“. Eine eigene Gruppe legst du über das Plus mit „Neue Gruppe“ an und lädst dann mit „Einladen“ andere ein.'],
+  ['Wer sieht meine Wünsche?', 'Alle aus deinen Gruppen und deine Freunde. Bei jedem Wunsch kannst du unter „Mehr Angaben“ bei „Wer darf das sehen?“ einstellen, wer ihn sieht.'],
+  ['Sieht jemand, was ich ihm schenke?', 'Nein. Wenn du bei einem Wunsch auf „Ich schenke das“ tippst, sehen das nur die anderen, damit nichts doppelt gekauft wird. Die beschenkte Person sieht es nie.'],
+  ['Was mache ich, wenn ich mein Passwort vergessen habe?', 'Tippe bei der Anmeldung auf „Passwort vergessen“. Mit deinem Benutzernamen und deinem Wiederherstellungscode legst du ein neues Passwort fest. Hast du noch keinen Benutzernamen, sichere dein Konto unter Konto, solange du angemeldet bist.'],
+  ['Wie schenken wir etwas zusammen?', 'Öffne den Wunsch einer Person und tippe auf „Gemeinsam“. Dann wählst du, wen du fragst. Wer mitmacht, gibt einen Teil dazu, und einer kauft.'],
+];
+function viewHelp() {
+  const items = HELP.map(([q, a], k) => `<details class="fold helpq" id="help-${k}"${folds['help-' + k] ? ' open' : ''}><summary><span class="foldsum"><b>${q}</b></span>${icon('chev', 'chev')}</summary>
+      <div class="card prose"><p>${a}</p></div></details>`).join('');
+  return shell('So funktioniert es', items, { tab: 'acc', back: ['#/konto', 'Konto'] });
 }
 
 /* ---------- Router ---------- */
@@ -3076,14 +3200,30 @@ function render() {
   else if (parts[0] === 'liste') html = viewList();
   else if (parts[0] === 'konto' || parts[0] === 'mehr') html = viewAccount();
   else if (parts[0] === 'steckbrief') html = viewCard(parts);
+  else if (parts[0] === 'hilfe') html = viewHelp();
   else if (parts[0] === 'gemeinsam' && parts[1]) html = parts[2] ? viewPoolForm(parts[1], parts[2]) : viewPool(parts[1]);
   else html = viewHome();
   const y = render.lastKey === location.hash ? window.scrollY : 0;
+  const box = render.lastKey === location.hash && $('.scrollbox');
+  const boxY = box ? box.scrollTop : 0;
+  if (S.tour) html += tourDialog();
   app.innerHTML = html;
+  fitBoxes(boxY);
   applyMarks();
   paintBadges();
   if (render.lastKey === location.hash) window.scrollTo(0, y); else window.scrollTo(0, 0);
   render.lastKey = location.hash;
+}
+
+// Listen-Fenster (1.17): genau 5 Zeilen hoch, die sechste schaut ein Stück heraus
+function fitBoxes(y) {
+  $$('.scrollbox').forEach(b => {
+    const li = [...b.children].slice(0, 5);
+    if (li.length < 5) return;
+    const h = li.reduce((n, x) => n + x.getBoundingClientRect().height, 0);
+    if (h) b.style.maxHeight = Math.round(h + 26) + 'px';
+    b.scrollTop = y || 0;
+  });
 }
 
 // Freundes-Link vor der Anmeldung geöffnet: danach die Bestätigungsseite zeigen (1.14)
@@ -3207,6 +3347,7 @@ const forms = {
     const j = await sb('/auth/v1/signup', { method: 'POST', auth: false, body: { data: {} } });
     setSession(j);
     S.pendingName = name;
+    S.tour = 1;   // 1.17: Erste Schritte nach dem Anlegen
     saveState();
     await afterLogin();
   },
@@ -3498,6 +3639,38 @@ const forms = {
   }
 };
 
+/* Löschen mit Rückgängig (1.17): Wunsch oder Idee verschwindet sofort, gelöscht wird nach 8 Sekunden */
+const UNDO_MS = 8000;
+const undoMs = () => window.GL_UNDO_MS || UNDO_MS;   // Tests setzen das kürzer
+let pendingDel = null;   // { kind: 'w' | 'i', id, timer }
+function hidePendingDel() {
+  if (!pendingDel) return;
+  if (pendingDel.kind === 'w') D.wishes = D.wishes.filter(w => w.id !== pendingDel.id);
+  else D.ideas = (D.ideas || []).filter(i => i.id !== pendingDel.id);
+}
+async function commitDel(keepalive) {
+  const p = pendingDel;
+  if (!p) return;
+  pendingDel = null;
+  clearTimeout(p.timer);
+  try {
+    await sb(`/rest/v1/${p.kind === 'w' ? 'wishes' : 'ideas'}?id=eq.${p.id}`, { method: 'DELETE', keepalive });
+  } catch (e) {
+    if (!keepalive) toast(e.message);
+  }
+  if (!keepalive) sync(true);
+}
+async function startDel(kind, id, msg, to) {
+  if (pendingDel) await commitDel();
+  pendingDel = { kind, id, timer: setTimeout(() => commitDel(), undoMs()) };
+  hidePendingDel();
+  ui = {};
+  go(to);
+  toastUndo(msg, undoMs());
+}
+window.addEventListener('pagehide', () => { if (pendingDel) commitDel(true); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && pendingDel) commitDel(true); });
+
 const acts = {
   sync: () => sync(),
   /* Anlässe und Geburtstage (1.15) */
@@ -3524,6 +3697,7 @@ const acts = {
   },
   /* Direkte Freundschaft (1.14) */
   friendshare: async () => {
+    if (ui.plus) { delete ui.plus; render(); }
     if (!D.fcode) D.fcode = await sb('/rest/v1/rpc/friend_code', { method: 'POST', body: {} });
     const link = friendLink(D.fcode);
     const text = `Lass uns bei der Geschenkeliste befreundet sein, dann sehen wir gegenseitig unsere Wünsche. Freundes-Code: ${fmtFriendCode(D.fcode)}`;
@@ -3638,6 +3812,13 @@ const acts = {
   asklogout: async () => { ui.confirmLogout = 1; render(); },
   askdelacc: async () => { ui.confirmDelAcc = 1; render(); },
   delaccdlg: async () => { ui.delAccDlg = 1; render(); const b = $('.modal .ghost'); if (b) b.focus(); },
+  tournext: async () => { S.tour = (S.tour || 1) + 1; saveState(); render(); },
+  tourskip: async () => { delete S.tour; saveState(); render(); },
+  tourshow: async () => { S.tour = 1; saveState(); render(); },
+  plus: async el => { ui.plus = el.dataset.v; render(); const b = $('.plusmenu .row-item'); if (b) b.focus(); },
+  plusclose: async el => { delete ui.plus; if (el.tagName === 'A') location.hash = el.getAttribute('href'); else render(); },
+  gform: async el => openForm('gform', el.dataset.v),
+  fform: async el => openForm('fform', el.dataset.v),
   delacccancel: async () => { delete ui.delAccDlg; delete ui.confirmDelAcc; render(); },
   delacc: async () => {
     const uid = me();
@@ -3695,12 +3876,15 @@ const acts = {
     if (at) earlyToast();
     sync(true);
   },
-  delidea: async el => {
-    await sb('/rest/v1/ideas?id=eq.' + el.dataset.id, { method: 'DELETE' });
-    ui = {};
+  delidea: async el => startDel('i', el.dataset.id, 'Idee gelöscht.', backParam() || '#/ideen'),
+  undo: async () => {
+    const p = pendingDel;
+    if (!p) return;
+    clearTimeout(p.timer);
+    pendingDel = null;
+    $('#toast').classList.remove('show', 'withundo');
     await sync(true);
-    toast('Gelöscht.');
-    go(backParam() || '#/ideen');
+    toast(p.kind === 'w' ? 'Der Wunsch ist wieder da.' : 'Die Idee ist wieder da.');
   },
   askdelip: async el => { ui.confirmDelIp = el.dataset.id; render(); },
   delip: async el => {
@@ -3716,13 +3900,7 @@ const acts = {
     toast('Verknüpfung gelöst.');
     go('#/f/p:' + el.dataset.id);
   },
-  delwish: async el => {
-    await sb('/rest/v1/wishes?id=eq.' + el.dataset.id, { method: 'DELETE' });
-    ui = {};
-    await sync(true);
-    toast('Gelöscht.');
-    go('#/liste');
-  },
+  delwish: async el => startDel('w', el.dataset.id, 'Wunsch gelöscht.', '#/liste'),
   manage: async el => { ui.manage = el.dataset.id; render(); },
   askleave: async el => { ui.confirmLeave = el.dataset.id; render(); },
   // Geburtstagsgruppen (1.16)
@@ -3970,6 +4148,50 @@ document.addEventListener('submit', e => {
   const fn = forms[f.dataset.form];
   if (fn) run(() => fn(f));
 });
+/* ---------- Wischen (1.17) ----------
+   Vom linken Rand nach rechts: zurück (nur als installierte App, im Browser macht das der Browser selbst).
+   Auf den vier Hauptseiten links/rechts wischen: zum nächsten bzw. vorigen Bereich. */
+const TAB_ORDER = ['#/', '#/liste', '#/gruppen', '#/konto'];
+const tabOfHash = h => {
+  const p = route()[0] || '';
+  if (p === '') return 0;
+  if (p === 'liste' || p === 'ideen') return 1;
+  if (p === 'gruppen' || p === 'freunde') return 2;
+  if (p === 'konto' || p === 'mehr') return 3;
+  return -1;
+};
+const standalone = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+let swipe = null;
+document.addEventListener('touchstart', e => {
+  swipe = null;
+  if (e.touches.length !== 1 || !S.session || $('.modalwrap')) return;
+  const t = e.touches[0], el = e.target;
+  if (el.closest('input, textarea, select, .seg, .scrollx, [data-noswipe]')) return;
+  swipe = { x: t.clientX, y: t.clientY, at: Date.now(), edge: t.clientX < 28 };
+}, { passive: true });
+document.addEventListener('touchend', e => {
+  const s0 = swipe;
+  swipe = null;
+  if (!s0 || !e.changedTouches.length) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - s0.x, dy = t.clientY - s0.y;
+  if (Date.now() - s0.at > 700 || Math.abs(dx) < 80 || Math.abs(dx) < 2 * Math.abs(dy)) return;
+  const back = $('.topbar .back');
+  if (back) {
+    if (s0.edge && dx > 0 && standalone()) location.hash = back.getAttribute('href');
+    return;
+  }
+  const i = tabOfHash();
+  if (i < 0) return;
+  const j = i + (dx < 0 ? 1 : -1);
+  if (j < 0 || j >= TAB_ORDER.length) return;
+  document.body.classList.remove('swl', 'swr');
+  void document.body.offsetWidth;
+  document.body.classList.add(dx < 0 ? 'swl' : 'swr');
+  setTimeout(() => document.body.classList.remove('swl', 'swr'), 260);
+  location.hash = TAB_ORDER[j];
+}, { passive: true });
+
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (!el) return;

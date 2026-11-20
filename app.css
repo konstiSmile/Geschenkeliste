@@ -744,3 +744,32 @@ a.hero { text-decoration: none; }
 .bdayhead .tile.lg { width: 64px; height: 64px; }
 .gidea .wish-head .giedit { margin-left: auto; align-self: flex-start; }
 .recap .tile { flex: none; }
+
+/* ---------- 1.17 Einfach bedienen ---------- */
+.topbtns { flex: none; display: flex; gap: 10px; }
+.scrollbox { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.addbar { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
+.addbar > button { justify-content: flex-start; }
+.secondary.on { background: var(--accent-soft); }
+.addbar + .card, .addbar + .card + .newcode, .addbar + .newcode { margin-top: 10px; }
+.addbar ~ .bdnewlink { margin-top: 14px; }
+button.row-item { width: 100%; border: 0; background: none; box-shadow: none; text-align: left; font: inherit; border-radius: 0; }
+.plusmenu .rows { box-shadow: none; }
+.tourdots { list-style: none; display: flex; gap: 8px; justify-content: center; margin: 4px 0 6px; padding: 0; }
+.tourdots li { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+.tourdots li.cur { background: var(--accent); }
+.tour p { font-size: 17px; color: var(--text); }
+.helpq:first-child { margin-top: 6px; }
+.helpq > summary { min-height: 56px; }
+.foldin > h2:first-child, .foldin > .rows:first-child { margin-top: 0; }
+.pricefield .money { max-width: 200px; }
+form.stack > .fold { margin-top: 2px; }
+form.stack > .fold > .stack > h2 { margin-top: 18px; }
+#toast.withundo { pointer-events: auto; display: flex; align-items: center; gap: 14px; text-align: left; padding: 6px 6px 6px 18px; }
+#toast .undo { flex: none; min-height: 44px; padding: 0 14px; border-radius: 11px; border: 2px solid var(--bg); background: var(--bg); color: var(--text); font: inherit; font-weight: 800; }
+@keyframes swl { from { transform: translateX(28px); opacity: .4; } to { transform: none; opacity: 1; } }
+@keyframes swr { from { transform: translateX(-28px); opacity: .4; } to { transform: none; opacity: 1; } }
+body.swl main { animation: swl .22s ease-out; }
+body.swr main { animation: swr .22s ease-out; }
+@media (prefers-reduced-motion: reduce) { body.swl main, body.swr main { animation: none; } }
+#toast.withundo span { white-space: nowrap; }
