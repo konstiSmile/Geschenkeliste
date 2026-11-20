@@ -1,22 +1,25 @@
-# Geschenkeliste – Übergabe (Stand 20.11.2026, Version 1.16)
+# Geschenkeliste – Übergabe (Stand 20.11.2026, Version 1.17)
 
-**Projekt-Übergabe:** Doc „Übergabe 5 – Geschenkeliste“ im Projekt (Thema 5, Chats heißen „5.<Nr> …“, letzter Chat 5.23). Startsatz: „Thema 5 (Geschenkeliste), Chat 5.<Nr>. Weiter laut ‚Übergabe 5 – Geschenkeliste‘. Nächster Schritt: …“
+**Projekt-Übergabe:** Doc „Übergabe 5 – Geschenkeliste“ im Projekt (Thema 5, Chats heißen „5.<Nr> …“, letzter Chat 5.24). Startsatz: „Thema 5 (Geschenkeliste), Chat 5.<Nr>. Weiter laut ‚Übergabe 5 – Geschenkeliste‘. Nächster Schritt: …“
 
 ## ZUERST (Wunsch des Nutzers)
 Bevor etwas besprochen oder gebaut wird: To-do-Liste aus „Offen beim Nutzer“ als kurze nummerierte Liste zum Abhaken geben, warten, kurz nachfragen, ob etwas aufgefallen ist. Repo erst danach klonen.
 
 ## Stand
-- Version **1.16** (Geburtstagsgruppen für jemanden, auch ohne App) gepusht, Commit `0f60ca4`, Cache `geschenkeliste-v25`, `?v=25`.
-- Tests: 496 RLS, 338 Playwright, 14 Edge Function, 9 Service Worker, alle grün.
+- Version **1.17** (Einfach bedienen) gepusht, Commit `5ba8114`, Cache `geschenkeliste-v26`, `?v=26` (Symbole `?v=24`). Keine schema.sql-Änderung.
+- Tests: 496 RLS, 363 Playwright, 14 Edge Function, 9 Service Worker, alle grün.
 - App: https://konstismile.github.io/Geschenkeliste/ (Claude kann github.io nicht abrufen).
 
 ## Offen beim Nutzer (To-do-Liste)
-1. Aktuelle `supabase/schema.sql` im Supabase SQL-Editor komplett ausführen: https://raw.githubusercontent.com/konstiSmile/Geschenkeliste/main/supabase/schema.sql (Rohlink immer mitgeben, Wunsch des Nutzers).
-2. App neu laden, unter Konto prüfen: Version 1.16.
-3. Geburtstagsgruppe ausprobieren: Gruppen → Freunde → Person öffnen → „Geburtstagsgruppe anlegen“.
+1. App neu laden, unter Konto → Weitere Einstellungen ganz unten prüfen: Version 1.17.
+2. Plus oben unter Gruppen und unter Freunde ausprobieren.
+3. Wischen ausprobieren: auf Start, Wunschliste, Gruppen, Konto nach links/rechts; in der App vom Home-Bildschirm vom linken Rand nach rechts = zurück. Stört es, Bescheid geben.
+4. Einen Wunsch löschen und „Rückgängig“ tippen.
+5. Unter Konto „So funktioniert es“ und „Erste Schritte noch mal zeigen“ ansehen.
+6. In der Anleitung (Claude Doc) den Vorschlag „Neu mit Version 1.17“ annehmen.
 
 ## Nächster Schritt
-Paket „Einfach bedienen“ (Nutzer über 60): ganze App durchgehen, Ergebnis als Auswahlliste vorlegen, dann bauen. Danach den Nutzer die übrigen Ideen sortieren lassen (Liste in `docs/fahrplan.md`).
+Nutzer die übrigen Ideen sortieren lassen (Pakete und Später-Liste in `docs/fahrplan.md`). Leitlinie: nicht überfordern, nichts Neues auf den Hauptseiten ohne Not.
 
 ## So arbeiten (sparsam)
 - Technik in `docs/technik.md` (nur passende Abschnitte lesen, `grep -n "^## "`), Planung in `docs/fahrplan.md`, Design in `docs/design-pop.md`.

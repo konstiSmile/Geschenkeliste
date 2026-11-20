@@ -1,4 +1,4 @@
-# Geschenkeliste – Fahrplan (Stand 20.11.2026, Version 1.16)
+# Geschenkeliste – Fahrplan (Stand 20.11.2026, Version 1.17)
 
 Ein Paket = ein Chat. Jedes Paket ist für sich nutzbar. „schema.sql“ heißt: nach dem Push einmal im Supabase SQL-Editor ausführen. Details zu gebauten Paketen: `docs/technik.md`.
 
@@ -18,17 +18,17 @@ Ein Paket = ein Chat. Jedes Paket ist für sich nutzbar. „schema.sql“ heißt
 | 1.14 | 15 | Direkte Freundschaft, Spitznamen | `9977b5a` |
 | 1.15 | 9a | Anlass pro Gruppe, Geburtstag, Schenklisten, neues App-Symbol | `9d3c5cb` |
 | 1.16 | 9b | Geburtstagsgruppe für jemanden (auch ohne App), gemeinsame Ideen, Archiv | `0f60ca4` |
+| 1.17 | Einfach bedienen | Klarere Wörter, Plus-Menü, Gruppenfenster, Mehr Angaben, Erste Schritte, Hilfe, Rückgängig, Wischen | `5ba8114` |
 
 Gestrichen: Pakete 7 und 8 (Chats), Absprachen laufen über WhatsApp und Co.
 
 ## Offen für den Nutzer
-- schema.sql ausführen (1.16), App neu laden, Version 1.16 prüfen, Geburtstagsgruppe ausprobieren
+- App neu laden, Version 1.17 prüfen, Neues ausprobieren (keine schema.sql nötig)
 - Familie einladen, Wichteln eintragen und auslosen (Anfang Dezember)
 
-## Als Nächstes: Paket „Einfach bedienen“
-Die App nutzen auch Leute über 60, die nicht so gut mit Technik können. Ganze App durchgehen: größere Schrift und Knöpfe, klarere Beschriftungen, weniger auf einmal, kurze Hilfe beim ersten Start, evtl. Einfach-Modus. Ergebnis als Auswahlliste für den Nutzer, dann bauen. Gilt ab sofort auch für jedes neue Paket: zurückhaltend, nichts Neues auf den Hauptseiten ohne Not.
-
-Reihenfolge laut Nutzer (20.11.): erst 9b (erledigt), dann „Einfach bedienen“. Die übrigen Ideen (unten) hat er noch nicht sortiert, danach fragen.
+## Als Nächstes
+Nutzer die übrigen Ideen sortieren lassen (Pakete unten und Später-Liste). Für jedes neue Paket gilt: zurückhaltend, nichts Neues auf den Hauptseiten ohne Not, nicht überfordern.
+Aus „Einfach bedienen“ nicht gewählt (bei Bedarf später): größere Schrift, Schalter „Große Schrift“, dunklere Hinweistexte, größere Knöpfe, Einfach-Modus, Wischen auf Zeilen.
 
 ## Weitere Pakete
 - **Paket 10 – Farbthemen** (S): weitere Themen, Wahl im Profil speichern, Thema pro Anlass. Vorher klären: Standarddesign und zwei Zusatzthemen (Namen, Stimmung)
