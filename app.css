@@ -725,3 +725,11 @@ label.check small { display: block; font-size: 13px; color: var(--text-3); font-
 .banner.dupname .inline input { background: var(--card); }
 .friendinvite .ghost { margin-top: 6px; }
 .friendinvite .small { max-width: 34ch; }
+
+/* Anlässe und Geburtstage (1.15) */
+a.hero { text-decoration: none; }
+.stack label select { margin-top: 6px; font-weight: 400; }
+.bdrow { display: grid; grid-template-columns: 1fr 1.8fr 1.2fr; gap: 8px; }
+.bdrow input, .bdrow select { min-width: 0; }
+.bdline { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.bdline .ic { width: 16px; height: 16px; flex: none; }

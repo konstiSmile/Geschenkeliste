@@ -886,7 +886,7 @@ create table if not exists public.push_outbox (
 alter table public.push_outbox add column if not exists info jsonb;
 alter table public.push_outbox drop constraint if exists push_outbox_kind_check;
 alter table public.push_outbox add constraint push_outbox_kind_check
-  check (kind in ('wish', 'member', 'draw', 'have', 'remind', 'test', 'pool', 'friend'));
+  check (kind in ('wish', 'member', 'draw', 'have', 'remind', 'test', 'pool', 'friend', 'bday'));
 create index if not exists push_outbox_pending_idx on public.push_outbox(id) where sent_at is null;
 create index if not exists push_outbox_tag_idx on public.push_outbox(user_id, tag, created_at);
 
@@ -1093,6 +1093,11 @@ begin
   if to_regclass('public.gift_pools') is not null then
     execute 'select public.pool_due($1)' into k using today;
   end if;
+  -- Seit 1.15: Erinnerungen für alle Anlässe der Gruppen und für Geburtstage
+  if to_regprocedure('public.occasion_due(date)') is not null then
+    execute 'select public.occasion_due($1)' into n using today;
+    return coalesce(n, 0) + coalesce(k, 0);
+  end if;
   if d not in (14, 7, 1) then return coalesce(k, 0); end if;
   insert into public.push_outbox (user_id, kind, ref, tag, extra)
     select distinct m.u, 'remind', extract(year from today)::int || '-' || d, 'remind', d::text
@@ -1191,23 +1196,35 @@ begin
                    else 'Gib die Reservierung frei, falls du es noch nicht gekauft hast.' end,
       'url', '#/');
   elsif p_kind = 'remind' then
-    select o.extra::int into k from public.push_outbox o
+    select o.extra::int, o.group_id into k, gid from public.push_outbox o
       where o.user_id = p_user and o.tag = p_tag and o.kind = 'remind' order by o.id desc limit 1;
+    -- Seit 1.15: Anlass einer Gruppe (ohne Gruppe = Heiligabend)
+    gname := null;
+    if gid is not null then
+      if not exists (select 1 from public.members m where m.group_id = gid and m.user_id = p_user) then return null; end if;
+      execute 'select case when occ_kind = ''sonstiges'' then occ_name
+                           when occ_kind = ''geburtstag'' then coalesce(occ_name, ''Geburtstag '' || name) end
+               from public.groups where id = $1' into gname using gid;
+      if gname is null then return null; end if;
+    end if;
     select count(*) into n from public.reservations r join public.wishes w on w.id = r.wish_id
       where r.user_id = p_user and r.status = 'reserviert' and w.have_at is null;
     return jsonb_build_object('kind', 'remind', 'tag', p_tag, 'badge', 0,
-      'title', case when k = 1 then 'Morgen ist Heiligabend' else 'Noch ' || k || ' Tage bis Heiligabend' end,
+      'title', case when gname is not null then (case when k = 1 then 'Morgen: ' else 'Noch ' || k || ' Tage: ' end) || gname
+                    when k = 1 then 'Morgen ist Heiligabend' else 'Noch ' || k || ' Tage bis Heiligabend' end,
       'body', case
         when n = 1 then 'Ein reserviertes Geschenk ist noch nicht besorgt.'
         when n > 1 then n || ' reservierte Geschenke sind noch nicht besorgt.'
         when not exists (select 1 from public.wishes w where w.owner = p_user and w.have_at is null)
           then 'Deine Wunschliste ist noch leer. Trag ein, worüber du dich freuen würdest.'
         else 'Schau nach, ob deine Wunschliste vollständig ist.' end,
-      'url', '#/');
+      'url', case when gid is not null then '#/g/' || gid else '#/' end);
   elsif p_kind = 'pool' then
     return public.pool_message(p_user, p_tag, p_delta);
   elsif p_kind = 'friend' then
     return public.friend_message(p_user, p_tag, p_delta);
+  elsif p_kind = 'bday' then
+    return public.bday_message(p_user, p_tag);
   elsif p_kind = 'test' then
     return jsonb_build_object('kind', 'test', 'tag', p_tag, 'badge', 0,
       'title', 'Benachrichtigungen sind eingeschaltet',
@@ -2476,3 +2493,254 @@ grant execute on function public.friend_code(boolean), public.friend_peek(text),
   public.friend_request(text), public.friend_request_user(uuid), public.friend_answer(uuid, boolean),
   public.friend_withdraw(uuid), public.friend_remove(uuid), public.friend_requests_list(),
   public.pool_candidates(uuid) to authenticated;
+
+-- =====================================================================
+-- Anlässe und Geburtstage (Version 1.15, Paket 9a)
+-- Anlass pro Gruppe (Weihnachten, Geburtstag, Sonstiges), Geburtstag unter Konto,
+-- eigene Schenklisten (nur für mich), Erinnerungen für alle Anlässe statt nur Heiligabend.
+-- =====================================================================
+
+-- Anlass einer Gruppe. weihnachten: 24.12., jedes Jahr. geburtstag: Tag und Monat aus occ_date, jedes Jahr,
+-- Name freiwillig. sonstiges: eigener Name, einmaliges Datum. Ohne Art: kein Anlass.
+do $$ begin
+  if not exists (select 1 from information_schema.columns
+                 where table_schema = 'public' and table_name = 'groups' and column_name = 'occ_kind') then
+    alter table public.groups add column occ_kind text, add column occ_name text, add column occ_date date;
+    -- Bisher waren alle Gruppen Weihnachtsgruppen
+    update public.groups set occ_kind = 'weihnachten';
+  end if;
+end $$;
+alter table public.groups drop constraint if exists groups_occ_check;
+alter table public.groups add constraint groups_occ_check check (
+  (occ_kind is null and occ_name is null and occ_date is null)
+  or (occ_kind = 'weihnachten' and occ_name is null and occ_date is null)
+  or (occ_kind = 'geburtstag' and occ_date is not null and (occ_name is null or char_length(occ_name) between 1 and 40))
+  or (occ_kind = 'sonstiges' and occ_date is not null and char_length(occ_name) between 1 and 40));
+
+-- Geburtstag (Jahr freiwillig). Sehen dürfen ihn alle, die mich kennen (Gruppen, Freunde).
+create table if not exists public.birthdays (
+  user_id uuid primary key default auth.uid() references auth.users(id) on delete cascade,
+  month smallint not null check (month between 1 and 12),
+  day smallint not null check (day between 1 and case when month = 2 then 29 when month in (4, 6, 9, 11) then 30 else 31 end),
+  year smallint check (year between 1900 and 2100),
+  updated_at timestamptz not null default now()
+);
+
+-- Schenkliste: wem ich zu einem Anlass etwas schenke, mit Haken. Personen aus der Ideenliste.
+create table if not exists public.gift_lists (
+  id uuid primary key default gen_random_uuid(),
+  owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  name text not null check (char_length(name) between 1 and 40),
+  occ_date date,
+  created_at timestamptz not null default now()
+);
+create index if not exists gift_lists_owner_idx on public.gift_lists(owner);
+
+create table if not exists public.gift_list_people (
+  list_id uuid not null references public.gift_lists(id) on delete cascade,
+  person uuid not null references public.idea_people(id) on delete cascade,
+  done_at timestamptz,
+  added_at timestamptz not null default now(),
+  primary key (list_id, person)
+);
+create index if not exists gift_list_people_person_idx on public.gift_list_people(person);
+
+-- ---------- Hilfen ----------
+
+-- Nächster Jahrestag ab p_today (29.2. in Nicht-Schaltjahren am 28.2.)
+create or replace function public.next_yearly(p_month int, p_day int, p_today date) returns date
+language plpgsql immutable set search_path = '' as $$
+declare
+  y int;
+  d date;
+begin
+  for i in 0..1 loop
+    y := extract(year from p_today)::int + i;
+    d := make_date(y, p_month, case when p_month = 2 and p_day = 29
+                                     and not (y % 4 = 0 and (y % 100 <> 0 or y % 400 = 0)) then 28 else p_day end);
+    if d >= p_today then return d; end if;
+  end loop;
+  return d;
+end $$;
+
+-- Nächster Termin eines Gruppen-Anlasses (null = vorbei oder keiner)
+create or replace function public.occ_next(p_kind text, p_date date, p_today date) returns date
+language sql immutable set search_path = '' as $$
+  select case p_kind
+    when 'weihnachten' then public.next_yearly(12, 24, p_today)
+    when 'geburtstag' then public.next_yearly(extract(month from p_date)::int, extract(day from p_date)::int, p_today)
+    when 'sonstiges' then case when p_date >= p_today then p_date end
+  end;
+$$;
+
+-- ---------- Prüfungen ----------
+
+create or replace function public.gift_lists_check() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'UPDATE' and new.owner <> old.owner then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if tg_op = 'INSERT' and (select count(*) from public.gift_lists where owner = new.owner) >= 50 then
+    raise exception 'Höchstens 50 Schenklisten' using errcode = '54000';
+  end if;
+  return new;
+end $$;
+drop trigger if exists gift_lists_check on public.gift_lists;
+create trigger gift_lists_check before insert or update on public.gift_lists
+  for each row execute function public.gift_lists_check();
+
+-- Nur eigene Personen in eigene Listen, höchstens 200 pro Liste
+create or replace function public.gift_list_people_check() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'UPDATE' and (new.list_id <> old.list_id or new.person <> old.person) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.gift_lists l where l.id = new.list_id and l.owner = auth.uid())
+     or not exists (select 1 from public.idea_people p where p.id = new.person and p.owner = auth.uid()) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if tg_op = 'INSERT' and (select count(*) from public.gift_list_people where list_id = new.list_id) >= 200 then
+    raise exception 'Höchstens 200 Personen pro Liste' using errcode = '54000';
+  end if;
+  return new;
+end $$;
+drop trigger if exists gift_list_people_check on public.gift_list_people;
+create trigger gift_list_people_check before insert or update on public.gift_list_people
+  for each row execute function public.gift_list_people_check();
+
+-- ---------- Aktionen der App ----------
+
+-- Anlass der Gruppe setzen (jedes Mitglied, wie Umbenennen). p_kind leer = kein Anlass.
+create or replace function public.set_group_occasion(p_group uuid, p_kind text, p_name text, p_date date) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not public.is_member(p_group) then raise exception 'Kein Mitglied'; end if;
+  p_name := nullif(btrim(coalesce(p_name, '')), '');
+  p_kind := nullif(p_kind, '');
+  if p_kind is null then
+    update public.groups set occ_kind = null, occ_name = null, occ_date = null where id = p_group;
+    return;
+  end if;
+  if p_kind not in ('weihnachten', 'geburtstag', 'sonstiges') then raise exception 'Anlass ungültig'; end if;
+  if p_kind = 'weihnachten' then
+    p_name := null; p_date := null;
+  elsif p_date is null then
+    raise exception 'Bitte ein Datum angeben';
+  elsif p_kind = 'sonstiges' and p_name is null then
+    raise exception 'Bitte einen Namen für den Anlass angeben';
+  end if;
+  if char_length(p_name) > 40 then raise exception 'Name zu lang'; end if;
+  if p_kind = 'sonstiges' and p_date < (now() at time zone 'Europe/Berlin')::date then
+    raise exception 'Das Datum liegt in der Vergangenheit';
+  end if;
+  update public.groups set occ_kind = p_kind, occ_name = p_name, occ_date = p_date where id = p_group;
+end $$;
+
+-- ---------- Benachrichtigungen ----------
+
+-- Täglich aus push_daily: Gruppen-Anlässe 14, 7 und 1 Tag vorher, Geburtstage 7 Tage vorher und am Tag.
+-- Weihnachten kommt nur einmal, auch wenn man in mehreren Weihnachtsgruppen ist.
+create or replace function public.occasion_due(p_today date) returns int
+language plpgsql security definer set search_path = '' as $$
+declare
+  n int := 0;
+  k int;
+begin
+  insert into public.push_outbox (user_id, kind, ref, tag, group_id, extra)
+    select m.user_id, 'remind',
+           case when g.occ_kind = 'weihnachten' then 'xmas:' else 'g:' || g.id || ':' end || g.nx || ':' || (g.nx - p_today),
+           case when g.occ_kind = 'weihnachten' then 'remind' else 'remind-' || g.id end,
+           case when g.occ_kind = 'weihnachten' then null else g.id end,
+           (g.nx - p_today)::text
+    from (select id, occ_kind, public.occ_next(occ_kind, occ_date, p_today) as nx
+          from public.groups where occ_kind is not null) g
+    join public.members m on m.group_id = g.id
+    where g.nx - p_today in (14, 7, 1) and public.push_wants(m.user_id, 'remind')
+    on conflict do nothing;
+  get diagnostics k = row_count;
+  n := n + k;
+  insert into public.push_outbox (user_id, kind, ref, tag, actor, extra)
+    select r.u, 'bday', 'b:' || b.user_id || ':' || b.nx || ':' || (b.nx - p_today), 'bday-' || b.user_id,
+           b.user_id, (b.nx - p_today)::text
+    from (select user_id, public.next_yearly(month, day, p_today) as nx from public.birthdays) b
+    cross join lateral (
+      select m2.user_id as u from public.members m1 join public.members m2 on m2.group_id = m1.group_id
+        where m1.user_id = b.user_id
+      union
+      select case when f.a = b.user_id then f.b else f.a end from public.friendships f
+        where b.user_id in (f.a, f.b)) r
+    where b.nx - p_today in (7, 0) and r.u <> b.user_id and public.push_wants(r.u, 'remind')
+    on conflict do nothing;
+  get diagnostics k = row_count;
+  return n + k;
+end $$;
+
+-- Text der Geburtstags-Erinnerung (beim Versand, mit Spitzname)
+create or replace function public.bday_message(p_user uuid, p_tag text) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  who uuid;
+  k int;
+  b public.birthdays;
+  nx date;
+  age int;
+  nm text;
+begin
+  select o.actor, o.extra::int into who, k from public.push_outbox o
+    where o.user_id = p_user and o.tag = p_tag and o.kind = 'bday' order by o.id desc limit 1;
+  select * into b from public.birthdays where user_id = who;
+  if not found then return null; end if;
+  if not (public.are_friends(who, p_user) or exists (
+      select 1 from public.members m1 join public.members m2 on m2.group_id = m1.group_id
+      where m1.user_id = who and m2.user_id = p_user)) then
+    return null;
+  end if;
+  nx := public.next_yearly(b.month, b.day, (now() at time zone 'Europe/Berlin')::date);
+  age := case when b.year is not null then extract(year from nx)::int - b.year end;
+  nm := public.push_name(who, p_user);
+  return jsonb_build_object('kind', 'bday', 'tag', p_tag, 'badge', 0,
+    'title', case when k = 0 then nm || ' hat heute Geburtstag' else nm || ' hat in ' || k || ' Tagen Geburtstag' end,
+    'body', case
+      when k = 0 and age is not null then nm || ' wird heute ' || age || '.'
+      when k = 0 then 'Zeit zum Gratulieren.'
+      when age is not null then nm || ' wird am ' || to_char(nx, 'FMDD.FMMM.') || ' ' || age || '. Schau in die Wunschliste.'
+      else 'Am ' || to_char(nx, 'FMDD.FMMM.') || '. Schau in die Wunschliste.' end,
+    'url', '#/p/' || who);
+end $$;
+
+-- ---------- Zugriffsregeln ----------
+
+alter table public.birthdays enable row level security;
+alter table public.gift_lists enable row level security;
+alter table public.gift_list_people enable row level security;
+
+drop policy if exists "geburtstage lesen" on public.birthdays;
+drop policy if exists "geburtstag anlegen" on public.birthdays;
+drop policy if exists "geburtstag ändern" on public.birthdays;
+drop policy if exists "geburtstag löschen" on public.birthdays;
+create policy "geburtstage lesen" on public.birthdays for select to authenticated
+  using (user_id = auth.uid() or public.knows(user_id));
+create policy "geburtstag anlegen" on public.birthdays for insert to authenticated
+  with check (user_id = auth.uid());
+create policy "geburtstag ändern" on public.birthdays for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "geburtstag löschen" on public.birthdays for delete to authenticated
+  using (user_id = auth.uid());
+
+drop policy if exists "schenklisten" on public.gift_lists;
+create policy "schenklisten" on public.gift_lists for all to authenticated
+  using (owner = auth.uid()) with check (owner = auth.uid());
+drop policy if exists "schenklisten personen" on public.gift_list_people;
+create policy "schenklisten personen" on public.gift_list_people for all to authenticated
+  using (exists (select 1 from public.gift_lists l where l.id = list_id and l.owner = auth.uid()))
+  with check (exists (select 1 from public.gift_lists l where l.id = list_id and l.owner = auth.uid()));
+
+revoke all on public.birthdays, public.gift_lists, public.gift_list_people from anon, authenticated;
+grant select, insert, update, delete on public.birthdays, public.gift_lists, public.gift_list_people to authenticated;
+
+revoke execute on function public.gift_lists_check(), public.gift_list_people_check(),
+  public.set_group_occasion(uuid, text, text, date), public.occasion_due(date), public.bday_message(uuid, text),
+  public.next_yearly(int, int, date), public.occ_next(text, date, date) from public, anon, authenticated;
+grant execute on function public.set_group_occasion(uuid, text, text, date) to authenticated;
