@@ -1,7 +1,7 @@
 // Geschenkeliste – Service Worker
 // Bei jeder Änderung CACHE erhöhen.
-const CACHE = 'geschenkeliste-v24';
-const SHELL = ['./', 'index.html', 'app.js?v=24', 'app.css?v=24', 'theme.js?v=24', 'fonts/fredoka.woff', 'fonts/nunito.woff', 'manifest.webmanifest',
+const CACHE = 'geschenkeliste-v25';
+const SHELL = ['./', 'index.html', 'app.js?v=25', 'app.css?v=25', 'theme.js?v=25', 'fonts/fredoka.woff', 'fonts/nunito.woff', 'manifest.webmanifest',
   'icons/icon-192.png?v=24', 'icons/icon-512.png?v=24', 'icons/apple-touch-icon.png?v=24', 'icons/badge-96.png'];
 
 self.addEventListener('install', e => {

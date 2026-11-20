@@ -733,3 +733,14 @@ a.hero { text-decoration: none; }
 .bdrow input, .bdrow select { min-width: 0; }
 .bdline { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .bdline .ic { width: 16px; height: 16px; flex: none; }
+
+/* Geburtstagsgruppen (1.16) */
+.bdrow.b2 { grid-template-columns: 1fr 1.8fr; }
+.link.bdnewlink { display: inline-flex; align-items: center; gap: 6px; margin: 14px 4px 0; }
+.link.bdaylink { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 0; }
+.bdnewlink .ic, .bdaylink .ic { width: 18px; height: 18px; }
+.rows.bdswitch { margin-top: 14px; }
+.bdswitch .row-meta { white-space: normal; overflow: visible; text-overflow: clip; }
+.bdayhead .tile.lg { width: 64px; height: 64px; }
+.gidea .wish-head .giedit { margin-left: auto; align-self: flex-start; }
+.recap .tile { flex: none; }

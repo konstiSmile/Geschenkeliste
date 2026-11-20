@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.15';
+const VERSION = '1.16';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -222,6 +222,11 @@ function errText(j, status) {
   if (/Hat die Person schon/.test(m)) return 'Das hat die Person schon.';
   if (/Aufteilung ungültig|Mindestzahl ungültig/.test(m)) return 'Bitte die Angaben prüfen.';
   if (/Zu viele Gruppen/.test(m)) return 'Du hast schon 20 Gruppen angelegt.';
+  if (/Das übernimmt schon jemand/.test(m)) return 'Das übernimmt schon jemand anderes.';
+  if (/Gruppe ist archiviert/.test(m)) return 'Die Gruppe ist archiviert.';
+  if (/Geburtstagsgruppen bleiben Geburtstag/.test(m)) return 'Eine Geburtstagsgruppe bleibt beim Geburtstag.';
+  if (/Bitte ein Datum angeben/.test(m)) return 'Wähle Tag und Monat.';
+  if (/Bitte einen Namen angeben/.test(m)) return 'Gib einen Namen ein.';
   if (/anonymous/i.test(m) && /disabled/i.test(m)) return 'Start ohne Mail ist in Supabase noch nicht eingeschaltet.';
   return m ? 'Fehler: ' + m : 'Fehler (' + status + ')';
 }
@@ -323,10 +328,11 @@ async function passwordLogin(username, password) {
 async function sync(quiet) {
   if (!S.session) return;
   try {
-    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards, pools, shares, fr, wf, fq, nick, bd, gl, glp] = await Promise.all([
+    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards, pools, shares, fr, wf, fq, nick, bd, gl, glp, gi, bdo] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
-      // Anlass pro Gruppe ab 1.15
-      sb('/rest/v1/groups?select=id,name,code,created_by,created_at,occ_kind,occ_name,occ_date&order=created_at')
+      // Anlass pro Gruppe ab 1.15, Geburtstagsgruppen ab 1.16
+      sb('/rest/v1/groups?select=id,name,code,created_by,created_at,occ_kind,occ_name,occ_date,bday_user,bday_name,bday_person,archived_at,bday_recap&order=created_at')
+        .catch(() => sb('/rest/v1/groups?select=id,name,code,created_by,created_at,occ_kind,occ_name,occ_date&order=created_at'))
         .catch(() => sb('/rest/v1/groups?select=id,name,code,created_by,created_at&order=created_at')),
       sb('/rest/v1/members?select=group_id,user_id,joined_at&order=joined_at'),
       // Preis, Kategorie, Wichtigkeit, „Hab ich schon“ ab 1.7; vorher ohne diese Spalten
@@ -366,7 +372,10 @@ async function sync(quiet) {
       // Anlässe und Geburtstage ab 1.15
       sb('/rest/v1/birthdays?select=user_id,month,day,year').catch(() => null),
       sb('/rest/v1/gift_lists?select=id,name,occ_date,created_at&order=created_at').catch(() => null),
-      sb('/rest/v1/gift_list_people?select=list_id,person,done_at,added_at&order=added_at').catch(() => null)
+      sb('/rest/v1/gift_list_people?select=list_id,person,done_at,added_at&order=added_at').catch(() => null),
+      // Geburtstagsgruppen ab 1.16
+      sb('/rest/v1/group_ideas?select=id,group_id,created_by,title,url,note,price,taken_by,status,created_at&order=created_at').catch(() => null),
+      sb('/rest/v1/bday_optout?select=user_id').catch(() => null)
     ]);
     const ps = admin === true ? await sb('/rest/v1/rpc/push_status', { method: 'POST', body: {} }).catch(() => null) : null;
     if (!S.session) return;
@@ -379,6 +388,7 @@ async function sync(quiet) {
       pools: pools || [], shares: shares || [], poolsOk: !!(pools && shares),
       fr: fr || [], wf: wf || [], fq: fq && fq.in ? fq : { in: [], out: [] }, nick: nick || [], friendsOk: !!(fr && wf && fq && nick),
       occOk: !!(groups[0] ? 'occ_kind' in groups[0] : bd), bd: bd || [], bdOk: !!bd, gl: gl || [], glp: glp || [], glOk: !!(gl && glp),
+      gi: gi || [], bdgOk: !!(gi && bdo), bdOff: !!(bdo && bdo.length),
       fcode: D.fcode, at: Date.now(), loaded: true };
     S.cache = { uid: me(), D };
     saveState();
@@ -391,6 +401,11 @@ async function sync(quiet) {
 
 /* ---------- Abgeleitete Daten ---------- */
 const myGroups = () => D.groups.filter(g => D.members.some(m => m.group_id === g.id && m.user_id === me()));
+/* Geburtstagsgruppen (1.16): verbinden die Mitglieder nicht wie normale Gruppen */
+const isBday = g => !!(g && g.bday_name);
+const normGroups = () => myGroups().filter(g => !isBday(g));
+const bdayGroupsFor = uid => myGroups().filter(g => isBday(g) && !g.archived_at && g.bday_user === uid);
+const bdayName = g => (g.bday_user && (realName(g.bday_user) || nickOf(g.bday_user)) ? nameOf(g.bday_user) : g.bday_name);
 /* Direkte Freundschaft (1.14) */
 const friendIds = () => (D.fr || []).map(f => (f.a === me() ? f.b : f.a));
 const isFriend = uid => !!uid && uid !== me() && (D.fr || []).some(f => f.a === uid || f.b === uid);
@@ -704,6 +719,7 @@ function occNext(g) {
   return d >= todayDate() ? d : null;
 }
 function occTitle(g) {
+  if (isBday(g)) return 'Geburtstag von ' + bdayName(g);
   if (g.occ_kind === 'weihnachten') return 'Heiligabend';
   if (g.occ_kind === 'geburtstag') return g.occ_name || 'Geburtstag';
   return g.occ_name || 'Anlass';
@@ -717,11 +733,13 @@ function upcoming() {
   const xmas = myGroups().find(g => g.occ_kind === 'weihnachten');
   myGroups().forEach(g => {
     if (g.occ_kind === 'weihnachten' && g !== xmas) return;
+    if (g.archived_at) return;
     const d = occNext(g);
-    if (d) out.push({ d, title: occTitle(g), sub: g.occ_kind === 'weihnachten' ? '' : g.name, href: g.occ_kind === 'weihnachten' ? '#/gruppen' : '#/g/' + g.id });
+    if (d) out.push({ d, title: occTitle(g), sub: g.occ_kind === 'weihnachten' || isBday(g) ? '' : g.name, href: g.occ_kind === 'weihnachten' ? '#/gruppen' : '#/g/' + g.id });
   });
   (D.bd || []).forEach(b => {
     if (b.user_id !== me() && !known(b.user_id)) return;
+    if (bdayGroupsFor(b.user_id).length) return; // steht schon mit der Geburtstagsgruppe drin
     const d = bdNext(b);
     const age = bdAge(b, d);
     out.push({ d, title: b.user_id === me() ? 'Dein Geburtstag' : `Geburtstag von ${nameOf(b.user_id)}`, sub: age && b.user_id !== me() ? `wird ${age}` : '', href: b.user_id === me() ? '#/konto' : '#/p/' + b.user_id });
@@ -734,7 +752,7 @@ function upcoming() {
 }
 
 function groupFor(w) {
-  const g = myGroups().find(g => membersOf(g.id).some(m => m.user_id === w.owner) && visibleIn(w, g.id));
+  const g = normGroups().find(g => membersOf(g.id).some(m => m.user_id === w.owner) && visibleIn(w, g.id));
   return g ? g.id : null;
 }
 // Wo man einen fremden Wunsch reserviert: Liste in der Gruppe, sonst die Liste der Person (1.14)
@@ -1342,7 +1360,7 @@ const ideasFor = pid => (D.ideas || []).filter(i => i.person === pid);
 // Leute aus meinen Gruppen (ohne mich), nach Namen
 function groupPeople() {
   const ids = new Set();
-  myGroups().forEach(g => membersOf(g.id).forEach(m => { if (m.user_id !== me()) ids.add(m.user_id); }));
+  normGroups().forEach(g => membersOf(g.id).forEach(m => { if (m.user_id !== me()) ids.add(m.user_id); }));
   return [...ids].sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'de'));
 }
 const inMyGroups = uid => groupPeople().includes(uid);
@@ -1481,7 +1499,7 @@ function friendOf(key) {
   return { uid, p, key: uid ? 'u:' + uid : 'p:' + p.id, name: uid ? nameOf(uid) : ipName(p) };
 }
 const friendKey = p => (p.linked_user && known(p.linked_user) ? 'u:' + p.linked_user : 'p:' + p.id);
-const sharedGroups = uid => myGroups().filter(g => membersOf(g.id).some(m => m.user_id === uid));
+const sharedGroups = uid => normGroups().filter(g => membersOf(g.id).some(m => m.user_id === uid));
 function friendsList() {
   const kp = knownPeople().map(uid => ({ key: 'u:' + uid, uid, p: ipFor(uid) || null, name: nameOf(uid) }));
   const own = (D.ip || []).filter(p => !(p.linked_user && known(p.linked_user))).map(p => ({ key: 'p:' + p.id, uid: null, p, name: ipName(p) }));
@@ -1558,7 +1576,7 @@ function viewFriend(key) {
   const where = uid ? [shared.map(g => g.name).join(', '), friend ? 'befreundet' : ''].filter(Boolean).join(' · ') : (p.linked_user ? 'Nicht mehr in deinen Gruppen' : 'Ohne App');
   const real = uid && nickOf(uid) && realName(uid) && realName(uid) !== nickOf(uid) ? `<p class="row-meta">Heißt in der App ${esc(realName(uid))}</p>` : '';
   const head = `<section class="profile">${uid ? avatar(uid, 'lg') : ipAvatar(p, 'lg')}<div class="profile-main">
-      <p class="row-meta">${esc(where)}</p>${real}
+      <p class="row-meta">${esc(where)}</p>${real}${uid ? bdLine(uid) : ''}${bdayLink(f)}
       ${uid && ws.length ? `<progress max="${ws.length}" value="${ws.length - nFree}"></progress>` : ''}</div></section>`;
   // Gleicher Name wie jemand anderes und noch kein Spitzname: Hinweis mit Formular
   const dup = uid && isDup(uid) && !nickOf(uid) && D.friendsOk ? `<div class="banner dupname">${icon('user')}<span><b>Mehrere heißen ${esc(baseName(uid))}</b><small>Gib ${esc(baseName(uid))} einen Spitznamen, den nur du siehst. Bis dahin steht ${esc(nameOf(uid).slice(baseName(uid).length + 1))} dahinter.</small>${nickForm(uid, 'tight')}</span></div>` : '';
@@ -1630,7 +1648,23 @@ function viewFriend(key) {
   if (parts.length || del) {
     html += fold('fr-manage', 'user', 't0', 'Verwalten', sub.join(' · ') || 'Verknüpft mit dem Konto', `<div class="card stack manage">${parts.join('')}</div>${del}`);
   }
-  return shell(name, reqBanner + head + dup + html + privacyFoot(name), { tab: 'groups', back });
+  return shell(name, bdayLinkAsk(p) + reqBanner + head + dup + html + privacyFoot(name), { tab: 'groups', back });
+}
+
+// Geburtstagsgruppe anlegen oder öffnen (1.16)
+function bdayLink(f) {
+  if (!D.bdgOk) return '';
+  const ex = f.uid ? bdayGroupsFor(f.uid)[0] : myGroups().find(g => isBday(g) && !g.archived_at && !g.bday_user && f.p && g.bday_person === f.p.id);
+  if (ex) return `<a class="link withicon bdaylink" href="#/g/${ex.id}">${icon('cake')}Zur Geburtstagsgruppe</a>`;
+  return `<a class="link withicon bdaylink" href="#/geburtstag/neu/${f.key}?r=f/${f.key}">${icon('cake')}Geburtstagsgruppe anlegen</a>`;
+}
+// Person ohne App wird mit einem Konto verknüpft: gilt das auch für die Geburtstagsgruppe?
+function bdayLinkAsk(p) {
+  const a = ui.bdLinkAsk;
+  if (!a || !p || a.pid !== p.id) return '';
+  const gs = a.gids.map(id => myGroups().find(g => g.id === id)).filter(Boolean);
+  return `<div class="banner bdlinkask">${icon('cake')}<span><b>Ist ${esc(nameOf(a.uid))} die Person aus „${esc(gs.map(g => g.name).join('“, „'))}“?</b><small>Dann gilt die Verknüpfung für alle in der Gruppe. Sie sehen danach die Wünsche, die ${esc(nameOf(a.uid))} für alle freigegeben hat.</small></span>
+    <span class="acts"><button class="primary sm" data-act="bdlinkyes">Ja</button><button class="ghost sm" data-act="bdlinkno">Nein</button></span></div>`;
 }
 
 /* Freundes-Link geöffnet: #/freund/<code> (1.14) */
@@ -1934,7 +1968,7 @@ function viewPool(wid) {
 // Seit 1.14 zusätzlich alle, die ich kenne und die ihn als Freund der Person sehen (fragt die Datenbank, einmal pro Seite).
 function poolCandidates(w) {
   const out = [];
-  myGroups().filter(g => visibleIn(w, g.id) && membersOf(g.id).some(m => m.user_id === w.owner))
+  normGroups().filter(g => visibleIn(w, g.id) && membersOf(g.id).some(m => m.user_id === w.owner))
     .forEach(g => membersOf(g.id).forEach(m => { if (m.user_id !== w.owner && m.user_id !== me() && !out.includes(m.user_id)) out.push(m.user_id); }));
   if (D.friendsOk) {
     ui.pc = ui.pc || {};
@@ -2059,7 +2093,7 @@ function viewWishForm(id) {
   const pre = id === 'neu' ? sharedPrefill() : null;
   const w = id === 'neu' ? { title: pre ? pre.title : '', url: pre ? pre.url : '', note: '', all_groups: true, all_friends: true, priority: 2 } : D.wishes.find(x => x.id === id && x.owner === me());
   if (!w) return shell('Wunsch', emptyState('gift', 'Nicht gefunden', 'Diesen Wunsch gibt es nicht mehr.'), { tab: 'list', back: ['#/liste', 'Wunschliste'] });
-  const gs = myGroups();
+  const gs = normGroups();
   const sel = id === 'neu' ? [] : groupIdsOf(id);
   const boxes = gs.map(g => `<label class="check"><input type="checkbox" name="g" value="${g.id}" ${sel.includes(g.id) ? 'checked' : ''}><span>${esc(g.name)}</span></label>`).join('');
   // Freunde (1.14): alle direkten Freunde oder nur ausgewählte
@@ -2112,8 +2146,11 @@ function viewWishForm(id) {
 }
 
 function viewGroups() {
-  const gs = myGroups();
+  const all = myGroups();
+  const gs = all.filter(g => !g.archived_at);
+  const archived = all.filter(g => g.archived_at);
   const rows = gs.map(g => {
+    if (isBday(g)) return bdayRow(g);
     const ms = membersOf(g.id).map(m => m.user_id);
     const n = D.wishes.filter(w => ms.includes(w.owner) && w.owner !== me() && !w.have_at && visibleIn(w, g.id)).length;
     const nnew = newIn(g.id).length + newMembers().filter(m => m.group_id === g.id).length + (newDraws().some(x => x.gid === g.id) ? 1 : 0);
@@ -2124,12 +2161,199 @@ function viewGroups() {
   const forms = `
     <h2>Neue Gruppe</h2>
     <div class="card"><form data-form="newgroup" class="inline"><input name="name" maxlength="40" placeholder="Name, z. B. Familie" required><button class="primary" type="submit">Anlegen</button></form></div>
+    ${D.bdgOk ? `<a class="link withicon bdnewlink" href="#/geburtstag/neu">${icon('cake')}Geburtstagsgruppe für jemanden</a>` : ''}
     <h2>Mit Code beitreten</h2>
     <div class="card"><form data-form="join" class="inline"><input name="code" maxlength="12" placeholder="ABCD-1234" autocapitalize="characters" autocomplete="off" required><button class="secondary" type="submit">Beitreten</button></form></div>`;
+  const arch = archived.length ? fold('g-archiv', 'cake', 't0', 'Archiv', plural(archived.length, 'Geburtstagsgruppe', 'Geburtstagsgruppen'),
+    `<ul class="rows plain">${archived.map(bdayRow).join('')}</ul>`) : '';
   const body = gs.length
-    ? `<ul class="rows">${rows}</ul>${forms}`
+    ? `<ul class="rows">${rows}</ul>${arch}${forms}`
+    : archived.length ? arch + forms
     : emptyState('people', 'Noch in keiner Gruppe', 'Lege eine Gruppe an und lade andere mit dem Code ein, oder tritt einer bestehenden Gruppe bei.') + forms;
   return shell('Gruppen', groupsSwitch('g') + body, { tab: 'groups', sub: gs.length ? plural(gs.length, 'Gruppe', 'Gruppen') : '' });
+}
+
+/* ---------- Geburtstagsgruppen (1.16) ---------- */
+const gideasOf = gid => (D.gi || []).filter(i => i.group_id === gid);
+function bdayRow(g) {
+  const ms = membersOf(g.id);
+  const nnew = newMembers().filter(m => m.group_id === g.id).length;
+  const ni = gideasOf(g.id).length;
+  const meta = g.archived_at ? 'Archiviert' : [occLine(g), plural(ms.length, 'Mitglied', 'Mitglieder'), ni ? plural(ni, 'Idee', 'Ideen') : ''].filter(Boolean).join(' · ');
+  return `<li><a class="row-item group bday" href="#/g/${g.id}"><span class="tile plain">${icon('cake')}</span>
+      <span class="row-main"><span class="row-title">${esc(g.name)}</span><span class="row-meta">${esc(meta)}${nnew ? ` · <b class="newtxt">${nnew} neu</b>` : ''}</span></span>
+      ${nnew ? countBadge(nnew) : avStack(ms.map(m => m.user_id))}${icon('chev', 'chev')}</a></li>`;
+}
+// Letzter Geburtstag (null = noch keiner seit dem Anlegen)
+function bdayLast(g) {
+  const d = parseDay(g.occ_date);
+  if (!d) return null;
+  const t = todayDate();
+  let last = new Date(t.getFullYear(), d.getMonth(), d.getMonth() === 1 && d.getDate() === 29 && !leap(t.getFullYear()) ? 28 : d.getDate());
+  if (last >= t) last = new Date(t.getFullYear() - 1, d.getMonth(), d.getMonth() === 1 && d.getDate() === 29 && !leap(t.getFullYear() - 1) ? 28 : d.getDate());
+  const made = parseDay(g.created_at);
+  return made && last < made ? null : last;
+}
+function bdayDateFields(month, day) {
+  const days = ['<option value="">Tag</option>'].concat(Array.from({ length: 31 }, (_, i) => `<option value="${i + 1}"${day === i + 1 ? ' selected' : ''}>${i + 1}.</option>`)).join('');
+  const months = ['<option value="">Monat</option>'].concat(MONTHS.map((m, i) => `<option value="${i + 1}"${month === i + 1 ? ' selected' : ''}>${m}</option>`)).join('');
+  return `<div class="bdrow b2"><select name="day" aria-label="Tag">${days}</select><select name="month" aria-label="Monat">${months}</select></div>`;
+}
+function bdayDateOf(f) {
+  const day = +f.day.value, month = +f.month.value;
+  if (!day || !month) throw new Error('Wähle Tag und Monat.');
+  const max = month === 2 ? 29 : ([4, 6, 9, 11].includes(month) ? 30 : 31);
+  if (day > max) throw new Error('Diesen Tag gibt es im ' + MONTHS[month - 1] + ' nicht.');
+  return `2000-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+function giCard(g, i) {
+  const mine = i.taken_by === me();
+  const bought = i.status === 'gekauft';
+  let pill = '', acts = '';
+  if (!i.taken_by) {
+    pill = '<span class="pill open">Offen</span>';
+    if (!g.archived_at) acts = `<button class="primary sm" data-act="gtake" data-id="${i.id}" data-s="reserviert">Übernehme ich</button>`;
+  } else if (mine) {
+    pill = `<span class="pill green">${icon(bought ? 'check' : 'lock')}${bought ? 'Von dir gekauft' : 'Übernimmst du'}</span>`;
+    if (!g.archived_at) acts = (bought
+      ? `<button class="secondary sm" data-act="gtake" data-id="${i.id}" data-s="reserviert">Doch nicht gekauft</button>`
+      : `<button class="primary sm" data-act="gtake" data-id="${i.id}" data-s="gekauft">Als gekauft markieren</button>`)
+      + `<button class="ghost sm" data-act="gtake" data-id="${i.id}" data-s="">Freigeben</button>`;
+  } else {
+    pill = `<span class="pill gold">${icon(bought ? 'check' : 'lock')}${bought ? 'Gekauft von' : 'Übernimmt'} ${esc(nameOf(i.taken_by))}</span>`;
+  }
+  const link = i.url ? `<a class="link-out" href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${icon('link')}${esc(domain(i.url) || 'Link')}</a>` : '';
+  const meta = [i.price != null ? fmtPrice(i.price) : '', i.created_by === me() ? 'von dir' : 'von ' + nameOf(i.created_by)].filter(Boolean).join(' · ');
+  const edit = i.created_by === me() && !g.archived_at ? `<a class="link sm giedit" href="#/g/${g.id}/idee/${i.id}">Bearbeiten</a>` : '';
+  return `<li class="card wish gidea ${i.taken_by ? 'taken' : ''}">
+      <div class="wish-head"><span class="tile plain">${icon('bulb')}</span><div class="row-main"><h3>${esc(i.title)}</h3>
+        <p class="wmeta"><span>${esc(meta)}</span></p>${link}</div>${edit}</div>
+      ${i.note ? `<p class="wnote">${esc(i.note)}</p>` : ''}
+      <div class="wish-foot">${pill}${acts ? `<div class="acts">${acts}</div>` : ''}</div>
+    </li>`;
+}
+function viewBdayGroup(g) {
+  const gid = g.id, name = bdayName(g), uid = g.bday_user;
+  const founder = isFounder(g);
+  const d = occNext(g), n = d ? daysUntil(d) : null;
+  const b = uid ? bdOf(uid) : null, age = b && d ? bdAge(b, d) : null;
+  const when = d ? (n <= 1 ? (n === 0 ? 'Heute' : 'Morgen') : `Am ${fmtDate(d)}, in ${n} Tagen`) + (age ? ` · wird ${age}` : '') : '';
+  const head = `<section class="profile bdayhead">${uid && realName(uid) ? avatar(uid, 'lg') : `<span class="tile plain lg">${icon('cake')}</span>`}<div class="profile-main">
+      <p class="row-title big">Geburtstag von ${esc(name)}</p>${!g.archived_at && when ? `<p class="row-meta">${esc(when)}</p>` : ''}</div></section>
+    <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht diese Gruppe nicht.</span></p>`;
+  const ms = membersOf(gid).slice().sort((a, b) => (a.user_id === me()) - (b.user_id === me()) || nameOf(a.user_id).localeCompare(nameOf(b.user_id), 'de'));
+  const mRows = ms.map(m => {
+    const joined = isNewMember(gid, m.user_id);
+    if (joined) markSeen('m', mkey(gid, m.user_id));
+    return `<li class="row-item">${avatar(m.user_id)}<span class="row-main"><span class="row-title">${m.user_id === me() ? 'Du' : esc(nameOf(m.user_id))}</span>${joined ? `<span class="row-meta">${newTag('Neu dabei')}</span>` : ''}</span></li>`;
+  }).join('');
+  const recap = g.bday_recap && (g.bday_recap.items || []).length ? `<h2>Rückblick ${esc(String(g.bday_recap.year || ''))}</h2>
+    <ul class="rows plain recap">${g.bday_recap.items.map(x => `<li class="row-item"><span class="tile plain">${icon(x.st === 'gekauft' ? 'check' : 'gift')}</span><span class="row-main"><span class="row-title">${esc(x.t)}</span><span class="row-meta">${x.by ? (x.by === me() ? 'von dir' : 'von ' + esc(nameOf(x.by))) : ''}</span></span></li>`).join('')}</ul>` : '';
+  const delBtn = ui.confirmBdDel === gid
+    ? `<button class="danger" data-act="bddelgrp" data-id="${gid}">Gruppe wirklich löschen</button>`
+    : `<button class="ghost danger-text" data-act="askbddel" data-id="${gid}">Gruppe löschen</button>`;
+  const leave = ui.confirmLeave === gid
+    ? `<button class="danger" data-act="leave" data-id="${gid}">Wirklich verlassen</button>`
+    : `<button class="ghost danger-text" data-act="askleave" data-id="${gid}">Gruppe verlassen</button>`;
+  const back = ['#/gruppen', 'Gruppen'];
+  if (g.archived_at) {
+    return shell(g.name, `${head}
+      <div class="banner">${icon('cake')}<span><b>Archiviert</b><small>${founder ? 'Zum nächsten Geburtstag kannst du die Gruppe wieder öffnen. Die Mitglieder bleiben dabei.' : 'Wer die Gruppe gegründet hat, kann sie zum nächsten Geburtstag wieder öffnen.'}</small></span></div>
+      ${recap}
+      <div class="card stack">${founder ? `<button class="primary" data-act="bdreopen" data-id="${gid}">Für den nächsten Geburtstag öffnen</button>${delBtn}` : leave}</div>`,
+      { tab: 'groups', back, eyebrow: 'Geburtstagsgruppe' });
+  }
+  const last = bdayLast(g);
+  const past = founder && last && daysUntil(last) >= -60 && daysUntil(last) < 0;
+  const pastBanner = past ? `<div class="banner bdpast">${icon('cake')}<span><b>Der Geburtstag ist vorbei</b><small>Archivieren hebt die Gruppe fürs nächste Jahr auf. Was verschenkt wurde, bleibt als Rückblick.</small></span>
+      <span class="acts"><button class="primary sm" data-act="bdarchive" data-id="${gid}">Archivieren</button></span></div>` : '';
+  let wishes = '';
+  if (uid) {
+    const ws = openWishes(uid);
+    const free = ws.filter(w => !resOf(w.id)).length;
+    wishes = `<h2>Wünsche</h2><ul class="rows"><li><a class="row-item" href="#/g/${gid}/p/${uid}">${realName(uid) ? avatar(uid) : `<span class="tile plain">${icon('gift')}</span>`}
+      <span class="row-main"><span class="row-title">Wunschliste von ${esc(name)}</span><span class="row-meta">${ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${free} noch frei` : 'Noch keine Wünsche für alle'}</span></span>${icon('chev', 'chev')}</a></li></ul>`;
+  }
+  const ideas = gideasOf(gid);
+  const iList = ideas.length ? `<ul class="cards">${ideas.map(i => giCard(g, i)).join('')}</ul>` : `<p class="empty-line">Notiert hier, was passen könnte. ${esc(name)} sieht es nicht.</p>`;
+  const dt = parseDay(g.occ_date);
+  return shell(g.name, `${pastBanner}${head}${wishes}
+    <h2>Gemeinsame Ideen</h2>
+    ${iList}
+    <a class="secondary withicon addgidea" href="#/g/${gid}/idee/neu">${icon('plus')}Idee notieren</a>
+    ${recap}
+    <div class="card invite">
+      <div><p class="eyebrow">Einladungscode</p><p class="code" id="gcode">${esc(fmtCode(g.code))}</p></div>
+      <button class="primary withicon" data-act="invite" data-id="${gid}">${icon('share')}Einladen</button>
+    </div>
+    <h2>Mitglieder</h2>
+    <ul class="rows plain">${mRows}</ul>
+    <h2>Verwalten</h2>
+    <div class="card stack">
+      <form data-form="rename" data-id="${gid}" class="inline"><input name="name" maxlength="40" value="${esc(g.name)}" required><button class="secondary" type="submit">Umbenennen</button></form>
+      <form data-form="bdaydate" data-id="${gid}" class="stack"><span class="flabel">Geburtstag</span>${bdayDateFields(dt ? dt.getMonth() + 1 : 0, dt ? dt.getDate() : 0)}<button class="secondary" type="submit">Datum speichern</button></form>
+      ${founder ? `<button class="secondary" data-act="bdarchive" data-id="${gid}">Archivieren</button>${delBtn}` : ''}
+      ${leave}
+    </div>`, { tab: 'groups', back, eyebrow: 'Geburtstagsgruppe', sub: plural(ms.length, 'Mitglied', 'Mitglieder') });
+}
+// Gemeinsame Idee notieren oder bearbeiten: #/g/<gid>/idee/<id|neu>
+function viewGIdeaForm(gid, id) {
+  const g = myGroups().find(x => x.id === gid && isBday(x));
+  const back = ['#/g/' + gid, g ? g.name : 'Gruppe'];
+  const neu = id === 'neu';
+  const i = neu ? { title: '', url: '', note: '', price: null } : gideasOf(gid).find(x => x.id === id && x.created_by === me());
+  if (!g || !i || g.archived_at) return shell('Idee', emptyState('bulb', 'Nicht gefunden', 'Diese Idee gibt es nicht mehr.'), { tab: 'groups', back });
+  const del = neu ? '' : (ui.confirmDel === id
+    ? `<button type="button" class="danger" data-act="delgi" data-id="${id}" data-g="${gid}">Wirklich löschen</button>`
+    : `<button type="button" class="ghost danger-text" data-act="askdel" data-id="${id}">Idee löschen</button>`);
+  return shell(neu ? 'Neue Idee' : 'Idee bearbeiten', `
+    <form data-form="gidea" data-id="${id}" data-g="${gid}" class="stack">
+      <div class="card fields">
+        <label>Was könnte passen?<input name="title" maxlength="120" required value="${esc(i.title)}" placeholder="z. B. Kochkurs"></label>
+        <div class="field"><div class="fieldhead"><label for="f-url">Link</label><button type="button" class="link withicon" data-act="pasteurl">${icon('paste')}Einfügen</button></div>
+          <input id="f-url" name="url" inputmode="url" autocomplete="off" value="${esc(i.url || '')}" placeholder="https://"></div>
+        <label>Preis<span class="money"><input name="price" inputmode="decimal" autocomplete="off" maxlength="12" value="${esc(priceInput(i.price))}" placeholder="ca."><span>€</span></span></label>
+        <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Wo gesehen, Größe, Farbe">${esc(i.note || '')}</textarea></label>
+      </div>
+      <button class="primary" type="submit">Speichern</button>
+      ${del}
+    </form>
+    <p class="foot">${icon('eyeoff')}<span>Alle in der Gruppe sehen die Idee, ${esc(bdayName(g))} nicht.</span></p>`, { tab: 'groups', back });
+}
+// Anlegen: #/geburtstag/neu[/u:<uid>|p:<pid>]
+function viewBdayNew(key) {
+  const back = backParam() ? [backParam(), 'Zurück'] : ['#/gruppen', 'Gruppen'];
+  if (!D.bdgOk) return shell('Geburtstagsgruppe', dbHint(), { tab: 'groups', back });
+  const f = key ? friendOf(key) : null;
+  let who = '', dateNeeded = true, pick = '';
+  if (f) {
+    who = f.name;
+    if (f.uid) {
+      const ex = bdayGroupsFor(f.uid)[0];
+      if (ex) return shell('Geburtstagsgruppe', `<div class="banner">${icon('cake')}<span><b>Du bist schon in einer Geburtstagsgruppe für ${esc(who)}</b></span><span class="acts"><a class="primary sm" href="#/g/${ex.id}">Öffnen</a></span></div>`, { tab: 'groups', back });
+      dateNeeded = !bdOf(f.uid);
+    }
+  } else {
+    const kp = knownPeople();
+    const own = (D.ip || []).filter(p => !p.linked_user);
+    pick = `<label>Für wen?<select name="person" required><option value="" selected disabled>Person auswählen</option>
+        ${kp.length ? `<optgroup label="${friendIds().length ? 'Gruppen und Freunde' : 'Aus deinen Gruppen'}">${kp.map(u => `<option value="u:${u}">${esc(nameOf(u))}</option>`).join('')}</optgroup>` : ''}
+        ${own.length ? `<optgroup label="Ohne App">${own.map(p => `<option value="p:${p.id}">${esc(ipName(p))}</option>`).join('')}</optgroup>` : ''}
+        <option value="new">Neue Person ohne App …</option></select></label>
+      <label class="hide" id="pnew">Name<input name="pname" maxlength="40" autocomplete="off" placeholder="z. B. Oma Ruth"></label>`;
+  }
+  const b = f && f.uid ? bdOf(f.uid) : null;
+  const date = dateNeeded ? `<div class="field"><span class="flabel">Geburtstag</span>${bdayDateFields(0, 0)}${f ? '' : `<p class="muted fhelp">Wenn die Person ihren Geburtstag eingetragen hat, gilt der.</p>`}</div>`
+    : `<p class="row-meta bdline">${icon('cake')}<span>Geburtstag am ${esc(fmtDate(bdNext(b)))}</span></p>`;
+  return shell('Geburtstagsgruppe', `
+    <form data-form="bdaynew" data-key="${esc(key || '')}" class="stack">
+      <div class="card fields">
+        ${who ? `<p class="row-title big">Für ${esc(who)}</p>` : pick}
+        ${date}
+      </div>
+      <button class="primary" type="submit">Gruppe anlegen</button>
+    </form>
+    <p class="foot">${icon('eyeoff')}<span>${who ? esc(who) : 'Die Person'} sieht die Gruppe nicht. Mitglieder sehen nur Wünsche, die für alle freigegeben sind, und eure gemeinsamen Ideen.</span></p>`, { tab: 'groups', back });
 }
 
 // Kurzform des Anlasses, z. B. „Hochzeit am 14. Juni“ (1.15)
@@ -2155,6 +2379,7 @@ function occForm(g) {
 function viewGroup(gid) {
   const g = myGroups().find(x => x.id === gid);
   if (!g) return shell('Gruppe', emptyState('people', 'Nicht gefunden', 'Diese Gruppe gibt es nicht mehr.'), { tab: 'groups', back: ['#/gruppen', 'Gruppen'] });
+  if (isBday(g)) return viewBdayGroup(g);
   const ms = membersOf(gid).slice().sort((a, b) => (a.user_id === me()) - (b.user_id === me()) || nameOf(a.user_id).localeCompare(nameOf(b.user_id), 'de'));
   const rows = ms.map(m => {
     const ws = openWishes(m.user_id, gid);
@@ -2203,12 +2428,13 @@ function viewGroup(gid) {
    dann alle Wünsche, die ich von ihr sehe (über Gruppen oder als Freund). */
 function viewPerson(gid, uid) {
   const g = gid ? myGroups().find(x => x.id === gid) : null;
-  const ok = gid ? g && membersOf(gid).some(m => m.user_id === uid) : known(uid);
+  const forBday = !!(g && isBday(g) && g.bday_user === uid && !g.archived_at);
+  const ok = gid ? g && (forBday || membersOf(gid).some(m => m.user_id === uid)) : known(uid);
   if (!ok || uid === me()) {
     return shell('Liste', emptyState('gift', 'Nicht verfügbar', 'Diese Liste kannst du nicht sehen.'), { tab: 'groups', back: gid ? ['#/g/' + gid, 'Gruppe'] : ['#/freunde', 'Freunde'] });
   }
   const name = nameOf(uid);
-  const all = wishesOf(uid, gid);
+  const all = wishesOf(uid, forBday ? null : gid);
   const ws = all.filter(w => !w.have_at).sort(byPrio);
   const had = all.filter(w => w.have_at);
   const taken = ws.filter(w => resOf(w.id)).length;
@@ -2276,10 +2502,10 @@ function viewPerson(gid, uid) {
   const head = `<section class="profile">${avatar(uid, 'lg')}<div class="profile-main">
       <p class="row-meta">${ws.length ? `${plural(ws.length, 'Wunsch', 'Wünsche')} · ${ws.length - taken} noch frei` : 'Noch keine Wünsche'}</p>${bdLine(uid)}
       ${ws.length ? `<progress max="${ws.length}" value="${taken}"></progress>` : ''}</div></section>
-    <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert oder gekauft ist.</span></p>${cardHint(gid, uid)}`;
-  const body = ws.length || had.length ? filterBar + list + hadHtml : emptyState('gift', 'Noch leer', `${esc(name)} hat ${gid ? 'für diese Gruppe ' : ''}noch nichts eingetragen.`);
+    <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert oder gekauft ist.</span></p>${forBday && !known(uid) ? cardFold(uid, name) : cardHint(gid, uid)}`;
+  const body = ws.length || had.length ? filterBar + list + hadHtml : emptyState('gift', 'Noch leer', forBday ? `${esc(name)} hat noch nichts für alle freigegeben.` : `${esc(name)} hat ${gid ? 'für diese Gruppe ' : ''}noch nichts eingetragen.`);
   const back = gid ? ['#/g/' + gid, g.name] : (backParam() ? [backParam(), 'Zurück'] : ['#/f/u:' + uid, name]);
-  return shell(name, head + body + personIdeas(gid, uid), { tab: 'groups', back, eyebrow: gid ? '' : 'Wunschliste' });
+  return shell(name, head + body + (forBday ? '' : personIdeas(gid, uid)), { tab: 'groups', back, eyebrow: gid ? '' : 'Wunschliste' });
 }
 
 // „Geburtstag am 12. April · wird 30“ (1.15)
@@ -2596,7 +2822,7 @@ function viewCardVis(item) {
   const ret = backParam() || '#/steckbrief';
   const r = sbRule(item);
   const mode = r ? r.mode : 'all';
-  const gs = myGroups(), ps = knownPeople();
+  const gs = normGroups(), ps = knownPeople();
   const box = (name, val, label, on, meta = '') => `<label class="check"><input type="checkbox" name="${name}" value="${val}" ${on ? 'checked' : ''}><span>${esc(label)}${meta ? `<small>${esc(meta)}</small>` : ''}</span></label>`;
   const opts = [['all', 'Alle'], ['except', 'Alle außer'], ['only', 'Nur']].map(([k, l]) =>
     `<label><input type="radio" name="vmode" value="${k}" ${mode === k ? 'checked' : ''}><span>${l}</span></label>`).join('');
@@ -2735,6 +2961,7 @@ function viewAccount() {
     <h2>Profil</h2>
     <div class="card"><form data-form="name" class="inline"><input name="name" maxlength="40" value="${esc(myName())}" required><button class="secondary" type="submit">Name ändern</button></form></div>
     ${bdSection()}
+    ${bdaySwitch()}
     ${cardLink()}
     ${themeSection()}
     ${acc ? `<h2>Anmeldung</h2>${codeCard()}` : ''}
@@ -2746,6 +2973,7 @@ function viewAccount() {
       <p>Andere sehen deinen Namen und die Wünsche, die du für ihre Gruppe oder für sie als Freund freigibst. Reservierungen sieht der Beschenkte nie.</p>
       <p>Bei gemeinsamen Geschenken sehen nur die Gefragten und wer mitmacht, wer dabei ist, wie viel jeder gibt und wer bezahlt hat. Die beschenkte Person sieht nichts davon.</p>
       <p>Deinen Geburtstag sehen alle aus deinen Gruppen und deine Freunde. Schenklisten siehst nur du.</p>
+      <p>Freunde und Leute aus deinen Gruppen können eine Geburtstagsgruppe für dich anlegen und andere einladen. Darin sieht man nur Wünsche, die du für alle Gruppen oder alle Freunde freigibst, und deinen Steckbrief ohne die Teile, die nur bestimmte sehen. Die Gruppe und die Ideen darin siehst du nicht. Unter Konto lässt sich das ausschalten.</p>
       <p>Deinen Steckbrief sehen alle aus deinen Gruppen und deine Freunde. Unter Steckbrief kannst du ihn ganz oder teilweise für bestimmte Gruppen oder Personen verbergen.</p>
       <p>Direkte Freunde sehen deinen Namen, die Wünsche, die du für Freunde freigibst, und deinen Steckbrief. Niemand kann nach dir suchen: Freund wird nur, wer deinen Freundes-Link hat oder deinen Benutzernamen kennt und du die Anfrage annimmst. Ob es einen Benutzernamen gibt, verrät die App nicht. Spitznamen siehst nur du.</p>
       <p>Für Benachrichtigungen wird eine Adresse des Push-Dienstes deines Geräts gespeichert (Apple, Google oder Mozilla). Die Nachrichten sind verschlüsselt.</p>
@@ -2776,6 +3004,14 @@ function bdSection() {
       <p class="muted small">Das Jahr ist freiwillig. Deine Gruppen und Freunde sehen den Tag und werden vorher erinnert.</p>
       <div class="btnrow"><button class="secondary" type="submit">Speichern</button>${b ? '<button class="ghost danger-text" type="button" data-act="bddel">Entfernen</button>' : ''}</div>
     </form></div>`;
+}
+
+/* Geburtstagsgruppen für mich erlaubt (1.16), Standard an */
+function bdaySwitch() {
+  if (!D.bdgOk) return '';
+  const on = !D.bdOff;
+  return `<ul class="rows plain bdswitch"><li class="row-item"><span class="row-main"><span class="row-title">Geburtstagsgruppen für dich</span><span class="row-meta">Andere dürfen eine Gruppe für deinen Geburtstag anlegen. Du siehst sie nicht.</span></span>
+      <button class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" aria-label="Geburtstagsgruppen für dich" data-act="bdopt" data-on="${on ? '0' : '1'}"></button></li></ul>`;
 }
 
 /* Konto löschen (1.13.1): Knopf → „Sicher?“ → Fenster mit Warnung → „Ja, löschen“ */
@@ -2834,6 +3070,8 @@ function render() {
   else if (parts[0] === 'gruppen') html = viewGroups();
   else if (parts[0] === 'g' && parts[1] && parts[2] === 'p' && parts[3]) html = viewPerson(parts[1], parts[3]);
   else if (parts[0] === 'g' && parts[1] && parts[2] === 'wichteln') html = viewWichteln(parts[1]);
+  else if (parts[0] === 'g' && parts[1] && parts[2] === 'idee' && parts[3]) html = viewGIdeaForm(parts[1], parts[3]);
+  else if (parts[0] === 'geburtstag' && parts[1] === 'neu') html = viewBdayNew(parts[2]);
   else if (parts[0] === 'g' && parts[1]) html = viewGroup(parts[1]);
   else if (parts[0] === 'liste') html = viewList();
   else if (parts[0] === 'konto' || parts[0] === 'mehr') html = viewAccount();
@@ -3139,6 +3377,9 @@ const forms = {
   },
   async iplink(f) {
     if (!f.u.value) throw new Error('Wähle eine Person aus.');
+    // Ist das die Person einer Geburtstagsgruppe ohne App? Erst fragen (1.16)
+    const gids = myGroups().filter(g => isBday(g) && !g.bday_user && g.bday_person === f.dataset.id).map(g => g.id);
+    if (gids.length) { ui.bdLinkAsk = { pid: f.dataset.id, uid: f.u.value, gids }; render(); window.scrollTo(0, 0); return; }
     await sb('/rest/v1/rpc/idea_link', { method: 'POST', body: { p_person: f.dataset.id, p_user: f.u.value } });
     await sync(true);
     toast('Verknüpft. Die Ideen bleiben privat.');
@@ -3209,6 +3450,45 @@ const forms = {
     await sb('/rest/v1/rpc/set_group_occasion', { method: 'POST', body: { p_group: f.dataset.id, p_kind: kind, p_name: kind === 'weihnachten' ? null : name, p_date: kind === 'weihnachten' || !kind ? null : date } });
     await sync(true);
     toast(kind ? 'Anlass gespeichert.' : 'Anlass entfernt.');
+  },
+  async bdaynew(f) {
+    let key = f.dataset.key;
+    if (!key) {
+      key = f.person.value;
+      if (!key) throw new Error('Wähle aus, für wen die Gruppe ist.');
+    }
+    const body = { p_user: null, p_person: null, p_name: null, p_date: null };
+    let who = '';
+    if (key === 'new') { body.p_name = f.pname.value.trim(); if (!body.p_name) throw new Error('Gib einen Namen ein.'); }
+    else if (key.startsWith('u:')) { body.p_user = key.slice(2); who = nameOf(body.p_user); }
+    else if (key.startsWith('p:')) body.p_person = key.slice(2);
+    if (f.day && (!body.p_user || !bdOf(body.p_user))) body.p_date = bdayDateOf(f);
+    let gid;
+    try { gid = await sb('/rest/v1/rpc/create_bday_group', { method: 'POST', body }); } catch (e) {
+      if (who && /darfst/.test(e.message)) throw new Error(`${who} möchte keine Geburtstagsgruppen.`);
+      throw e;
+    }
+    await sync(true);
+    toast('Gruppe angelegt. Lade jetzt andere ein.');
+    go('#/g/' + gid);
+  },
+  async bdaydate(f) {
+    await sb('/rest/v1/rpc/set_group_occasion', { method: 'POST', body: { p_group: f.dataset.id, p_kind: 'geburtstag', p_name: null, p_date: bdayDateOf(f) } });
+    await sync(true);
+    toast('Datum gespeichert.');
+  },
+  async gidea(f) {
+    const id = f.dataset.id, gid = f.dataset.g;
+    const url = normUrl(f.url.value);
+    if (url === false) throw new Error('Der Link sieht nicht richtig aus.');
+    const price = parsePrice(f.price.value);
+    if (price === false) throw new Error('Der Preis sieht nicht richtig aus, z. B. 24,99.');
+    const row = { title: f.title.value.trim(), url, price, note: f.note.value.trim() || null };
+    if (id === 'neu') await sb('/rest/v1/group_ideas', { method: 'POST', prefer: 'return=minimal', body: Object.assign({ group_id: gid }, row) });
+    else await sb('/rest/v1/group_ideas?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: row });
+    await sync(true);
+    toast('Gespeichert.');
+    go('#/g/' + gid);
   },
   async rename(f) {
     await sb('/rest/v1/rpc/rename_group', { method: 'POST', body: { p_group: f.dataset.id, p_name: f.name.value.trim() } });
@@ -3445,6 +3725,57 @@ const acts = {
   },
   manage: async el => { ui.manage = el.dataset.id; render(); },
   askleave: async el => { ui.confirmLeave = el.dataset.id; render(); },
+  // Geburtstagsgruppen (1.16)
+  gtake: async el => {
+    await sb('/rest/v1/rpc/gidea_take', { method: 'POST', body: { p_id: el.dataset.id, p_status: el.dataset.s || null } });
+    await sync(true);
+    if (el.dataset.s === 'gekauft') earlyToast();
+  },
+  delgi: async el => {
+    await sb('/rest/v1/group_ideas?id=eq.' + el.dataset.id, { method: 'DELETE' });
+    ui = {};
+    await sync(true);
+    toast('Idee gelöscht.');
+    go('#/g/' + el.dataset.g);
+  },
+  bdarchive: async el => {
+    await sb('/rest/v1/rpc/bday_archive', { method: 'POST', body: { p_group: el.dataset.id } });
+    await sync(true);
+    toast('Archiviert.');
+  },
+  bdreopen: async el => {
+    await sb('/rest/v1/rpc/bday_reopen', { method: 'POST', body: { p_group: el.dataset.id } });
+    await sync(true);
+    toast('Die Gruppe ist wieder offen.');
+  },
+  askbddel: async el => { ui.confirmBdDel = el.dataset.id; render(); },
+  bddelgrp: async el => {
+    await sb('/rest/v1/rpc/bday_delete', { method: 'POST', body: { p_group: el.dataset.id } });
+    ui = {};
+    await sync(true);
+    toast('Gruppe gelöscht.');
+    go('#/gruppen');
+  },
+  bdopt: async el => {
+    if (el.dataset.on === '1') await sb('/rest/v1/bday_optout?user_id=eq.' + me(), { method: 'DELETE' });
+    else await sb('/rest/v1/bday_optout', { method: 'POST', prefer: 'return=minimal', body: { user_id: me() } });
+    await sync(true);
+  },
+  bdlinkyes: async () => {
+    const a = ui.bdLinkAsk;
+    delete ui.bdLinkAsk;
+    for (const g of a.gids) await sb('/rest/v1/rpc/bday_link', { method: 'POST', body: { p_group: g, p_user: a.uid } });
+    await sb('/rest/v1/rpc/idea_link', { method: 'POST', body: { p_person: a.pid, p_user: a.uid } });
+    await sync(true);
+    toast('Verknüpft, auch für alle in der Gruppe.');
+  },
+  bdlinkno: async () => {
+    const a = ui.bdLinkAsk;
+    delete ui.bdLinkAsk;
+    await sb('/rest/v1/rpc/idea_link', { method: 'POST', body: { p_person: a.pid, p_user: a.uid } });
+    await sync(true);
+    toast('Verknüpft. Die Ideen bleiben privat.');
+  },
   leave: async el => {
     await sb('/rest/v1/rpc/leave_group', { method: 'POST', body: { p_group: el.dataset.id } });
     ui = {};
@@ -3647,12 +3978,12 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('paste', e => {
   const el = e.target;
-  if (!el || el.name !== 'url' || !el.form || !['wish', 'idea'].includes(el.form.dataset.form)) return;
+  if (!el || el.name !== 'url' || !el.form || !['wish', 'idea', 'gidea'].includes(el.form.dataset.form)) return;
   const t = (e.clipboardData || window.clipboardData).getData('text');
   if (/\s/.test(t.trim()) && findUrl(t)) { e.preventDefault(); fillLink(el.form, t); }
 });
 document.addEventListener('change', e => {
-  if (e.target.name === 'person' && e.target.form && ['idea', 'glAdd'].includes(e.target.form.dataset.form)) {
+  if (e.target.name === 'person' && e.target.form && ['idea', 'glAdd', 'bdaynew'].includes(e.target.form.dataset.form)) {
     const n = $('#pnew');
     if (n) { n.classList.toggle('hide', e.target.value !== 'new'); if (e.target.value === 'new') n.querySelector('input').focus(); }
   }

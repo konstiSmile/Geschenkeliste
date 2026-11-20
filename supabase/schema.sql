@@ -1,4 +1,4 @@
--- Geschenkeliste – Datenbank, Stand Version 1.14 (Direkte Freundschaft)
+-- Geschenkeliste – Datenbank, Stand Version 1.16 (Geburtstagsgruppen)
 -- Im Supabase SQL Editor komplett einfügen und „Run“ drücken.
 -- Das Skript darf mehrfach ausgeführt werden (bestehende Daten bleiben erhalten).
 
@@ -85,6 +85,27 @@ create table if not exists public.wish_friends (
 );
 create index if not exists wish_friends_user_idx on public.wish_friends(user_id);
 
+-- Seit 1.16: Geburtstagsgruppe für jemanden (bday_name gesetzt). Die Person ist nie Mitglied.
+-- bday_user = Konto der Person (null = ohne App), bday_name = Name als Rückfall.
+-- Mitglieder einer Geburtstagsgruppe teilen darüber weder eigene Wünsche noch Steckbrief
+-- oder Geburtstag, sie sehen nur ihre Namen. Weiteres im Block „Geburtstagsgruppen“ am Ende.
+alter table public.groups add column if not exists bday_user uuid references auth.users(id) on delete set null;
+alter table public.groups add column if not exists bday_name text;
+alter table public.groups add column if not exists bday_person uuid;
+alter table public.groups add column if not exists archived_at timestamptz;
+alter table public.groups add column if not exists bday_recap jsonb;
+alter table public.groups drop constraint if exists groups_bday_check;
+alter table public.groups add constraint groups_bday_check check (
+  (bday_name is null and bday_user is null and bday_person is null and archived_at is null)
+  or char_length(bday_name) between 1 and 40);
+create index if not exists groups_bday_user_idx on public.groups(bday_user) where bday_user is not null;
+
+-- Wer keine Geburtstagsgruppen für sich will (Standard: erlaubt, also keine Zeile)
+create table if not exists public.bday_optout (
+  user_id uuid primary key default auth.uid() references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
 -- ---------- Hilfsfunktionen (umgehen die Regeln nur zum Prüfen) ----------
 
 create or replace function public.is_member(g uuid) returns boolean
@@ -92,12 +113,34 @@ language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.members where group_id = g and user_id = auth.uid());
 $$;
 
+-- Gemeinsame normale Gruppe (Geburtstagsgruppen zählen nicht, seit 1.16)
 create or replace function public.shares_group(other uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
     select 1 from public.members a
     join public.members b on b.group_id = a.group_id
+    join public.groups g on g.id = a.group_id and g.bday_name is null
     where a.user_id = auth.uid() and b.user_id = other);
+$$;
+
+-- Seit 1.16: Ist g eine Geburtstagsgruppe?
+create or replace function public.is_bday_group(g uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.groups where id = g and bday_name is not null);
+$$;
+
+-- Seit 1.16: Erlaubt o Geburtstagsgruppen für sich?
+create or replace function public.bday_allowed(o uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select o is not null and not exists (select 1 from public.bday_optout where user_id = o);
+$$;
+
+-- Seit 1.16: Ist v in einer laufenden Geburtstagsgruppe für o (und o erlaubt das)?
+create or replace function public.bday_viewer(o uuid, v uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select o is not null and v is not null and o <> v and public.bday_allowed(o) and exists (
+    select 1 from public.groups g join public.members m on m.group_id = g.id and m.user_id = v
+    where g.bday_user = o and g.archived_at is null);
 $$;
 
 create or replace function public.is_wish_owner(w uuid) returns boolean
@@ -126,6 +169,8 @@ $$;
 -- Sieht u den Wunsch w (und ist nicht selbst die beschenkte Person)?
 -- Über eine gemeinsame Gruppe (alle Gruppen oder freigegebene) oder als direkter Freund
 -- (alle Freunde oder einzeln freigegeben). Seit 1.13, mit Freunden seit 1.14.
+-- Seit 1.16: Geburtstagsgruppen zählen nicht als gemeinsame Gruppe. Wer in einer
+-- Geburtstagsgruppe für den Besitzer ist, sieht nur Wünsche für alle Gruppen bzw. alle Freunde.
 create or replace function public.wish_visible_to(w uuid, u uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
@@ -134,12 +179,14 @@ language sql stable security definer set search_path = '' as $$
       exists (
         select 1 from public.members mo
         join public.members m on m.group_id = mo.group_id and m.user_id = u
+        join public.groups g on g.id = mo.group_id and g.bday_name is null
         where mo.user_id = x.owner
           and (x.all_groups or exists (
             select 1 from public.wish_groups wg where wg.wish_id = x.id and wg.group_id = mo.group_id)))
       or (public.are_friends(x.owner, u)
           and (x.all_friends or exists (
-            select 1 from public.wish_friends wf where wf.wish_id = x.id and wf.user_id = u)))));
+            select 1 from public.wish_friends wf where wf.wish_id = x.id and wf.user_id = u)))
+      or ((x.all_groups or x.all_friends) and public.bday_viewer(x.owner, u))));
 $$;
 
 create or replace function public.can_see_wish(w uuid) returns boolean
@@ -157,6 +204,13 @@ declare me uuid := auth.uid();
 begin
   if me is null then return false; end if;
   if other = me or public.knows(other) then return true; end if;
+  -- Seit 1.16: Mitglieder derselben Geburtstagsgruppe und die Person, für die sie ist
+  if exists (select 1 from public.members a join public.members b on b.group_id = a.group_id
+             where a.user_id = me and b.user_id = other)
+     or exists (select 1 from public.groups g join public.members m on m.group_id = g.id and m.user_id = me
+                where g.bday_user = other) then
+    return true;
+  end if;
   if to_regclass('public.friend_requests') is not null and exists (
        select 1 from public.friend_requests r where r.from_user = other and r.to_user = me and r.declined_at is null) then
     return true;
@@ -222,7 +276,10 @@ begin
   if auth.uid() is null then raise exception 'Nicht angemeldet'; end if;
   select id into gid from public.groups
   where code = upper(regexp_replace(coalesce(p_code, ''), '[^A-Za-z0-9]', '', 'g'));
-  if gid is null then raise exception 'Code nicht gefunden'; end if;
+  -- Seit 1.16: Die Person einer Geburtstagsgruppe kommt nie hinein (und erfährt nichts davon)
+  if gid is null or exists (select 1 from public.groups where id = gid and bday_user = auth.uid()) then
+    raise exception 'Code nicht gefunden';
+  end if;
   insert into public.members (group_id, user_id) values (gid, auth.uid()) on conflict do nothing;
   return gid;
 end $$;
@@ -299,7 +356,7 @@ drop policy if exists "freigabe löschen" on public.wish_groups;
 create policy "freigabe lesen" on public.wish_groups for select to authenticated
   using (public.can_see_wish(wish_id));
 create policy "freigabe anlegen" on public.wish_groups for insert to authenticated
-  with check (public.is_wish_owner(wish_id) and public.is_member(group_id));
+  with check (public.is_wish_owner(wish_id) and public.is_member(group_id) and not public.is_bday_group(group_id));
 create policy "freigabe löschen" on public.wish_groups for delete to authenticated
   using (public.is_wish_owner(wish_id));
 
@@ -356,6 +413,10 @@ revoke execute on function public.is_member(uuid), public.shares_group(uuid), pu
 grant execute on function public.is_member(uuid), public.shares_group(uuid), public.is_wish_owner(uuid),
   public.can_see_wish(uuid), public.wish_open(uuid), public.create_group(text), public.join_group(text),
   public.leave_group(uuid), public.rename_group(uuid, text) to authenticated;
+
+revoke execute on function public.is_bday_group(uuid), public.bday_allowed(uuid), public.bday_viewer(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.is_bday_group(uuid) to authenticated;
 
 -- =====================================================================
 -- Konto ohne Mail (Version 1.5)
@@ -956,6 +1017,7 @@ begin
       select distinct on (m.user_id) m.user_id, 'wish', new.id::text, 'wish-' || new.owner, m.group_id, new.owner, new.id
       from public.members mo
       join public.members m on m.group_id = mo.group_id
+      join public.groups g on g.id = mo.group_id and g.bday_name is null
       where mo.user_id = new.owner and m.user_id <> new.owner and public.push_wants(m.user_id, 'wish')
       order by m.user_id, m.joined_at
       on conflict do nothing;
@@ -1003,6 +1065,7 @@ begin
       and w.created_at > now() - interval '1 hour'
       and m.user_id <> w.owner
       and exists (select 1 from public.members mo where mo.group_id = new.group_id and mo.user_id = w.owner)
+      and not public.is_bday_group(new.group_id)
       and public.push_wants(m.user_id, 'wish')
     on conflict do nothing;
   return null;
@@ -1202,9 +1265,11 @@ begin
     gname := null;
     if gid is not null then
       if not exists (select 1 from public.members m where m.group_id = gid and m.user_id = p_user) then return null; end if;
-      execute 'select case when occ_kind = ''sonstiges'' then occ_name
+      execute 'select case when bday_name is not null
+                             then ''Geburtstag von '' || case when bday_user is not null then public.push_name(bday_user, $2) else bday_name end
+                           when occ_kind = ''sonstiges'' then occ_name
                            when occ_kind = ''geburtstag'' then coalesce(occ_name, ''Geburtstag '' || name) end
-               from public.groups where id = $1' into gname using gid;
+               from public.groups where id = $1 and archived_at is null' into gname using gid, p_user;
       if gname is null then return null; end if;
     end if;
     select count(*) into n from public.reservations r join public.wishes w on w.id = r.wish_id
@@ -1636,17 +1701,20 @@ create trigger profile_card_vis_check before insert or update on public.profile_
 -- Darf v diesen Teil (item) des Steckbriefs von o sehen? Ohne Regel: ja.
 -- only:   v steht in users oder ist in einer der Gruppen (in der auch o ist)
 -- except: v steht nicht in users und teilt mit o mindestens eine nicht ausgeschlossene Gruppe
---         oder ist direkt mit o befreundet (seit 1.14)
+--         oder ist direkt mit o befreundet (seit 1.14) oder in einer Geburtstagsgruppe für o (seit 1.16)
 create or replace function public.card_allowed(o uuid, v uuid, it text) returns boolean
 language sql stable security definer set search_path = '' as $$
   select coalesce((
     select case r.mode
       when 'only' then v = any(r.users) or exists (
         select 1 from public.members a join public.members b on b.group_id = a.group_id
+        join public.groups g on g.id = a.group_id and g.bday_name is null
         where a.user_id = o and b.user_id = v and a.group_id = any(r.groups))
       else not (v = any(r.users)) and (public.are_friends(o, v) or exists (
         select 1 from public.members a join public.members b on b.group_id = a.group_id
-        where a.user_id = o and b.user_id = v and not (a.group_id = any(r.groups))))
+        join public.groups g on g.id = a.group_id and g.bday_name is null
+        where a.user_id = o and b.user_id = v and not (a.group_id = any(r.groups)))
+        or public.bday_viewer(o, v))
     end
     from public.profile_card_vis r where r.owner = o and r.item = it), true);
 $$;
@@ -1664,7 +1732,7 @@ language sql stable security definer set search_path = '' as $$
     where public.card_allowed(c.user_id, auth.uid(), split_part(e.key, '.', 1))
       and public.card_allowed(c.user_id, auth.uid(), e.key)) f
   where auth.uid() is not null and c.user_id <> auth.uid()
-    and public.knows(c.user_id)
+    and (public.knows(c.user_id) or public.bday_viewer(c.user_id, auth.uid()))
     and public.card_allowed(c.user_id, auth.uid(), 'all')
     and f.d is not null;
 $$;
@@ -1794,6 +1862,12 @@ language sql stable security definer set search_path = '' as $$
     select case when f.a = x.owner then f.b else f.a end
     from public.wishes x
     join public.friendships f on f.a = x.owner or f.b = x.owner
+    where x.id = w
+    union
+    select m.user_id
+    from public.wishes x
+    join public.groups g on g.bday_user = x.owner
+    join public.members m on m.group_id = g.id
     where x.id = w) c
   where public.wish_visible_to(w, c.u)
     and (p_open or c.u = any(coalesce(p_invited, '{}')));
@@ -2453,7 +2527,10 @@ create or replace function public.pool_candidates(p_wish uuid) returns uuid[]
 language sql stable security definer set search_path = '' as $$
   select coalesce(array_agg(u), '{}')
   from public.pool_audience(p_wish, true, null) u
-  where public.wish_visible_to(p_wish, auth.uid()) and u <> auth.uid() and public.knows(u);
+  where public.wish_visible_to(p_wish, auth.uid()) and u <> auth.uid()
+    and (public.knows(u) or exists (  -- seit 1.16 auch aus derselben Geburtstagsgruppe
+      select 1 from public.members a join public.members b on b.group_id = a.group_id
+      where a.user_id = auth.uid() and b.user_id = u));
 $$;
 
 -- ---------- Zugriffsregeln ----------
@@ -2619,11 +2696,18 @@ begin
   if not public.is_member(p_group) then raise exception 'Kein Mitglied'; end if;
   p_name := nullif(btrim(coalesce(p_name, '')), '');
   p_kind := nullif(p_kind, '');
+  if p_kind is null and exists (select 1 from public.groups where id = p_group and bday_name is not null) then
+    raise exception 'Geburtstagsgruppen bleiben Geburtstag';
+  end if;
   if p_kind is null then
     update public.groups set occ_kind = null, occ_name = null, occ_date = null where id = p_group;
     return;
   end if;
   if p_kind not in ('weihnachten', 'geburtstag', 'sonstiges') then raise exception 'Anlass ungültig'; end if;
+  -- Seit 1.16: Geburtstagsgruppen bleiben Geburtstag
+  if p_kind <> 'geburtstag' and exists (select 1 from public.groups where id = p_group and bday_name is not null) then
+    raise exception 'Geburtstagsgruppen bleiben Geburtstag';
+  end if;
   if p_kind = 'weihnachten' then
     p_name := null; p_date := null;
   elsif p_date is null then
@@ -2655,7 +2739,7 @@ begin
            case when g.occ_kind = 'weihnachten' then null else g.id end,
            (g.nx - p_today)::text
     from (select id, occ_kind, public.occ_next(occ_kind, occ_date, p_today) as nx
-          from public.groups where occ_kind is not null) g
+          from public.groups where occ_kind is not null and archived_at is null) g
     join public.members m on m.group_id = g.id
     where g.nx - p_today in (14, 7, 1) and public.push_wants(m.user_id, 'remind')
     on conflict do nothing;
@@ -2667,6 +2751,7 @@ begin
     from (select user_id, public.next_yearly(month, day, p_today) as nx from public.birthdays) b
     cross join lateral (
       select m2.user_id as u from public.members m1 join public.members m2 on m2.group_id = m1.group_id
+        join public.groups g on g.id = m1.group_id and g.bday_name is null
         where m1.user_id = b.user_id
       union
       select case when f.a = b.user_id then f.b else f.a end from public.friendships f
@@ -2694,6 +2779,7 @@ begin
   if not found then return null; end if;
   if not (public.are_friends(who, p_user) or exists (
       select 1 from public.members m1 join public.members m2 on m2.group_id = m1.group_id
+      join public.groups g on g.id = m1.group_id and g.bday_name is null
       where m1.user_id = who and m2.user_id = p_user)) then
     return null;
   end if;
@@ -2744,3 +2830,235 @@ revoke execute on function public.gift_lists_check(), public.gift_list_people_ch
   public.set_group_occasion(uuid, text, text, date), public.occasion_due(date), public.bday_message(uuid, text),
   public.next_yearly(int, int, date), public.occ_next(text, date, date) from public, anon, authenticated;
 grant execute on function public.set_group_occasion(uuid, text, text, date) to authenticated;
+
+-- =====================================================================
+-- Geburtstagsgruppen (Version 1.16, Paket 9b)
+-- Eine Gruppe für den Geburtstag einer Person, ohne dass sie es merkt. Die Person ist nie
+-- Mitglied und sieht weder die Gruppe noch die gemeinsamen Ideen darin. Mitglieder sehen
+-- von ihr nur Wünsche, die sie für alle Gruppen bzw. alle Freunde freigegeben hat, und
+-- den Steckbrief ohne „Nur …“-Teile. Personen ohne App: nur Name und Datum, die Gruppe
+-- lebt von den gemeinsamen Ideen. Spalten an groups und bday_optout stehen oben.
+-- =====================================================================
+
+-- Verknüpfung zur Person ohne App aus der Ideenliste der Gründerin/des Gründers
+alter table public.groups drop constraint if exists groups_bday_person_fk;
+alter table public.groups add constraint groups_bday_person_fk
+  foreign key (bday_person) references public.idea_people(id) on delete set null;
+
+-- Gemeinsame Ideen: alle in der Gruppe sehen sie, die Person nie.
+-- taken_by/status wie bei Reservierungen („Übernehme ich“), ändern nur über gidea_take.
+create table if not exists public.group_ideas (
+  id uuid primary key default gen_random_uuid(),
+  group_id uuid not null references public.groups(id) on delete cascade,
+  created_by uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  title text not null check (char_length(title) between 1 and 120),
+  url text check (url is null or (char_length(url) <= 1000 and url ~* '^https?://')),
+  note text check (note is null or char_length(note) <= 1000),
+  price numeric(9,2) check (price is null or (price >= 0 and price <= 1000000)),
+  taken_by uuid references auth.users(id) on delete set null,
+  status text check (status in ('reserviert', 'gekauft')),
+  created_at timestamptz not null default now(),
+  check ((taken_by is null) = (status is null))
+);
+create index if not exists group_ideas_group_idx on public.group_ideas(group_id);
+
+-- ---------- Prüfungen ----------
+
+-- Absichtlich ohne security definer: current_user zeigt, ob die App direkt schreibt
+create or replace function public.group_ideas_check() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if tg_op = 'UPDATE' then
+    if new.group_id <> old.group_id or new.created_by <> old.created_by then
+      raise exception 'Nicht erlaubt' using errcode = '42501';
+    end if;
+    -- „Übernehme ich“ nur über gidea_take
+    if current_user = 'authenticated' then
+      if new.taken_by is distinct from old.taken_by or new.status is distinct from old.status then
+        raise exception 'Nicht erlaubt' using errcode = '42501';
+      end if;
+    end if;
+  end if;
+  if tg_op = 'INSERT' then
+    if current_user = 'authenticated' and (new.taken_by is not null or new.status is not null) then
+      raise exception 'Nicht erlaubt' using errcode = '42501';
+    end if;
+    if not exists (select 1 from public.groups g where g.id = new.group_id and g.bday_name is not null and g.archived_at is null) then
+      raise exception 'Nur in Geburtstagsgruppen' using errcode = '42501';
+    end if;
+    if (select count(*) from public.group_ideas where group_id = new.group_id) >= 200 then
+      raise exception 'Höchstens 200 Ideen pro Gruppe' using errcode = '54000';
+    end if;
+  end if;
+  new.title := btrim(new.title);
+  return new;
+end $$;
+drop trigger if exists group_ideas_check on public.group_ideas;
+create trigger group_ideas_check before insert or update on public.group_ideas
+  for each row execute function public.group_ideas_check();
+
+-- ---------- Aktionen der App ----------
+
+-- Anlegen. Mit Konto (p_user): nur wer die Person kennt (Gruppe oder Freund) und wenn sie es erlaubt;
+-- Datum aus ihrem Geburtstag, sonst p_date. Ohne App: p_person (eigene Person aus der Ideenliste)
+-- oder p_name (legt dort eine Person an), Datum Pflicht.
+create or replace function public.create_bday_group(p_user uuid, p_person uuid, p_name text, p_date date) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare
+  me uuid := auth.uid();
+  nm text;
+  d date := p_date;
+  b public.birthdays;
+  pid uuid;
+  gid uuid;
+  c text;
+begin
+  if me is null then raise exception 'Nicht angemeldet'; end if;
+  if (select count(*) from public.groups where created_by = me) >= 20 then
+    raise exception 'Zu viele Gruppen';
+  end if;
+  if p_user is not null then
+    if p_user = me or not public.knows(p_user) or not public.bday_allowed(p_user) then
+      raise exception 'Nicht erlaubt' using errcode = '42501';
+    end if;
+    select nullif(btrim(name), '') into nm from public.profiles where id = p_user;
+    select * into b from public.birthdays where user_id = p_user;
+    if found then d := make_date(coalesce(b.year, 2000), b.month, b.day); end if;
+  elsif p_person is not null then
+    select name, id into nm, pid from public.idea_people where id = p_person and owner = me and linked_user is null;
+    if pid is null then raise exception 'Nicht erlaubt' using errcode = '42501'; end if;
+  else
+    nm := nullif(btrim(coalesce(p_name, '')), '');
+    if nm is null then raise exception 'Bitte einen Namen angeben'; end if;
+    if char_length(nm) > 40 then raise exception 'Name zu lang'; end if;
+    insert into public.idea_people (owner, name) values (me, nm) returning id into pid;
+  end if;
+  if d is null then raise exception 'Bitte ein Datum angeben'; end if;
+  nm := left(coalesce(nm, 'Jemand'), 40);
+  loop
+    c := public.new_code();
+    exit when not exists (select 1 from public.groups where code = c);
+  end loop;
+  insert into public.groups (name, code, created_by, occ_kind, occ_date, bday_user, bday_name, bday_person)
+    values (left('Geburtstag ' || nm, 40), c, me, 'geburtstag', d, p_user, nm, pid)
+    returning id into gid;
+  insert into public.members (group_id, user_id) values (gid, me);
+  return gid;
+end $$;
+
+-- Person ohne App hat jetzt ein Konto: gilt dann für alle in der Gruppe
+create or replace function public.bday_link(p_group uuid, p_user uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not public.is_member(p_group) then raise exception 'Kein Mitglied'; end if;
+  if not exists (select 1 from public.groups where id = p_group and bday_name is not null and bday_user is null) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if p_user is null or p_user = auth.uid() or not public.knows(p_user) or not public.bday_allowed(p_user)
+     or exists (select 1 from public.members where group_id = p_group and user_id = p_user) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  update public.groups set bday_user = p_user,
+    bday_name = left(coalesce((select nullif(btrim(name), '') from public.profiles where id = p_user), bday_name), 40)
+    where id = p_group;
+end $$;
+
+-- „Übernehme ich“ (reserviert/gekauft) oder freigeben (null). Nur frei oder vom selben Mitglied.
+create or replace function public.gidea_take(p_id uuid, p_status text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare i public.group_ideas;
+begin
+  select * into i from public.group_ideas where id = p_id;
+  if not found or not public.is_member(i.group_id) then raise exception 'Nicht gefunden'; end if;
+  if exists (select 1 from public.groups where id = i.group_id and archived_at is not null) then
+    raise exception 'Gruppe ist archiviert';
+  end if;
+  if p_status is not null and p_status not in ('reserviert', 'gekauft') then raise exception 'Status ungültig'; end if;
+  if i.taken_by is not null and i.taken_by <> auth.uid() then
+    raise exception 'Das übernimmt schon jemand';
+  end if;
+  update public.group_ideas
+    set taken_by = case when p_status is null then null else auth.uid() end, status = p_status
+    where id = p_id;
+end $$;
+
+-- Nach dem Geburtstag (nur Gründer): archivieren. Übernommene Ideen und von Mitgliedern
+-- reservierte Wünsche der Person kommen in den Rückblick, übernommene Ideen verschwinden.
+create or replace function public.bday_archive(p_group uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  g public.groups;
+  items jsonb;
+begin
+  select * into g from public.groups where id = p_group;
+  if not found or g.bday_name is null or g.created_by <> auth.uid() then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if g.archived_at is not null then return; end if;
+  select coalesce(jsonb_agg(x order by x->>'t'), '[]') into items from (
+    select jsonb_build_object('t', i.title, 'by', i.taken_by, 'st', i.status) as x
+      from public.group_ideas i where i.group_id = p_group and i.taken_by is not null
+    union all
+    select jsonb_build_object('t', w.title, 'by', r.user_id, 'st', r.status)
+      from public.wishes w join public.reservations r on r.wish_id = w.id
+      where g.bday_user is not null and w.owner = g.bday_user
+        and exists (select 1 from public.members m where m.group_id = p_group and m.user_id = r.user_id)) q;
+  update public.groups set archived_at = now(),
+    bday_recap = jsonb_build_object('year', extract(year from (now() at time zone 'Europe/Berlin'))::int, 'items', items)
+    where id = p_group;
+  delete from public.group_ideas where group_id = p_group and taken_by is not null;
+end $$;
+
+-- Im nächsten Jahr wieder öffnen (Mitglieder und Rückblick bleiben)
+create or replace function public.bday_reopen(p_group uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not exists (select 1 from public.groups where id = p_group and bday_name is not null and created_by = auth.uid()) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  update public.groups set archived_at = null where id = p_group;
+end $$;
+
+-- Löschen (nur Gründer)
+create or replace function public.bday_delete(p_group uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not exists (select 1 from public.groups where id = p_group and bday_name is not null and created_by = auth.uid()) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  delete from public.groups where id = p_group;
+end $$;
+
+-- ---------- Zugriffsregeln ----------
+
+alter table public.group_ideas enable row level security;
+alter table public.bday_optout enable row level security;
+
+drop policy if exists "gruppen-ideen lesen" on public.group_ideas;
+drop policy if exists "gruppen-idee anlegen" on public.group_ideas;
+drop policy if exists "gruppen-idee ändern" on public.group_ideas;
+drop policy if exists "gruppen-idee löschen" on public.group_ideas;
+create policy "gruppen-ideen lesen" on public.group_ideas for select to authenticated
+  using (public.is_member(group_id));
+create policy "gruppen-idee anlegen" on public.group_ideas for insert to authenticated
+  with check (created_by = auth.uid() and public.is_member(group_id));
+create policy "gruppen-idee ändern" on public.group_ideas for update to authenticated
+  using (created_by = auth.uid() and public.is_member(group_id))
+  with check (created_by = auth.uid() and public.is_member(group_id));
+create policy "gruppen-idee löschen" on public.group_ideas for delete to authenticated
+  using (created_by = auth.uid() and public.is_member(group_id));
+
+drop policy if exists "geburtstagsgruppen aus" on public.bday_optout;
+create policy "geburtstagsgruppen aus" on public.bday_optout for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+revoke all on public.group_ideas, public.bday_optout from anon, authenticated;
+grant select, insert, update, delete on public.group_ideas to authenticated;
+grant select, insert, delete on public.bday_optout to authenticated;
+
+revoke execute on function public.group_ideas_check(), public.create_bday_group(uuid, uuid, text, date),
+  public.bday_link(uuid, uuid), public.gidea_take(uuid, text), public.bday_archive(uuid),
+  public.bday_reopen(uuid), public.bday_delete(uuid) from public, anon, authenticated;
+grant execute on function public.create_bday_group(uuid, uuid, text, date), public.bday_link(uuid, uuid),
+  public.gidea_take(uuid, text), public.bday_archive(uuid), public.bday_reopen(uuid), public.bday_delete(uuid)
+  to authenticated;
