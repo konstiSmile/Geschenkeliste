@@ -1,6 +1,6 @@
 # Geschenkeliste – Übergabe (Stand 18.11.2026, Version 1.14)
 
-**Erster Satz im neuen Chat:** „Geschenkeliste: Lies claude/geschenkeliste-uebergabe. Gib mir zuerst meine To-do-Liste. Erst wenn ich alles erledigt habe, machen wir mit Paket 9 (Anlässe und Geburtstage, 1.15) weiter.“
+**Projekt-Übergabe:** Doc „Übergabe 5 – Geschenkeliste“ im Projekt (Thema 5, Chats heißen „5.<Nr> …“, letzter Chat 5.21). Startsatz: „Thema 5 (Geschenkeliste), Chat 5.<Nr>. Weiter laut ‚Übergabe 5 – Geschenkeliste‘. Nächster Schritt: …“
 
 ## ZUERST (Wunsch des Nutzers, 18.11.)
 **Bevor irgendetwas besprochen oder gebaut wird:** Gib dem Nutzer als allererstes die To-do-Liste aus „Offen beim Nutzer“ (unten) als kurze, nummerierte Liste zum Abhaken. Dann **warten**, bis er bestätigt, dass alles erledigt ist, und kurz nachfragen, ob dabei etwas aufgefallen ist (Fehlermeldungen, Freunde-Abschnitt sichtbar?). Erst danach Paket 9 besprechen und bauen. Repo erst danach klonen.
@@ -30,5 +30,5 @@ Paket 9 (1.15) Anlässe und Geburtstage, Details und Entscheidungen in `docs/fah
   - `design-pop.md`: Pop-Design
 - Repo einbinden: erst `add_repo` (owner `konstiSmile`, repo `Geschenkeliste`, access `push`), dann `git clone --depth 1 https://github.com/konstiSmile/geschenkeliste /home/claude/geschenkeliste`. Pushen mit `git -c push.negotiate=true push origin HEAD:main`.
 - Tests geben nur Fehler und eine Summe aus. Vor dem Push laufen immer alle vier komplett.
-- Nach jedem Paket: `docs/uebergabe.md` neu schreiben, Abschnitt in `technik.md`, Haken in `fahrplan.md`. Die Kurz-Übergabe kommt zusätzlich ins Projekt als `claude/geschenkeliste-uebergabe.md`; das Projekt hat nur diese eine Geschenkeliste-Datei.
+- Nach jedem Paket: `docs/uebergabe.md` neu schreiben, Abschnitt in `technik.md`, Haken in `fahrplan.md`. Zusätzlich im Projekt das Doc `claude/Übergabe 5 – Geschenkeliste.md` ersetzen (Gliederung laut Projektanweisung); das Projekt hat nur diese eine Geschenkeliste-Datei. Backups (nur nach OK) in „Claude-Backups/5 Geschenkeliste“.
 - Versionsnummern: Paket 9 wird 1.15.

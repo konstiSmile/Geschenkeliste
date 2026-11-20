@@ -18,7 +18,7 @@ Neue Pakete bekommen hier einen eigenen Abschnitt (knapp: Datenbank, App, Tests,
 2. **Vor dem Push immer alle vier Tests komplett:** `python3 tests/test_rls.py`, `python3 tests/test_app.py <bilderordner>`, `node tests/test_push_fn.mjs`, `node tests/test_sw.mjs`. Ausgabe zeigt nur Fehler und am Ende „n ok, alle Tests grün“ (`GL_VERBOSE=1` zeigt jede Prüfung).
 3. Nur die **neuen oder geänderten** Screenshots ansehen.
 4. Commit mit Co-Author- und Session-Zeile, pushen.
-5. Unterlagen: `docs/uebergabe.md` neu schreiben (kurz halten), neuer Abschnitt hier in `technik.md`, im `docs/fahrplan.md` abhaken. **Dieselbe Kurz-Übergabe** ins Projekt als `claude/geschenkeliste-uebergabe.md` (Projekt hat nur diese eine Datei).
+5. Unterlagen: `docs/uebergabe.md` neu schreiben (kurz halten), neuer Abschnitt hier in `technik.md`, im `docs/fahrplan.md` abhaken. Im Projekt das Doc `claude/Übergabe 5 – Geschenkeliste.md` ersetzen (Projekt hat nur diese eine Datei).
 6. Anleitung (Claude Doc): pro Version ein **kurzer** Abschnitt „Neu mit Version x“: höchstens 3–5 Zeilen „Was du tun musst“ (schema.sql ausführen? neu laden? Edge Function neu einfügen?) plus ein Satz, was neu ist. Keine Fehlertabellen; der Nutzer fragt nach, wenn etwas klemmt.
 
 Ändert sich die Edge Function, muss der Nutzer sie im Dashboard neu einfügen und deployen.
