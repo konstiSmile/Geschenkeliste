@@ -789,3 +789,9 @@ label small.fhelp { display: block; font-weight: 600; color: var(--text-2); }
 .ideapicker .row-title { margin: 0; }
 .ideatake .acts { display: flex; flex-direction: column; align-items: flex-end; gap: 0; }
 .ideatake .acts .link { padding: 6px 0; }
+
+/* ---------- Gemeinsam ohne Wunsch (1.20) ---------- */
+.link.freestart { display: inline-flex; align-items: center; gap: 6px; margin: 14px 0 4px; padding: 4px 0; font-size: 15px; }
+.freestart .ic { width: 18px; height: 18px; }
+.ideafree { width: 100%; }
+.ideapick + .ideafree { margin-top: 10px; }

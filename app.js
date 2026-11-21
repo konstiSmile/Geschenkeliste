@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.19';
+const VERSION = '1.20';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -349,7 +349,7 @@ async function passwordLogin(username, password) {
 async function sync(quiet) {
   if (!S.session) return;
   try {
-    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards, pools, shares, fr, wf, fq, nick, bd, gl, glp, gi, bdo, sst] = await Promise.all([
+    const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards, pools, shares, fr, wf, fq, nick, bd, gl, glp, gi, bdo, sst, fg, fsh] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
       // Anlass pro Gruppe ab 1.15, Geburtstagsgruppen ab 1.16
       sb('/rest/v1/groups?select=id,name,code,created_by,created_at,occ_kind,occ_name,occ_date,bday_user,bday_name,bday_person,archived_at,bday_recap&order=created_at')
@@ -382,7 +382,9 @@ async function sync(quiet) {
       // ab 1.18 mit Steckbrief der Person, Größe und verknüpftem Wunsch
       sb('/rest/v1/idea_people?select=id,name,linked_user,created_at,card,card_stamps&order=created_at')
         .catch(() => sb('/rest/v1/idea_people?select=id,name,linked_user,created_at&order=created_at')).catch(() => null),
-      sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at,size,wish_id&order=created_at.desc')
+      // ab 1.20 mit verknüpftem gemeinsamen Geschenk (free_id)
+      sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at,size,wish_id,free_id&order=created_at.desc')
+        .catch(() => sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at,size,wish_id&order=created_at.desc'))
         .catch(() => sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at&order=created_at.desc')).catch(() => null),
       // Steckbrief ab 1.12: eigener (Tabelle), Sichtbarkeit, die der anderen (gefiltert über card_list)
       sb('/rest/v1/profile_cards?select=data,stamps').catch(() => null),
@@ -401,10 +403,14 @@ async function sync(quiet) {
       sb('/rest/v1/gift_lists?select=id,name,occ_date,created_at&order=created_at').catch(() => null),
       sb('/rest/v1/gift_list_people?select=list_id,person,done_at,added_at&order=added_at').catch(() => null),
       // Geburtstagsgruppen ab 1.16
-      sb('/rest/v1/group_ideas?select=id,group_id,created_by,title,url,note,price,taken_by,status,created_at&order=created_at').catch(() => null),
+      sb('/rest/v1/group_ideas?select=id,group_id,created_by,title,url,note,price,taken_by,status,created_at,free_id&order=created_at')
+        .catch(() => sb('/rest/v1/group_ideas?select=id,group_id,created_by,title,url,note,price,taken_by,status,created_at&order=created_at')).catch(() => null),
       sb('/rest/v1/bday_optout?select=user_id').catch(() => null),
       // Gesehen im Konto ab 1.18
-      sb('/rest/v1/seen_state?select=data').catch(() => null)
+      sb('/rest/v1/seen_state?select=data').catch(() => null),
+      // Gemeinsam ohne Wunsch ab 1.20 (nur was ich sehen darf)
+      sb('/rest/v1/free_gifts?select=id,for_user,group_id,title,url,buyer,created_by,total,split,open,invited,min_people,deadline,note,bought_at,created_at&order=created_at').catch(() => null),
+      sb('/rest/v1/free_shares?select=gift_id,user_id,amount,paid_at,joined_at&order=joined_at').catch(() => null)
     ]);
     const ps = admin === true ? await sb('/rest/v1/rpc/push_status', { method: 'POST', body: {} }).catch(() => null) : null;
     if (!S.session) return;
@@ -414,7 +420,10 @@ async function sync(quiet) {
       // Während ein Feld gespeichert wird, bleibt der lokale Stand (sonst springt die Auswahl kurz zurück)
       card: sbPending ? D.card : (card && card[0] ? card[0] : null), cardVis: cardVis || [], cardOk: !!(card && cardVis),
       cards: cards && typeof cards === 'object' ? cards : {}, cardsOk: !!cards,
-      pools: pools || [], shares: shares || [], poolsOk: !!(pools && shares),
+      // Gemeinsame Geschenke ohne Wunsch (1.20) laufen mit: wish_id = id des Geschenks, free = true
+      pools: (pools || []).concat((fg || []).map(x => Object.assign({}, x, { wish_id: x.id, free: true }))),
+      shares: (shares || []).concat((fsh || []).map(x => Object.assign({}, x, { wish_id: x.gift_id }))),
+      poolsOk: !!(pools && shares), freeOk: !!(pools && shares && fg && fsh),
       fr: fr || [], wf: wf || [], fq: fq && fq.in ? fq : { in: [], out: [] }, nick: nick || [], friendsOk: !!(fr && wf && fq && nick),
       occOk: !!(groups[0] ? 'occ_kind' in groups[0] : bd), bd: bd || [], bdOk: !!bd, gl: gl || [], glp: glp || [], glOk: !!(gl && glp),
       gi: gi || [], bdgOk: !!(gi && bdo), bdOff: !!(bdo && bdo.length),
@@ -1244,7 +1253,7 @@ function viewHome() {
   const gs = myGroups();
   const mine = openWishes(me());
   const errands = D.res.filter(r => r.user_id === me())
-    .map(r => ({ r, w: D.wishes.find(w => w.id === r.wish_id) })).filter(x => x.w);
+    .map(r => ({ r, w: D.wishes.find(w => w.id === r.wish_id) })).filter(x => x.w).concat(freeErrands());
   const ideasDone = (D.ideas || []).filter(i => i.done_at && !ideaTaken(i));
   const bought = errands.filter(x => x.r.status === 'gekauft').length + ideasDone.length;
   const nErr = errands.length + ideasDone.length;
@@ -1305,8 +1314,8 @@ function viewHome() {
     if (pool) {
       return `<li class="row-item ${done ? 'done' : ''}">
         <button class="tick ${done ? 'on' : ''}" data-act="resstatus" data-id="${w.id}" data-s="${done ? 'reserviert' : 'gekauft'}" aria-label="${done ? 'Doch nicht gekauft' : 'Als gekauft markieren'}">${icon('check')}</button>
-        <a class="row-main" href="#/gemeinsam/${w.id}"><span class="row-title">${esc(w.title)}</span><span class="row-meta ${w.have_at ? 'warn' : ''}">für ${esc(nameOf(w.owner))} · ${w.have_at ? `hat ${esc(nameOf(w.owner))} schon` : `gemeinsam, ${sharesOf(w.id).length} dabei${done ? ' · gekauft' : ''}`}</span></a>
-        ${avatar(w.owner, 'sm')}
+        <a class="row-main" href="#/gemeinsam/${w.id}"><span class="row-title">${esc(w.title)}</span><span class="row-meta ${w.have_at ? 'warn' : ''}">für ${esc(poolOwner(w))} · ${w.have_at ? `hat ${esc(nameOf(w.owner))} schon` : `gemeinsam, ${sharesOf(w.id).length} dabei${done ? ' · gekauft' : ''}`}</span></a>
+        ${poolAv(w, 'sm')}
       </li>`;
     }
     return `<li class="row-item ${done ? 'done' : ''}">
@@ -1467,6 +1476,11 @@ function backParam() {
 /* Idee wird „Ich schenke das“ (1.18): verknüpfter Wunsch, solange meine Reservierung besteht.
    Dann zählt die Reservierung (gekauft = besorgt), die Idee nicht noch einmal. */
 function ideaTaken(i) {
+  // Seit 1.20: Idee zeigt auf ein gemeinsames Geschenk ohne Wunsch (zählt dort, nicht hier)
+  if (i && i.free_id && poolOf(i.free_id)) {
+    const p = poolOf(i.free_id);
+    return { r: { status: p.bought_at ? 'gekauft' : 'reserviert' }, w: freeWish(p), free: true, p };
+  }
   if (!i || !i.wish_id) return null;
   const r = resOf(i.wish_id), w = D.wishes.find(x => x.id === i.wish_id);
   return r && w && r.user_id === me() ? { r, w } : null;
@@ -1475,15 +1489,22 @@ const ideaDone = i => { const t = ideaTaken(i); return t ? t.r.status === 'gekau
 const byDone = (a, b) => (ideaDone(a) ? 1 : 0) - (ideaDone(b) ? 1 : 0);
 // Bereich oben im Ideenformular: verknüpfter Wunsch oder Auswahl „Passt zu einem Wunsch“
 function ideaTakeHtml(i, uid) {
-  if (!D.fsOk || !uid) return '';
   const t = ideaTaken(i);
+  if (t && t.free) {
+    const n = sharesOf(t.p.wish_id).length;
+    return `<div class="banner ideatake">${icon('people')}<span><b>Gemeinsames Geschenk: ${esc(t.w.title)}</b><small>Für ${esc(poolOwner(t.w))}, ${n} dabei${t.p.bought_at ? ', gekauft' : ''}</small></span>
+      <span class="acts"><a class="link" href="#/gemeinsam/${t.p.wish_id}?r=i/${i.id}">Ansehen</a></span></div>`;
+  }
+  if (!D.fsOk || !uid) return '';
+  // Mit anderen zusammenlegen (1.20), nur für Leute mit App
+  const together = D.freeOk && !t ? `<a class="secondary withicon ideafree" href="#/gemeinsam/neu/i:${i.id}?r=i/${i.id}">${icon('people')}Mit anderen zusammenlegen</a>` : '';
   if (t) {
     return `<div class="banner ideatake">${icon('gift')}<span><b>Ich schenke das: ${esc(t.w.title)}</b><small>Wunsch von ${esc(nameOf(uid))}, ${t.r.status === 'gekauft' ? 'gekauft' : 'reserviert'}</small></span>
       <span class="acts"><a class="link" href="#/p/${uid}?r=i/${i.id}">Ansehen</a><button class="link" data-act="ideaunlink" data-id="${i.id}">Lösen</button></span></div>`;
   }
   const ws = openWishes(uid).filter(w => { const r = resOf(w.id); return (!r || r.user_id === me()) && !(poolOf(w.id) && poolOf(w.id).buyer !== me()); }).sort(byPrio);
-  if (!ws.length) return '';
-  if (ui.ideaPick !== i.id) return `<button class="secondary withicon ideapick" data-act="ideapick" data-id="${i.id}">${icon('gift')}Passt zu einem Wunsch von ${esc(nameOf(uid))}</button>`;
+  if (!ws.length) return together;
+  if (ui.ideaPick !== i.id) return `<button class="secondary withicon ideapick" data-act="ideapick" data-id="${i.id}">${icon('gift')}Passt zu einem Wunsch von ${esc(nameOf(uid))}</button>${together}`;
   const rows = ws.map(w => `<li class="row-item">${tile(w)}<span class="row-main"><span class="row-title">${esc(w.title)}</span>${wishMeta(w) ? `<span class="row-meta">${esc(wishMeta(w))}</span>` : ''}</span>
       <button class="primary sm" data-act="ideatake" data-id="${i.id}" data-w="${w.id}">Ich schenke das</button></li>`).join('');
   return `<section class="card stack ideapicker"><p class="row-title">Welcher Wunsch passt?</p><p class="small muted">Der Wunsch wird für dich reserviert. Die Idee bleibt und zeigt darauf.</p>
@@ -1492,7 +1513,7 @@ function ideaTakeHtml(i, uid) {
 function ideaRow(i, ret) {
   const t = ideaTaken(i);
   const done = ideaDone(i);
-  const meta = [wishMeta(i), t ? 'Ich schenke das' : (i.url ? domain(i.url) : ''), done ? (t ? 'gekauft' : 'besorgt') : ''].filter(Boolean).join(' · ');
+  const meta = [wishMeta(i), t ? (t.free ? `Gemeinsam, ${sharesOf(t.p.wish_id).length} dabei` : 'Ich schenke das') : (i.url ? domain(i.url) : ''), done ? (t ? 'gekauft' : 'besorgt') : ''].filter(Boolean).join(' · ');
   return `<li class="row-item ${done ? 'done' : ''}">
       <button class="tick ${done ? 'on' : ''}" data-act="ideadone" data-id="${i.id}" aria-label="${done ? (t ? 'Doch nicht gekauft' : 'Doch nicht besorgt') : (t ? 'Als gekauft markieren' : 'Als besorgt markieren')}">${icon('check')}</button>
       <a class="row-main" href="#/i/${i.id}${ret ? '?r=' + ret : ''}"><span class="row-title">${esc(i.title)}</span>${meta ? `<span class="row-meta">${esc(meta)}</span>` : ''}</a>
@@ -1942,6 +1963,52 @@ const cents = v => v == null ? null : Math.round(Number(v) * 100);
 const POOL_NO = 'geschenkeliste-gemeinsam-nein';
 function poolNo() { try { return JSON.parse(localStorage.getItem(POOL_NO)) || {}; } catch (e) { return {}; } }
 
+/* Gemeinsam ohne Wunsch (1.20): ein gemeinsames Geschenk, das nicht an einem Wunsch hängt.
+   Es läuft in D.pools mit (wish_id = id des Geschenks, free = true); die Seiten bekommen
+   dafür einen Ersatz-Wunsch aus Titel und Link. Für Personen ohne App nur in der Geburtstagsgruppe. */
+const isFree = id => { const p = poolOf(id); return !!(p && p.free); };
+function freeWish(p) { return { id: p.wish_id, title: p.title, url: p.url, owner: p.for_user, free: true, group_id: p.group_id, price: null, have_at: null }; }
+function poolWish(id) { const p = poolOf(id); return p && p.free ? freeWish(p) : (D.wishes.find(x => x.id === id && x.owner !== me()) || null); }
+function poolOwner(w) {
+  if (!w.free) return nameOf(w.owner);
+  if (w.owner) return nameOf(w.owner);
+  const g = D.groups.find(x => x.id === w.group_id);
+  return g ? bdayName(g) : 'jemanden';
+}
+const poolAv = (w, size = '') => (w.owner ? avatar(w.owner, size) : `<span class="tile plain ${size}">${icon('cake')}</span>`);
+const poolBought = p => (p.free ? !!p.bought_at : (resOf(p.wish_id) || {}).status === 'gekauft');
+// Aufruf der passenden Datenbank-Funktion (pool_… mit p_wish oder free_… mit p_gift)
+function poolRpc(id, name, body = {}) {
+  const free = isFree(id);
+  return sb('/rest/v1/rpc/' + (free ? 'free_' : 'pool_') + name, { method: 'POST', body: Object.assign(free ? { p_gift: id } : { p_wish: id }, body) });
+}
+// Gemeinsame Geschenke ohne Wunsch für eine Person (bzw. in einer Geburtstagsgruppe)
+function freeFor(uid, gid) {
+  return (D.pools || []).filter(p => p.free && (gid ? p.group_id === gid : (p.for_user === uid && !p.group_id)));
+}
+// Zeilen mit Pille und Knopf, dazu der Link zum Starten
+function freeSection(uid, gid, ret) {
+  if (!D.freeOk) return '';
+  // In der Geburtstagsgruppe stehen Geschenke aus gemeinsamen Ideen schon bei der Idee
+  const list = freeFor(uid, gid).filter(p => !gid || !(D.gi || []).some(i => i.free_id === p.wish_id));
+  const start = `#/gemeinsam/neu/${gid ? 'g:' + gid : 'u:' + uid}${ret}`;
+  const rows = list.map(p => {
+    const mine = inPool(p.wish_id);
+    const can = mine || (!poolClosed(p) && (p.open || (p.invited || []).includes(me())));
+    return `<li class="card wish freegift ${poolBought(p) ? 'taken' : ''}"><div class="wish-head"><span class="tile plain">${icon('people')}</span><div class="row-main"><h3>${esc(p.title)}</h3>
+        <p class="wmeta"><span>${esc([p.buyer === me() ? 'du kaufst' : nameOf(p.buyer) + ' kauft', fmtPrice(p.total), poolBought(p) ? 'gekauft' : ''].filter(Boolean).join(' · '))}</span></p></div></div>
+      <div class="wish-foot"><span class="pill ${mine ? 'green' : 'gold'}">${icon('people')}${esc(poolLabel(p))}</span>
+        <div class="acts"><a class="${mine || !can ? 'secondary' : 'primary'} sm" href="#/gemeinsam/${p.wish_id}${ret}">${mine || !can ? 'Ansehen' : 'Mitmachen'}</a></div></div></li>`;
+  }).join('');
+  return `${rows ? `<h2>${gid ? 'Gemeinsame Geschenke' : 'Gemeinsam, nicht von der Liste'}</h2><ul class="cards">${rows}</ul>` : ''}
+    <a class="link withicon freestart" href="${start}">${icon('people')}Gemeinsam etwas anderes schenken</a>`;
+}
+// Bei mir als Käufer: zählt wie eine Reservierung („Was du schenkst“)
+function freeErrands() {
+  return (D.pools || []).filter(p => p.free && p.buyer === me())
+    .map(p => ({ r: { wish_id: p.wish_id, user_id: me(), status: p.bought_at ? 'gekauft' : 'reserviert' }, w: freeWish(p) }));
+}
+
 /* Anteile in Cent: {per: {uid: cent}, total, missing (positiv = fehlt, negativ = zu viel)} */
 function poolCalc(p, ss) {
   const total = cents(p.total);
@@ -1985,6 +2052,11 @@ function poolPreview(p, a) {
 function poolBack(w) {
   const r = backParam();
   if (r) return [r, 'Zurück'];
+  if (w.free) {
+    const g = w.group_id && myGroups().find(x => x.id === w.group_id);
+    if (g) return ['#/g/' + g.id, g.name];
+    return w.owner && known(w.owner) ? ['#/p/' + w.owner, nameOf(w.owner)] : ['#/', 'Start'];
+  }
   const h = wishHref(w);
   return h !== '#/' ? [h, nameOf(w.owner)] : ['#/', 'Start'];
 }
@@ -1999,27 +2071,26 @@ function poolMissing(w) {
 function poolLabel(p) { return `Gemeinsam · ${sharesOf(p.wish_id).length} dabei`; }
 
 function viewPool(wid) {
-  const w = D.wishes.find(x => x.id === wid && x.owner !== me());
+  const w = poolWish(wid);
   const p = poolOf(wid);
   if (!D.poolsOk) return poolMissing(w);
   if (!w || !p) {
     return shell('Gemeinsam schenken', emptyState('people', 'Nicht verfügbar', 'Dieses gemeinsame Geschenk gibt es nicht mehr oder du bist nicht gefragt.'),
       { tab: 'groups', back: w ? poolBack(w) : ['#/', 'Start'] });
   }
-  const r = resOf(wid);
   const ss = sharesOf(wid);
   const c = poolCalc(p, ss);
   const buyer = p.buyer === me();
   const member = inPool(wid);
-  const owner = nameOf(w.owner);
+  const owner = poolOwner(w);
   const closed = poolClosed(p);
   const short = poolShort(p);
   const ret = 'gemeinsam/' + wid + poolRet();
-  const bought = r && r.status === 'gekauft';
+  const bought = poolBought(p);
 
   const link = w.url ? `<a class="link-out" href="${esc(w.url)}" target="_blank" rel="noopener noreferrer">${icon('link')}${esc(domain(w.url) || 'Link')}</a>` : '';
-  const head = `<div class="card wish poolwish"><div class="wish-head">${tile(w)}<div class="row-main"><h3>${esc(w.title)}</h3>
-      <p class="wmeta"><span>für ${esc(owner)}${w.price != null ? ' · ' + esc(fmtPrice(w.price)) : ''}</span></p>${link}</div></div>
+  const head = `<div class="card wish poolwish"><div class="wish-head">${w.free ? `<span class="tile plain">${icon('people')}</span>` : tile(w)}<div class="row-main"><h3>${esc(w.title)}</h3>
+      <p class="wmeta"><span>für ${esc(owner)}${w.price != null ? ' · ' + esc(fmtPrice(w.price)) : ''}${w.free ? ' · nicht von der Liste' : ''}</span></p>${link}</div></div>
       ${p.note ? `<p class="wnote">${esc(p.note)}</p>` : ''}</div>`;
 
   // Hinweise
@@ -2040,7 +2111,7 @@ function viewPool(wid) {
     ['Kauft und streckt vor', buyer ? 'Du' : nameOf(p.buyer)],
     p.min_people ? ['Mindestens', `${p.min_people} Leute${short ? ` · noch ${p.min_people - ss.length}` : ' · erreicht'}`] : null,
     p.deadline ? ['Mitmachen bis', fmtDl(p.deadline) + (closed ? ' · vorbei' : '')] : null,
-    ['Gefragt', p.open ? 'Alle, die die Liste sehen' : (p.invited || []).map(nameOf).join(', ') || 'Niemand'],
+    ['Gefragt', p.open ? (!w.free ? 'Alle, die die Liste sehen' : (w.group_id ? 'Alle in der Geburtstagsgruppe' : `Alle, die ${owner} kennen`)) : (p.invited || []).map(nameOf).join(', ') || 'Niemand'],
     bought ? ['Stand', 'Gekauft'] : null
   ].filter(Boolean);
   const covered = c.total - Math.max(0, c.missing);
@@ -2081,7 +2152,7 @@ function viewPool(wid) {
          <button class="ghost sm" data-act="poolnoconfirm">Abbrechen</button></div>` : '';
     const cancel = ui.confirmPool === wid
       ? `<button class="danger" data-act="poolcancel" data-id="${wid}">Wirklich absagen</button><button class="ghost" data-act="poolnoconfirm">Doch nicht</button>`
-      : `<button class="ghost danger-text" data-act="askpoolcancel" data-id="${wid}">Absagen und freigeben</button>`;
+      : `<button class="ghost danger-text" data-act="askpoolcancel" data-id="${wid}">${w.free ? 'Absagen' : 'Absagen und freigeben'}</button>`;
     mine = `<h2>Du kaufst</h2>
       <div class="card fields poolme">
         <p class="poolmine"><span>Dein Anteil</span><b>${esc(fmtCents(c.per[me()] || 0))}</b></p>
@@ -2122,7 +2193,10 @@ function viewPool(wid) {
       </form>`;
   }
 
-  return shell('Gemeinsam schenken', `${notes}${head}${summary}${mine}${people}
+  // Eigene Idee, die darauf zeigt (1.20)
+  const idea = w.free ? (D.ideas || []).find(i => i.free_id === wid) : null;
+  const ideaLink = idea ? `<p class="foot">${icon('bulb')}<span>Aus deiner Idee. <a href="#/i/${idea.id}?r=${ret}">Idee ansehen</a></span></p>` : '';
+  return shell('Gemeinsam schenken', `${notes}${head}${summary}${mine}${people}${ideaLink}
     <p class="foot">${icon('eyeoff')}<span>${esc(owner)} sieht nichts davon. Gefragt sind nur die Leute oben.</span></p>`,
     { tab: 'groups', back: poolBack(w) });
 }
@@ -2148,7 +2222,7 @@ function poolCandidates(w) {
 }
 
 function viewPoolForm(wid, mode) {
-  const w = D.wishes.find(x => x.id === wid && x.owner !== me());
+  const w = poolWish(wid);
   if (!D.poolsOk) return poolMissing(w);
   const edit = mode === 'bearbeiten';
   const p = poolOf(wid);
@@ -2161,18 +2235,89 @@ function viewPoolForm(wid, mode) {
     return shell('Gemeinsam schenken', emptyState('lock', 'Schon vergeben', 'Diesen Wunsch hat schon jemand reserviert.'), { tab: 'groups', back });
   }
   const x = edit ? p : { total: w.price, split: 'equal', open: true, invited: [], min_people: null, deadline: null, note: '' };
-  const cands = poolCandidates(w);
+  const cands = w.free ? freeCandidates(w.owner, w.group_id) : poolCandidates(w);
+  return poolFormPage({ x, cands, owner: poolOwner(w), edit, back, w,
+    form: edit ? 'pooledit' : 'poolstart', id: wid,
+    allLabel: !w.free ? 'Alle, die die Liste sehen' : (w.group_id ? 'Alle in der Geburtstagsgruppe' : `Alle, die ${poolOwner(w)} kennen`) });
+}
+
+// Gemeinsam ohne Wunsch starten: #/gemeinsam/neu/<u:uid | g:gid | i:idee | gi:gruppen-idee>
+function viewFreeForm(key) {
+  const m = /^(u|g|i|gi):([\w-]+)$/.exec(key || '');
+  let uid = null, gid = null, title = '', url = '', total = null, from = '', err = '';
+  if (!D.freeOk) return poolMissing(null);
+  if (m && m[1] === 'u') { uid = m[2]; if (!known(uid) || uid === me()) err = 'Diese Person kennst du hier nicht.'; }
+  else if (m && m[1] === 'g') { gid = m[2]; }
+  else if (m && m[1] === 'i') {
+    const i = (D.ideas || []).find(x => x.id === m[2]);
+    const ip = i && ipById(i.person);
+    uid = ip && ip.linked_user;
+    if (!i) err = 'Diese Idee gibt es nicht mehr.';
+    else if (i.free_id && poolOf(i.free_id)) return viewPool(i.free_id);
+    else if (!uid || !known(uid)) err = 'Gemeinsam geht nur für Leute mit App, die du kennst. Für Personen ohne App geht es in einer Geburtstagsgruppe.';
+    else { title = i.title; url = i.url || ''; total = i.price; from = 'Aus deiner Idee'; }
+  } else if (m && m[1] === 'gi') {
+    const gi = (D.gi || []).find(x => x.id === m[2]);
+    if (!gi) err = 'Diese Idee gibt es nicht mehr.';
+    else if (gi.free_id && poolOf(gi.free_id)) return viewPool(gi.free_id);
+    else if (gi.taken_by) err = 'Diese Idee übernimmt schon jemand.';
+    else { gid = gi.group_id; title = gi.title; url = gi.url || ''; total = gi.price; from = 'Aus einer gemeinsamen Idee'; }
+  } else err = 'Dieser Link stimmt nicht.';
+  const g = gid ? myGroups().find(x => x.id === gid) : null;
+  if (!err && gid && (!g || !isBday(g) || g.archived_at)) err = 'Diese Geburtstagsgruppe gibt es nicht (mehr).';
+  if (!err && g) uid = g.bday_user || null;
+  const back = backParam() ? [backParam(), 'Zurück'] : (g ? ['#/g/' + g.id, g.name] : (uid && known(uid) ? ['#/p/' + uid, nameOf(uid)] : ['#/', 'Start']));
+  if (err) return shell('Gemeinsam schenken', emptyState('people', 'Geht hier nicht', esc(err)), { tab: 'groups', back });
+  const owner = g ? bdayName(g) : nameOf(uid);
+  const x = { title, url, total, split: 'equal', open: true, invited: [], min_people: null, deadline: null, note: '' };
+  return poolFormPage({ x, cands: freeCandidates(g ? null : uid, gid), owner, edit: false, back, w: null, free: true, from,
+    form: 'freestart', id: key, allLabel: g ? 'Alle in der Geburtstagsgruppe' : `Alle, die ${owner} kennen` });
+}
+
+// Wen ich fragen kann (ohne Wunsch): in der Geburtstagsgruppe deren Mitglieder, sonst fragt die Datenbank
+function freeCandidates(uid, gid) {
+  let out = [];
+  if (gid) out = membersOf(gid).map(m => m.user_id).filter(u => u !== me() && u !== uid);
+  else if (uid) {
+    const k = 'u:' + uid;
+    ui.fc = ui.fc || {};
+    if (ui.fc[k] === undefined) {
+      ui.fc[k] = null;
+      const h = location.hash;
+      sb('/rest/v1/rpc/free_candidates', { method: 'POST', body: { p_user: uid, p_group: null } })
+        .then(r => { (ui.fc = ui.fc || {})[k] = r || []; if (location.hash === h && (r || []).length) render(); })
+        .catch(() => { (ui.fc = ui.fc || {})[k] = []; });
+    }
+    out = (ui.fc[k] || []).filter(u => u !== me() && u !== uid);
+  }
+  return out.sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'de'));
+}
+
+// Formularseite für Start und Bearbeiten (mit Wunsch oder ohne)
+function poolFormPage(o) {
+  const { x, owner, edit, back, w } = o;
+  const free = o.free || (w && w.free);
+  const cands = o.cands.slice();
   (x.invited || []).forEach(u => { if (!cands.includes(u)) cands.push(u); });
-  const owner = nameOf(w.owner);
   const splits = SPLITS.map(([v, n]) => `<label><input type="radio" name="split" value="${v}" ${x.split === v ? 'checked' : ''}><span>${n}</span></label>`).join('');
   const help = SPLITS.find(s => s[0] === x.split)[2];
   const boxes = cands.map(u => `<label class="check"><input type="checkbox" name="pu" value="${u}" ${(x.invited || []).includes(u) ? 'checked' : ''}><span>${esc(nameOf(u))}</span></label>`).join('');
   const mins = '<option value="">Keine</option>' + [2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 20].map(n => `<option value="${n}" ${x.min_people === n ? 'selected' : ''}>${n}</option>`).join('');
   const minDay = x.deadline && x.deadline < todayIso() ? x.deadline : todayIso();
   const own = edit ? '' : `<label id="myamt" class="${x.split === 'equal' ? 'hide' : ''}"><span id="myamtlabel">${x.split === 'budget' ? 'Dein Höchstbetrag' : 'Dein Betrag'}</span><span class="money"><input name="amount" inputmode="decimal" autocomplete="off" maxlength="12" placeholder="leer = flexibel"><span>€</span></span></label>`;
-  return shell(edit ? 'Gemeinsam bearbeiten' : 'Gemeinsam schenken', `
-    <div class="card wish poolwish"><div class="wish-head">${tile(w)}<div class="row-main"><h3>${esc(w.title)}</h3><p class="wmeta"><span>für ${esc(owner)}${w.price != null ? ' · ' + esc(fmtPrice(w.price)) : ''}</span></p></div></div></div>
-    <form data-form="${edit ? 'pooledit' : 'poolstart'}" data-id="${wid}" class="stack">
+  const top = free
+    ? `<div class="card fields">
+        <label>Was schenkt ihr ${esc(owner)}?<input name="title" maxlength="120" required value="${esc(x.title || '')}" placeholder="z. B. Gutschein für ein Konzert"></label>
+        <div class="field"><div class="fieldhead"><label for="f-url">Link</label><button type="button" class="link withicon" data-act="pasteurl">${icon('paste')}Einfügen</button></div>
+          <input id="f-url" name="url" inputmode="url" autocomplete="off" value="${esc(x.url || '')}" placeholder="https:// (freiwillig)"></div>
+        ${o.from ? `<p class="muted fhelp">${esc(o.from)}. Die Idee bleibt und zeigt darauf.</p>` : ''}
+      </div>`
+    : `<div class="card wish poolwish"><div class="wish-head">${tile(w)}<div class="row-main"><h3>${esc(w.title)}</h3><p class="wmeta"><span>für ${esc(owner)}${w.price != null ? ' · ' + esc(fmtPrice(w.price)) : ''}</span></p></div></div></div>`;
+  const none = free ? `Von deinen Leuten kennt sonst niemand ${esc(owner)}.` : 'Von deinen Leuten sieht sonst niemand diesen Wunsch.';
+  const foot = edit ? '' : (free ? 'Du kaufst und streckst das Geld vor. ' : 'Du reservierst den Wunsch, kaufst und streckst das Geld vor. ');
+  return shell(edit ? 'Gemeinsam bearbeiten' : 'Gemeinsam schenken', `${free ? '' : top}
+    <form data-form="${o.form}" data-id="${esc(o.id)}" class="stack">
+      ${free ? top : ''}
       <div class="card fields">
         <label>Was kostet es insgesamt?<span class="money"><input name="total" inputmode="decimal" autocomplete="off" maxlength="12" required value="${esc(priceInput(x.total))}" placeholder="z. B. 120"><span>€</span></span></label>
         <div class="field"><span class="flabel">Wie wird aufgeteilt?</span><div class="seg">${splits}</div><p class="muted fhelp" id="splithelp">${esc(help)}</p></div>
@@ -2180,9 +2325,9 @@ function viewPoolForm(wid, mode) {
       </div>
       <h2>Wen fragst du?</h2>
       <div class="card options">
-        <label class="check"><input type="radio" name="who" value="all" ${x.open ? 'checked' : ''}><span>Alle, die die Liste sehen<small>Jeder kann mitmachen, ${esc(owner)} ausgenommen</small></span></label>
+        <label class="check"><input type="radio" name="who" value="all" ${x.open ? 'checked' : ''}><span>${esc(o.allLabel)}<small>Jeder kann mitmachen, ${esc(owner)} ausgenommen</small></span></label>
         <label class="check"><input type="radio" name="who" value="some" ${x.open ? '' : 'checked'}><span>Nur bestimmte Leute</span></label>
-        <div class="sub ${x.open ? 'hide' : ''}" id="ppick">${boxes || '<p class="muted">Von deinen Leuten sieht sonst niemand diesen Wunsch.</p>'}</div>
+        <div class="sub ${x.open ? 'hide' : ''}" id="ppick">${boxes || `<p class="muted">${none}</p>`}</div>
       </div>
       <h2>Wenn zu wenige mitmachen</h2>
       <div class="card fields">
@@ -2193,7 +2338,7 @@ function viewPoolForm(wid, mode) {
       </div>
       <button class="primary" type="submit">${edit ? 'Speichern' : 'Starten und fragen'}</button>
     </form>
-    <p class="foot">${icon('eyeoff')}<span>${edit ? '' : 'Du reservierst den Wunsch, kaufst und streckst das Geld vor. '}${esc(owner)} sieht nichts davon.</span></p>`,
+    <p class="foot">${icon('eyeoff')}<span>${foot}${esc(owner)} sieht nichts davon.</span></p>`,
     { tab: 'groups', back });
 }
 
@@ -2207,7 +2352,15 @@ function poolFormData(f) {
   if (!open && !invited.length) throw new Error('Wähle mindestens eine Person aus.');
   const min = f.min.value ? Number(f.min.value) : null;
   const deadline = f.deadline.value || null;
-  return { p_total: total, p_split: split, p_open: open, p_invited: invited, p_min: min, p_deadline: deadline, p_note: f.note.value.trim() || null };
+  const out = { p_total: total, p_split: split, p_open: open, p_invited: invited, p_min: min, p_deadline: deadline, p_note: f.note.value.trim() || null };
+  if (f.title) {   // ohne Wunsch (1.20): Titel und Link
+    const t = f.title.value.trim();
+    if (!t) throw new Error('Was schenkt ihr? Gib einen Titel ein.');
+    const url = normUrl(f.url.value);
+    if (url === false) throw new Error('Der Link sieht nicht richtig aus.');
+    Object.assign(out, { p_title: t, p_url: url || null });
+  }
+  return out;
 }
 function amountOf(f) {
   if (!f.amount) return null;
@@ -2217,9 +2370,9 @@ function amountOf(f) {
 }
 // Ändern mit den bisherigen Werten (z. B. „Trotzdem schenken“)
 function poolUpdate(p, ch) {
-  const body = Object.assign({ p_wish: p.wish_id, p_total: Number(p.total), p_split: p.split, p_open: p.open, p_invited: p.invited || [],
-    p_min: p.min_people, p_deadline: p.deadline, p_note: p.note }, ch);
-  return sb('/rest/v1/rpc/pool_update', { method: 'POST', body });
+  const body = Object.assign({ p_total: Number(p.total), p_split: p.split, p_open: p.open, p_invited: p.invited || [],
+    p_min: p.min_people, p_deadline: p.deadline, p_note: p.note }, p.free ? { p_title: p.title, p_url: p.url } : {}, ch);
+  return poolRpc(p.wish_id, 'update', body);
 }
 
 // Startseite: Anfragen, Beteiligungen und fällige Entscheidungen
@@ -2229,8 +2382,9 @@ function poolHome() {
   const rows = [];
   const due = [];
   (D.pools || []).forEach(p => {
-    const w = D.wishes.find(x => x.id === p.wish_id);
-    if (!w || w.owner === me()) return;
+    const w = p.free ? freeWish(p) : D.wishes.find(x => x.id === p.wish_id);
+    if (!w || (w.owner && w.owner === me())) return;
+    const owner = poolOwner(w);
     const href = `#/gemeinsam/${p.wish_id}`;
     if (p.buyer === me()) {
       if (poolClosed(p) && poolShort(p)) due.push(`<a class="banner warn tap" href="${href}">${icon('calendar')}<span><b>Frist für „${esc(w.title)}“ ist um</b><small>${sharesOf(p.wish_id).length} von ${p.min_people} dabei. Entscheide, wie es weitergeht.</small></span>${icon('chev', 'chev')}</a>`);
@@ -2239,12 +2393,12 @@ function poolHome() {
     const s = sharesOf(p.wish_id).find(x => x.user_id === me());
     if (s) {
       const c = poolCalc(p, sharesOf(p.wish_id));
-      const bought = (resOf(p.wish_id) || {}).status === 'gekauft';
-      rows.push(`<li><a class="row-item" href="${href}">${avatar(w.owner)}<span class="row-main"><span class="row-title">${esc(w.title)}</span>
-        <span class="row-meta">${s.paid_at ? '<span class="tag ok">bezahlt</span>' : ''}für ${esc(nameOf(w.owner))} · dein Anteil ${esc(fmtCents(c.per[me()] || 0))}${bought ? ' · gekauft' : ''}</span></span>${icon('chev', 'chev')}</a></li>`);
+      const bought = poolBought(p);
+      rows.push(`<li><a class="row-item" href="${href}">${poolAv(w)}<span class="row-main"><span class="row-title">${esc(w.title)}</span>
+        <span class="row-meta">${s.paid_at ? '<span class="tag ok">bezahlt</span>' : ''}für ${esc(owner)} · dein Anteil ${esc(fmtCents(c.per[me()] || 0))}${bought ? ' · gekauft' : ''}</span></span>${icon('chev', 'chev')}</a></li>`);
     } else if (!w.have_at && !poolClosed(p) && !no[p.wish_id] && (p.open || (p.invited || []).includes(me()))) {
       rows.unshift(`<li class="row-item poolask"><a class="row-main" href="${href}"><span class="row-title">${esc(nameOf(p.buyer))} fragt: „${esc(w.title)}“</span>
-        <span class="row-meta"><span class="tag new">Anfrage</span>für ${esc(nameOf(w.owner))} · ${sharesOf(p.wish_id).length} dabei</span></a>
+        <span class="row-meta"><span class="tag new">Anfrage</span>für ${esc(owner)} · ${sharesOf(p.wish_id).length} dabei</span></a>
         <button class="link" data-act="pooldecline" data-id="${p.wish_id}">Nein danke</button></li>`);
     }
   });
@@ -2380,9 +2534,16 @@ function giCard(g, i) {
   const mine = i.taken_by === me();
   const bought = i.status === 'gekauft';
   let pill = '', acts = '';
-  if (!i.taken_by) {
+  const pool = i.free_id ? poolOf(i.free_id) : null;
+  if (pool) {   // gemeinsames Geschenk daraus (1.20)
+    const inIt = inPool(pool.wish_id);
+    const can = inIt || (!poolClosed(pool) && (pool.open || (pool.invited || []).includes(me())));
+    pill = `<span class="pill ${inIt ? 'green' : 'gold'}">${icon(pool.bought_at ? 'check' : 'people')}${esc(poolLabel(pool))}${pool.bought_at ? ' · gekauft' : ''}</span>`;
+    acts = `<a class="${inIt || !can ? 'secondary' : 'primary'} sm" href="#/gemeinsam/${pool.wish_id}?r=g/${g.id}">${inIt || !can ? 'Ansehen' : 'Mitmachen'}</a>`;
+  } else if (!i.taken_by) {
     pill = '<span class="pill open">Offen</span>';
-    if (!g.archived_at) acts = `<button class="primary sm" data-act="gtake" data-id="${i.id}" data-s="reserviert">Ich schenke das</button>`;
+    if (!g.archived_at) acts = `<button class="primary sm" data-act="gtake" data-id="${i.id}" data-s="reserviert">Ich schenke das</button>`
+      + (D.freeOk ? `<a class="secondary sm withicon" href="#/gemeinsam/neu/gi:${i.id}?r=g/${g.id}">${icon('people')}Gemeinsam</a>` : '');
   } else if (mine) {
     pill = `<span class="pill green">${icon(bought ? 'check' : 'lock')}${bought ? 'Von dir gekauft' : 'Übernimmst du'}</span>`;
     if (!g.archived_at) acts = (bought
@@ -2395,7 +2556,7 @@ function giCard(g, i) {
   const link = i.url ? `<a class="link-out" href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${icon('link')}${esc(domain(i.url) || 'Link')}</a>` : '';
   const meta = [i.price != null ? fmtPrice(i.price) : '', i.created_by === me() ? 'von dir' : 'von ' + nameOf(i.created_by)].filter(Boolean).join(' · ');
   const edit = i.created_by === me() && !g.archived_at ? `<a class="link sm giedit" href="#/g/${g.id}/idee/${i.id}">Bearbeiten</a>` : '';
-  return `<li class="card wish gidea ${i.taken_by ? 'taken' : ''}">
+  return `<li class="card wish gidea ${i.taken_by || pool ? 'taken' : ''}">
       <div class="wish-head"><span class="tile plain">${icon('bulb')}</span><div class="row-main"><h3>${esc(i.title)}</h3>
         <p class="wmeta"><span>${esc(meta)}</span></p>${link}</div>${edit}</div>
       ${i.note ? `<p class="wnote">${esc(i.note)}</p>` : ''}
@@ -2418,7 +2579,7 @@ function viewBdayGroup(g) {
     return `<li class="row-item">${avatar(m.user_id)}<span class="row-main"><span class="row-title">${m.user_id === me() ? 'Du' : esc(nameOf(m.user_id))}</span>${joined ? `<span class="row-meta">${newTag('Neu dabei')}</span>` : ''}</span></li>`;
   }).join('');
   const recap = g.bday_recap && (g.bday_recap.items || []).length ? `<h2>Rückblick ${esc(String(g.bday_recap.year || ''))}</h2>
-    <ul class="rows plain recap">${g.bday_recap.items.map(x => `<li class="row-item"><span class="tile plain">${icon(x.st === 'gekauft' ? 'check' : 'gift')}</span><span class="row-main"><span class="row-title">${esc(x.t)}</span><span class="row-meta">${x.by ? (x.by === me() ? 'von dir' : 'von ' + esc(nameOf(x.by))) : ''}</span></span></li>`).join('')}</ul>` : '';
+    <ul class="rows plain recap">${g.bday_recap.items.map(x => `<li class="row-item"><span class="tile plain">${icon(x.st === 'gekauft' ? 'check' : 'gift')}</span><span class="row-main"><span class="row-title">${esc(x.t)}</span><span class="row-meta">${esc([x.by ? (x.by === me() ? 'von dir' : 'von ' + nameOf(x.by)) : '', x.n ? `gemeinsam, ${x.n} dabei` : ''].filter(Boolean).join(' · '))}</span></span></li>`).join('')}</ul>` : '';
   const delBtn = ui.confirmBdDel === gid
     ? `<button class="danger" data-act="bddelgrp" data-id="${gid}">Gruppe wirklich löschen</button>`
     : `<button class="ghost danger-text" data-act="askbddel" data-id="${gid}">Gruppe löschen</button>`;
@@ -2451,6 +2612,7 @@ function viewBdayGroup(g) {
     <h2>Gemeinsame Ideen</h2>
     ${iList}
     <a class="secondary withicon addgidea" href="#/g/${gid}/idee/neu">${icon('plus')}Idee notieren</a>
+    ${freeSection(uid, gid, '?r=g/' + gid)}
     ${recap}
     <div class="card invite">
       <div><p class="eyebrow">Einladungscode</p><p class="code" id="gcode">${esc(fmtCode(g.code))}</p></div>
@@ -2675,7 +2837,7 @@ function viewPerson(gid, uid) {
     <p class="foot">${icon('eyeoff')}<span>${esc(name)} sieht nicht, was reserviert oder gekauft ist.</span></p>${forBday && !known(uid) ? cardFold(uid, name) : cardHint(gid, uid)}`;
   const body = ws.length || had.length ? filterBar + list + hadHtml : emptyState('gift', 'Noch leer', forBday ? `${esc(name)} hat noch nichts für alle freigegeben.` : `${esc(name)} hat ${gid ? 'für diese Gruppe ' : ''}noch nichts eingetragen.`);
   const back = gid ? ['#/g/' + gid, g.name] : (backParam() ? [backParam(), 'Zurück'] : ['#/f/u:' + uid, name]);
-  return shell(name, head + body + (forBday ? '' : personIdeas(gid, uid)), { tab: 'groups', back, eyebrow: gid ? '' : 'Wunschliste' });
+  return shell(name, head + body + (forBday ? '' : freeSection(uid, null, ret) + personIdeas(gid, uid)), { tab: 'groups', back, eyebrow: gid ? '' : 'Wunschliste' });
 }
 
 // „Geburtstag am 12. April · wird 30“ (1.15)
@@ -3102,7 +3264,7 @@ function cardHint(gid, uid) {
    und auf der Startseite, wenn alles erledigt ist. Anlass ist bis Paket 9 Heiligabend. */
 const EARLY_DAYS = 14;
 function errandStats() {
-  const errands = D.res.filter(r => r.user_id === me() && D.wishes.some(w => w.id === r.wish_id));
+  const errands = D.res.filter(r => r.user_id === me() && D.wishes.some(w => w.id === r.wish_id)).concat(freeErrands().map(x => x.r));
   const ideasDone = (D.ideas || []).filter(i => i.done_at && !ideaTaken(i)).length;
   return { n: errands.length + ideasDone, done: errands.filter(r => r.status === 'gekauft').length + ideasDone };
 }
@@ -3293,7 +3455,7 @@ const HELP = [
   ['Wer sieht meine Wünsche?', 'Alle aus deinen Gruppen und deine Freunde. Bei jedem Wunsch kannst du unter „Mehr Angaben“ bei „Wer darf das sehen?“ einstellen, wer ihn sieht.'],
   ['Sieht jemand, was ich ihm schenke?', 'Nein. Wenn du bei einem Wunsch auf „Ich schenke das“ tippst, sehen das nur die anderen, damit nichts doppelt gekauft wird. Die beschenkte Person sieht es nie.'],
   ['Was mache ich, wenn ich mein Passwort vergessen habe?', 'Tippe bei der Anmeldung auf „Passwort vergessen“. Mit deinem Benutzernamen und deinem Wiederherstellungscode legst du ein neues Passwort fest. Ist auch der Code weg, melde dich bei der Person, die die App betreut. Sie kann dir einen Rücksetz-Code geben. Hast du noch keinen Benutzernamen, sichere dein Konto unter Konto, solange du angemeldet bist.'],
-  ['Wie schenken wir etwas zusammen?', 'Öffne den Wunsch einer Person und tippe auf „Gemeinsam“. Dann wählst du, wen du fragst. Wer mitmacht, gibt einen Teil dazu, und einer kauft.'],
+  ['Wie schenken wir etwas zusammen?', 'Öffne den Wunsch einer Person und tippe auf „Gemeinsam“. Dann wählst du, wen du fragst. Wer mitmacht, gibt einen Teil dazu, und einer kauft. Steht es nicht auf der Liste, tippe unten auf der Liste der Person auf „Gemeinsam etwas anderes schenken“.'],
 ];
 function viewHelp() {
   const items = HELP.map(([q, a], k) => `<details class="fold helpq" id="help-${k}"${folds['help-' + k] ? ' open' : ''}><summary><span class="foldsum"><b>${q}</b></span>${icon('chev', 'chev')}</summary>
@@ -3350,6 +3512,7 @@ function render() {
   else if (parts[0] === 'konto' || parts[0] === 'mehr') html = viewAccount();
   else if (parts[0] === 'steckbrief') html = viewCard(parts);
   else if (parts[0] === 'hilfe') html = viewHelp();
+  else if (parts[0] === 'gemeinsam' && parts[1] === 'neu') html = viewFreeForm(parts[2]);
   else if (parts[0] === 'gemeinsam' && parts[1]) html = parts[2] ? viewPoolForm(parts[1], parts[2]) : viewPool(parts[1]);
   else html = viewHome();
   const y = render.lastKey === location.hash ? window.scrollY : 0;
@@ -3461,15 +3624,24 @@ const forms = {
     toast(body.p_open ? 'Gestartet. Alle, die die Liste sehen, können mitmachen.' : 'Gestartet. Die Ausgewählten werden gefragt.');
     location.replace('#/gemeinsam/' + f.dataset.id + poolRet());
   },
+  async freestart(f) {
+    const m = /^(u|g|i|gi):([\w-]+)$/.exec(f.dataset.id) || [];
+    const body = Object.assign({ p_user: m[1] === 'u' ? m[2] : null, p_group: m[1] === 'g' ? m[2] : null,
+      p_idea: m[1] === 'i' ? m[2] : null, p_gidea: m[1] === 'gi' ? m[2] : null, p_amount: amountOf(f) }, poolFormData(f));
+    const id = await sb('/rest/v1/rpc/free_start', { method: 'POST', body });
+    await sync(true);
+    toast(body.p_open ? 'Gestartet. Die anderen werden gefragt.' : 'Gestartet. Die Ausgewählten werden gefragt.');
+    location.replace('#/gemeinsam/' + id + poolRet());
+  },
   async pooledit(f) {
-    await sb('/rest/v1/rpc/pool_update', { method: 'POST', body: Object.assign({ p_wish: f.dataset.id }, poolFormData(f)) });
+    await poolRpc(f.dataset.id, 'update', poolFormData(f));
     await sync(true);
     toast('Gespeichert.');
     go(backParam() || '#/gemeinsam/' + f.dataset.id);
   },
   async pooljoin(f) {
     const was = inPool(f.dataset.id);
-    await sb('/rest/v1/rpc/pool_join', { method: 'POST', body: { p_wish: f.dataset.id, p_amount: amountOf(f) } });
+    await poolRpc(f.dataset.id, 'join', { p_amount: amountOf(f) });
     const n = poolNo();
     if (n[f.dataset.id]) { delete n[f.dataset.id]; try { localStorage.setItem(POOL_NO, JSON.stringify(n)); } catch (e) { /* egal */ } }
     await sync(true);
@@ -4066,6 +4238,13 @@ const acts = {
     const i = (D.ideas || []).find(x => x.id === el.dataset.id);
     if (!i) return;
     const t = ideaTaken(i);
+    if (t && t.free) {   // gemeinsames Geschenk (1.20): abhaken nur, wer kauft
+      if (t.p.buyer !== me()) { go('#/gemeinsam/' + t.p.wish_id); return; }
+      await poolRpc(t.p.wish_id, 'bought', { p_on: !t.p.bought_at });
+      await sync(true);
+      if (!t.p.bought_at) earlyToast();
+      return;
+    }
     if (t) {   // verknüpft (1.18): abhaken = Wunsch gekauft
       const st = t.r.status === 'gekauft' ? 'reserviert' : 'gekauft';
       await sb('/rest/v1/reservations?wish_id=eq.' + t.w.id, { method: 'PATCH', prefer: 'return=minimal', body: { status: st } });
@@ -4235,7 +4414,8 @@ const acts = {
     toast('Reserviert. Nur die anderen sehen das.');
   },
   resstatus: async el => {
-    await sb('/rest/v1/reservations?wish_id=eq.' + el.dataset.id, { method: 'PATCH', prefer: 'return=minimal', body: { status: el.dataset.s } });
+    if (isFree(el.dataset.id)) await poolRpc(el.dataset.id, 'bought', { p_on: el.dataset.s === 'gekauft' });   // ohne Wunsch (1.20)
+    else await sb('/rest/v1/reservations?wish_id=eq.' + el.dataset.id, { method: 'PATCH', prefer: 'return=minimal', body: { status: el.dataset.s } });
     await sync(true);
     if (el.dataset.s === 'gekauft') earlyToast();
   },
@@ -4270,22 +4450,22 @@ const acts = {
   },
   // Gemeinsam schenken (1.13)
   poolpaid: async el => {
-    await sb('/rest/v1/rpc/pool_paid', { method: 'POST', body: { p_wish: el.dataset.id, p_user: el.dataset.u, p_on: el.dataset.on === '1' } });
+    await poolRpc(el.dataset.id, 'paid', { p_user: el.dataset.u, p_on: el.dataset.on === '1' });
     await sync(true);
     if (el.dataset.on === '1') toast(el.dataset.u === me() ? 'Danke, ist abgehakt.' : 'Als bezahlt markiert.');
   },
   askpoolcancel: async el => { ui.confirmPool = el.dataset.id; render(); },
   poolnoconfirm: async () => { delete ui.confirmPool; delete ui.handover; render(); },
   poolcancel: async el => {
-    await sb('/rest/v1/rpc/pool_cancel', { method: 'POST', body: { p_wish: el.dataset.id } });
-    const w = D.wishes.find(x => x.id === el.dataset.id);
+    const w = poolWish(el.dataset.id);
+    await poolRpc(el.dataset.id, 'cancel');
     ui = {};
     await sync(true);
-    toast('Abgesagt. Der Wunsch ist wieder frei.');
+    toast(w && w.free ? 'Abgesagt.' : 'Abgesagt. Der Wunsch ist wieder frei.');
     go(w ? poolBack(w)[0] : '#/');
   },
   poolleave: async el => {
-    await sb('/rest/v1/rpc/pool_leave', { method: 'POST', body: { p_wish: el.dataset.id } });
+    await poolRpc(el.dataset.id, 'leave');
     ui = {};
     await sync(true);
     toast('Du machst nicht mehr mit.');
@@ -4297,7 +4477,7 @@ const acts = {
   },
   poolhand: async el => { ui.handover = el.dataset.id; render(); },
   poolhandto: async el => {
-    await sb('/rest/v1/rpc/pool_handover', { method: 'POST', body: { p_wish: el.dataset.id, p_user: el.dataset.u } });
+    await poolRpc(el.dataset.id, 'handover', { p_user: el.dataset.u });
     ui = {};
     await sync(true);
     toast(nameOf(el.dataset.u) + ' kauft jetzt.');

@@ -225,6 +225,13 @@ begin
          and public.pool_visible_to(p.wish_id, me)) then
     return true;
   end if;
+  -- Seit 1.20: gemeinsame Geschenke ohne Wunsch
+  if to_regprocedure('public.free_names(uuid)') is not null then
+    declare fv boolean; begin
+      execute 'select public.free_names($1)' into fv using other;
+      if fv then return true; end if;
+    end;
+  end if;
   return false;
 end $$;
 
@@ -955,6 +962,8 @@ create table if not exists public.push_outbox (
 );
 -- seit 1.13: Art „pool“ (gemeinsam schenken) und info (Angaben, die beim Versand nicht mehr da sein könnten)
 alter table public.push_outbox add column if not exists info jsonb;
+-- seit 1.20: gemeinsames Geschenk ohne Wunsch (free_gifts.id, ohne Fremdschlüssel)
+alter table public.push_outbox add column if not exists free_id uuid;
 alter table public.push_outbox drop constraint if exists push_outbox_kind_check;
 alter table public.push_outbox add constraint push_outbox_kind_check
   check (kind in ('wish', 'member', 'draw', 'have', 'remind', 'test', 'pool', 'friend', 'bday'));
@@ -1165,6 +1174,10 @@ begin
   -- Gemeinsam schenken (1.13): Frist gestern abgelaufen, zu wenige dabei → an den Käufer
   if to_regclass('public.gift_pools') is not null then
     execute 'select public.pool_due($1)' into k using today;
+  end if;
+  -- Seit 1.20: auch gemeinsame Geschenke ohne Wunsch
+  if to_regprocedure('public.free_due(date)') is not null then
+    execute 'select coalesce($2, 0) + public.free_due($1)' into k using today, k;
   end if;
   -- Seit 1.15: Erinnerungen für alle Anlässe der Gruppen und für Geburtstage
   if to_regprocedure('public.occasion_due(date)') is not null then
@@ -2162,6 +2175,10 @@ begin
   select * into o from public.push_outbox x
     where x.user_id = p_user and x.tag = p_tag and x.kind = 'pool' order by x.id desc limit 1;
   if not found then return null; end if;
+  -- seit 1.20: gemeinsames Geschenk ohne Wunsch
+  if o.free_id is not null then
+    return public.free_message(p_user, p_tag, o);
+  end if;
   if o.extra in ('cancel', 'gone') then
     return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
       'title', 'Gemeinsames Geschenk abgesagt',
@@ -3303,3 +3320,551 @@ end $$;
 revoke execute on function public.username_blocked(text), public.username_held(text, uuid), public.signup_check(),
   public.change_username(text) from public, anon, authenticated;
 grant execute on function public.change_username(text) to authenticated;
+
+-- =====================================================================
+-- Gemeinsam ohne Wunsch (Version 1.20)
+-- Ein gemeinsames Geschenk, das nicht an einem Wunsch hängt: frei auf der Personenseite,
+-- aus einer eigenen Idee oder aus einer Idee in der Geburtstagsgruppe. Die Idee bleibt
+-- und zeigt darauf. Für Personen ohne App nur in der Geburtstagsgruppe.
+-- Wer gefragt wird: offen = alle, die die Person kennen (gemeinsame normale Gruppe oder
+-- befreundet), in der Geburtstagsgruppe deren Mitglieder; sonst nur Eingeladene.
+-- Käufer, Aufteilung, Frist und Mindestzahl wie bei Gemeinsam schenken (1.13).
+-- Die beschenkte Person sieht nie etwas davon.
+-- =====================================================================
+
+create table if not exists public.free_gifts (
+  id uuid primary key default gen_random_uuid(),
+  for_user uuid references auth.users(id) on delete cascade,        -- beschenkte Person mit App
+  group_id uuid references public.groups(id) on delete cascade,     -- nur Geburtstagsgruppe
+  title text not null check (char_length(title) between 1 and 120),
+  url text check (url is null or (char_length(url) <= 1000 and url ~* '^https?://')),
+  buyer uuid not null references auth.users(id) on delete cascade,
+  created_by uuid references auth.users(id) on delete set null,
+  total numeric(9,2) not null check (total > 0 and total <= 1000000),
+  split text not null default 'equal' check (split in ('equal', 'budget', 'custom')),
+  open boolean not null default true,
+  invited uuid[] not null default '{}' check (cardinality(invited) <= 60),
+  min_people smallint check (min_people is null or min_people between 2 and 30),
+  deadline date,
+  note text check (note is null or char_length(note) <= 300),
+  bought_at timestamptz,
+  recap_year int,                                                   -- schon im Rückblick der Geburtstagsgruppe
+  created_at timestamptz not null default now(),
+  check (for_user is not null or group_id is not null)
+);
+create index if not exists free_gifts_buyer_idx on public.free_gifts(buyer);
+create index if not exists free_gifts_for_idx on public.free_gifts(for_user);
+create index if not exists free_gifts_group_idx on public.free_gifts(group_id);
+
+create table if not exists public.free_shares (
+  gift_id uuid not null references public.free_gifts(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  amount numeric(9,2) check (amount is null or (amount > 0 and amount <= 1000000)),
+  paid_at timestamptz,
+  joined_at timestamptz not null default now(),
+  primary key (gift_id, user_id)
+);
+create index if not exists free_shares_user_idx on public.free_shares(user_id);
+
+-- Die Idee bleibt und zeigt auf das gemeinsame Geschenk
+alter table public.ideas add column if not exists free_id uuid references public.free_gifts(id) on delete set null;
+alter table public.group_ideas add column if not exists free_id uuid references public.free_gifts(id) on delete set null;
+
+-- ---------- Hilfen ----------
+
+-- Kennt u die Person, für die das Geschenk ist? (die Person selbst nie)
+create or replace function public.free_knows(f uuid, u uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (
+    select 1 from public.free_gifts x
+    where x.id = f and u is not null and u is distinct from x.for_user and (
+      case when x.group_id is not null then
+        exists (select 1 from public.members m where m.group_id = x.group_id and m.user_id = u)
+      else
+        public.are_friends(u, x.for_user) or exists (
+          select 1 from public.members a
+          join public.members b on b.group_id = a.group_id and b.user_id = x.for_user
+          join public.groups g on g.id = a.group_id and g.bday_name is null
+          where a.user_id = u)
+      end));
+$$;
+
+create or replace function public.free_member(f uuid, u uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.free_shares where gift_id = f and user_id = u);
+$$;
+
+create or replace function public.free_visible_to(f uuid, u uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (
+    select 1 from public.free_gifts x
+    where x.id = f and public.free_knows(f, u)
+      and (x.open or x.buyer = u or u = any(x.invited) or public.free_member(f, u)));
+$$;
+
+create or replace function public.free_visible(f uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select public.free_visible_to(f, auth.uid());
+$$;
+
+-- Alle, die die Person kennen (für „offen“ und die Auswahl)
+create or replace function public.free_people(p_user uuid, p_group uuid) returns setof uuid
+language sql stable security definer set search_path = '' as $$
+  select m.user_id from public.members m where p_group is not null and m.group_id = p_group
+    and m.user_id is distinct from p_user
+  union
+  select case when f.a = p_user then f.b else f.a end from public.friendships f
+    where p_group is null and (f.a = p_user or f.b = p_user)
+  union
+  select b.user_id from public.members a
+    join public.members b on b.group_id = a.group_id
+    join public.groups g on g.id = a.group_id and g.bday_name is null
+    where p_group is null and a.user_id = p_user and b.user_id <> p_user;
+$$;
+
+create or replace function public.free_audience(f uuid, p_open boolean, p_invited uuid[]) returns setof uuid
+language sql stable security definer set search_path = '' as $$
+  select u from public.free_gifts x, public.free_people(x.for_user, x.group_id) u
+  where x.id = f and (p_open or u = any(coalesce(p_invited, '{}')));
+$$;
+
+-- Wen ich fragen kann: Leute, die die Person kennen und die ich auch kenne (oder aus derselben Geburtstagsgruppe)
+create or replace function public.free_candidates(p_user uuid, p_group uuid) returns uuid[]
+language sql stable security definer set search_path = '' as $$
+  select coalesce(array_agg(u), '{}')
+  from public.free_people(p_user, p_group) u
+  where u <> auth.uid()
+    and (case when p_group is not null then public.is_member(p_group) else public.knows(p_user) end)
+    and (p_group is not null or public.knows(u));
+$$;
+
+create or replace function public.free_clean_invited(p_user uuid, p_group uuid, p uuid[]) returns uuid[]
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  res uuid[];
+begin
+  select coalesce(array_agg(distinct u), '{}') into res from unnest(coalesce(p, '{}')) u
+    where u is not null and u <> auth.uid();
+  if cardinality(res) > 60 then raise exception 'Zu viele Eingeladene' using errcode = '54000'; end if;
+  if exists (select 1 from unnest(res) u where u not in (select public.free_people(p_user, p_group))) then
+    raise exception 'Person kennt die beschenkte Person nicht' using errcode = '22023';
+  end if;
+  return res;
+end $$;
+
+-- free_id nur über die Funktionen setzen (bei eigenen Ideen darf der Besitzer die Verknüpfung lösen)
+create or replace function public.free_link_check() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if current_user = 'authenticated' and (new.free_id is not null or tg_table_name = 'group_ideas')
+     and (case when tg_op = 'INSERT' then new.free_id is not null else new.free_id is distinct from old.free_id end) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+drop trigger if exists ideas_free_check on public.ideas;
+create trigger ideas_free_check before insert or update of free_id on public.ideas
+  for each row execute function public.free_link_check();
+drop trigger if exists group_ideas_free_check on public.group_ideas;
+create trigger group_ideas_free_check before insert or update of free_id on public.group_ideas
+  for each row execute function public.free_link_check();
+
+-- ---------- Aktionen der App ----------
+
+-- Starten. Für wen: p_user (frei, Person mit App), p_group (Geburtstagsgruppe), p_idea (eigene Idee,
+-- Person muss verbunden sein) oder p_gidea (Idee in der Geburtstagsgruppe). Startet, kauft und macht selbst mit.
+create or replace function public.free_start(p_user uuid, p_group uuid, p_idea uuid, p_gidea uuid,
+  p_title text, p_url text, p_total numeric, p_split text, p_amount numeric,
+  p_open boolean, p_invited uuid[], p_min int, p_deadline date, p_note text) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare
+  me uuid := auth.uid();
+  u uuid := p_user;
+  g uuid := p_group;
+  t text := nullif(btrim(coalesce(p_title, '')), '');
+  i public.ideas;
+  gi public.group_ideas;
+  inv uuid[];
+  fid uuid;
+begin
+  if me is null then raise exception 'Nicht angemeldet' using errcode = '42501'; end if;
+  if p_idea is not null then
+    select * into i from public.ideas where id = p_idea and owner = me for update;
+    if not found or i.free_id is not null then raise exception 'Nicht erlaubt' using errcode = '42501'; end if;
+    select linked_user into u from public.idea_people where id = i.person;
+    if u is null then raise exception 'Nur für Personen mit App' using errcode = '22023'; end if;
+    g := null;
+    t := coalesce(t, i.title);
+  elsif p_gidea is not null then
+    select * into gi from public.group_ideas where id = p_gidea for update;
+    if not found or not public.is_member(gi.group_id) then raise exception 'Nicht erlaubt' using errcode = '42501'; end if;
+    if gi.taken_by is not null or gi.free_id is not null then raise exception 'Das übernimmt schon jemand'; end if;
+    g := gi.group_id;
+    t := coalesce(t, gi.title);
+  end if;
+  if g is not null then
+    if not exists (select 1 from public.groups where id = g and bday_name is not null and archived_at is null)
+       or not public.is_member(g) then
+      raise exception 'Nicht erlaubt' using errcode = '42501';
+    end if;
+    select bday_user into u from public.groups where id = g;
+  elsif u is null or u = me or not public.knows(u) then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if t is null then raise exception 'Bitte einen Titel angeben' using errcode = '22023'; end if;
+  if (select count(*) from public.free_gifts where buyer = me) >= 50 then
+    raise exception 'Zu viele gemeinsame Geschenke' using errcode = '54000';
+  end if;
+  inv := public.free_clean_invited(u, g, p_invited);
+  perform public.pool_check(p_split, p_min, p_deadline, p_open, inv);
+  insert into public.free_gifts (for_user, group_id, title, url, buyer, created_by, total, split, open, invited,
+                                 min_people, deadline, note)
+    values (u, g, left(t, 120), nullif(btrim(coalesce(p_url, '')), ''), me, me, p_total, p_split, coalesce(p_open, true), inv,
+            nullif(p_min, 0), p_deadline, nullif(btrim(coalesce(p_note, '')), ''))
+    returning id into fid;
+  insert into public.free_shares (gift_id, user_id, amount) values (fid, me, p_amount);
+  if p_idea is not null then update public.ideas set free_id = fid where id = p_idea; end if;
+  if p_gidea is not null then update public.group_ideas set free_id = fid where id = p_gidea; end if;
+  return fid;
+end $$;
+
+-- Ändern (nur der Käufer)
+create or replace function public.free_update(p_gift uuid, p_title text, p_url text, p_total numeric, p_split text,
+  p_open boolean, p_invited uuid[], p_min int, p_deadline date, p_note text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  x public.free_gifts;
+  inv uuid[];
+begin
+  select * into x from public.free_gifts where id = p_gift and buyer = auth.uid();
+  if not found then raise exception 'Keine Berechtigung' using errcode = '42501'; end if;
+  inv := public.free_clean_invited(x.for_user, x.group_id, p_invited);
+  perform public.pool_check(p_split, p_min, case when p_deadline = x.deadline then null else p_deadline end, p_open, inv);
+  update public.free_gifts set title = left(coalesce(nullif(btrim(coalesce(p_title, '')), ''), title), 120),
+    url = nullif(btrim(coalesce(p_url, '')), ''),
+    total = p_total, split = p_split, open = coalesce(p_open, true), invited = inv,
+    min_people = nullif(p_min, 0), deadline = p_deadline, note = nullif(btrim(coalesce(p_note, '')), '')
+  where id = p_gift;
+end $$;
+
+create or replace function public.free_join(p_gift uuid, p_amount numeric) returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  x public.free_gifts;
+begin
+  if auth.uid() is null then raise exception 'Nicht angemeldet' using errcode = '42501'; end if;
+  select * into x from public.free_gifts where id = p_gift;
+  if not found or not public.free_visible(p_gift) then raise exception 'Keine Berechtigung' using errcode = '42501'; end if;
+  if public.free_member(p_gift, auth.uid()) then
+    update public.free_shares set amount = p_amount where gift_id = p_gift and user_id = auth.uid();
+    return;
+  end if;
+  if x.deadline is not null and x.deadline < public.pool_today() then raise exception 'Frist abgelaufen' using errcode = '22023'; end if;
+  if (select count(*) from public.free_shares where gift_id = p_gift) >= 30 then raise exception 'Gemeinsam voll' using errcode = '54000'; end if;
+  insert into public.free_shares (gift_id, user_id, amount) values (p_gift, auth.uid(), p_amount);
+end $$;
+
+create or replace function public.free_leave(p_gift uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if exists (select 1 from public.free_gifts where id = p_gift and buyer = auth.uid()) then
+    raise exception 'Käufer kann nicht austreten' using errcode = '22023';
+  end if;
+  delete from public.free_shares where gift_id = p_gift and user_id = auth.uid();
+end $$;
+
+create or replace function public.free_paid(p_gift uuid, p_user uuid, p_on boolean) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not (p_user = auth.uid() or exists (select 1 from public.free_gifts where id = p_gift and buyer = auth.uid())) then
+    raise exception 'Keine Berechtigung' using errcode = '42501';
+  end if;
+  update public.free_shares set paid_at = case when p_on then coalesce(paid_at, now()) end
+    where gift_id = p_gift and user_id = p_user;
+  if not found then raise exception 'Keine Berechtigung' using errcode = '42501'; end if;
+end $$;
+
+-- Gekauft (oder doch nicht), nur der Käufer
+create or replace function public.free_bought(p_gift uuid, p_on boolean) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  update public.free_gifts set bought_at = case when p_on then coalesce(bought_at, now()) end
+    where id = p_gift and buyer = auth.uid();
+  if not found then raise exception 'Keine Berechtigung' using errcode = '42501'; end if;
+end $$;
+
+create or replace function public.free_handover(p_gift uuid, p_user uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not exists (select 1 from public.free_gifts where id = p_gift and buyer = auth.uid()) then
+    raise exception 'Keine Berechtigung' using errcode = '42501';
+  end if;
+  if p_user = auth.uid() or not public.free_member(p_gift, p_user) or not public.free_knows(p_gift, p_user) then
+    raise exception 'Macht nicht mit' using errcode = '22023';
+  end if;
+  update public.free_gifts set buyer = p_user where id = p_gift;
+end $$;
+
+create or replace function public.free_cancel(p_gift uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not exists (select 1 from public.free_gifts where id = p_gift and buyer = auth.uid()) then
+    raise exception 'Keine Berechtigung' using errcode = '42501';
+  end if;
+  delete from public.free_gifts where id = p_gift;
+end $$;
+
+-- Übernommene Gruppen-Idee nicht mehr „Ich schenke das“, solange ein gemeinsames Geschenk daran hängt
+create or replace function public.gidea_take(p_id uuid, p_status text) returns void
+language plpgsql security definer set search_path = '' as $$
+declare i public.group_ideas;
+begin
+  select * into i from public.group_ideas where id = p_id;
+  if not found or not public.is_member(i.group_id) then raise exception 'Nicht gefunden'; end if;
+  if exists (select 1 from public.groups where id = i.group_id and archived_at is not null) then
+    raise exception 'Gruppe ist archiviert';
+  end if;
+  if p_status is not null and p_status not in ('reserviert', 'gekauft') then raise exception 'Status ungültig'; end if;
+  if i.free_id is not null or (i.taken_by is not null and i.taken_by <> auth.uid()) then
+    raise exception 'Das übernimmt schon jemand';
+  end if;
+  update public.group_ideas
+    set taken_by = case when p_status is null then null else auth.uid() end, status = p_status
+    where id = p_id;
+end $$;
+
+-- Rückblick der Geburtstagsgruppe mit gemeinsamen Geschenken (diese bleiben, damit das Bezahlen weiterläuft)
+create or replace function public.bday_archive(p_group uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+declare
+  g public.groups;
+  items jsonb;
+  yr int := extract(year from (now() at time zone 'Europe/Berlin'))::int;
+begin
+  select * into g from public.groups where id = p_group;
+  if not found or g.bday_name is null or g.created_by <> auth.uid() then
+    raise exception 'Nicht erlaubt' using errcode = '42501';
+  end if;
+  if g.archived_at is not null then return; end if;
+  select coalesce(jsonb_agg(x order by x->>'t'), '[]') into items from (
+    select jsonb_build_object('t', i.title, 'by', i.taken_by, 'st', i.status) as x
+      from public.group_ideas i where i.group_id = p_group and i.taken_by is not null
+    union all
+    select jsonb_build_object('t', w.title, 'by', r.user_id, 'st', r.status)
+      from public.wishes w join public.reservations r on r.wish_id = w.id
+      where g.bday_user is not null and w.owner = g.bday_user
+        and exists (select 1 from public.members m where m.group_id = p_group and m.user_id = r.user_id)
+    union all
+    select jsonb_build_object('t', f.title, 'by', f.buyer, 'st', case when f.bought_at is null then 'reserviert' else 'gekauft' end,
+                              'n', (select count(*) from public.free_shares s where s.gift_id = f.id))
+      from public.free_gifts f where f.group_id = p_group and f.recap_year is null) q;
+  update public.groups set archived_at = now(),
+    bday_recap = jsonb_build_object('year', yr, 'items', items)
+    where id = p_group;
+  update public.free_gifts set recap_year = yr where group_id = p_group and recap_year is null;
+  delete from public.group_ideas where group_id = p_group and (taken_by is not null or free_id is not null);
+end $$;
+
+-- Namen: wer bei einem gemeinsamen Geschenk ohne Wunsch dabei ist, das ich sehe
+create or replace function public.free_names(other uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (
+    select 1 from public.free_gifts x
+    where (x.buyer = other or exists (select 1 from public.free_shares s where s.gift_id = x.id and s.user_id = other))
+      and public.free_visible_to(x.id, auth.uid()));
+$$;
+
+-- ---------- Benachrichtigungen (Art „pool“, mit free_id statt wish_id) ----------
+
+create or replace function public.push_on_free() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'UPDATE' and new.open is not distinct from old.open and new.invited is not distinct from old.invited then
+    return null;
+  end if;
+  insert into public.push_outbox (user_id, kind, ref, tag, actor, free_id, extra)
+    select u, 'pool', new.id || ':ask:' || floor(extract(epoch from new.created_at)), 'pool-ask-' || new.id,
+           new.buyer, new.id, 'ask'
+    from public.free_audience(new.id, new.open, new.invited) u
+    where u <> new.buyer and not public.free_member(new.id, u)
+      and (tg_op = 'INSERT' or u not in (select public.free_audience(old.id, old.open, old.invited)))
+      and public.push_wants(u, 'pool')
+    on conflict do nothing;
+  return null;
+end $$;
+drop trigger if exists push_free on public.free_gifts;
+create trigger push_free after insert or update of open, invited on public.free_gifts
+  for each row execute function public.push_on_free();
+
+create or replace function public.push_on_free_share() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  insert into public.push_outbox (user_id, kind, ref, tag, actor, free_id, extra)
+    select x.buyer, 'pool', new.gift_id || ':join:' || new.user_id || ':' || floor(extract(epoch from x.created_at)),
+           'pool-join-' || new.gift_id, new.user_id, new.gift_id, 'join'
+    from public.free_gifts x
+    where x.id = new.gift_id and x.buyer <> new.user_id and public.push_wants(x.buyer, 'pool')
+    on conflict do nothing;
+  return null;
+end $$;
+drop trigger if exists push_free_share on public.free_shares;
+create trigger push_free_share after insert on public.free_shares
+  for each row execute function public.push_on_free_share();
+
+create or replace function public.push_on_free_change() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.bought_at is not null and old.bought_at is null then
+    insert into public.push_outbox (user_id, kind, ref, tag, actor, free_id, extra)
+      select s.user_id, 'pool', new.id || ':bought:' || floor(extract(epoch from new.created_at)),
+             'pool-bought-' || new.id, new.buyer, new.id, 'bought'
+      from public.free_shares s
+      where s.gift_id = new.id and s.user_id <> new.buyer and public.push_wants(s.user_id, 'pool')
+      on conflict do nothing;
+  end if;
+  if new.buyer is distinct from old.buyer then
+    insert into public.push_outbox (user_id, kind, ref, tag, actor, free_id, extra)
+      select new.buyer, 'pool', new.id || ':buyer:' || new.buyer || ':' || floor(extract(epoch from now())),
+             'pool-buyer-' || new.id, old.buyer, new.id, 'buyer'
+      where public.push_wants(new.buyer, 'pool')
+      on conflict do nothing;
+  end if;
+  return null;
+end $$;
+drop trigger if exists push_free_change on public.free_gifts;
+create trigger push_free_change after update of bought_at, buyer on public.free_gifts
+  for each row execute function public.push_on_free_change();
+
+create or replace function public.push_on_free_end() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare
+  info jsonb;
+begin
+  info := jsonb_build_object('t', old.title, 'b', public.push_name(old.buyer),
+    'o', case when old.for_user is not null then public.push_name(old.for_user)
+              else coalesce((select g.bday_name from public.groups g where g.id = old.group_id), 'jemanden') end);
+  insert into public.push_outbox (user_id, kind, ref, tag, actor, free_id, extra, info)
+    select s.user_id, 'pool', old.id || ':cancel:' || floor(extract(epoch from old.created_at)),
+           'pool-cancel-' || old.id, auth.uid(), old.id, 'cancel', info
+    from public.free_shares s
+    where s.gift_id = old.id and s.user_id is distinct from auth.uid() and auth.uid() is not null
+      and public.push_wants(s.user_id, 'pool')
+    on conflict do nothing;
+  return old;
+end $$;
+drop trigger if exists push_free_end on public.free_gifts;
+create trigger push_free_end before delete on public.free_gifts
+  for each row execute function public.push_on_free_end();
+
+-- Täglich (aus push_daily): Frist gestern um und zu wenige dabei → an den Käufer
+create or replace function public.free_due(p_today date) returns int
+language plpgsql security definer set search_path = '' as $$
+declare
+  n int;
+begin
+  insert into public.push_outbox (user_id, kind, ref, tag, free_id, extra)
+    select x.buyer, 'pool', x.id || ':due:' || x.deadline, 'pool-due-' || x.id, x.id, 'due'
+    from public.free_gifts x
+    where x.deadline = p_today - 1 and x.min_people is not null and x.bought_at is null
+      and (select count(*) from public.free_shares s where s.gift_id = x.id) < x.min_people
+      and public.push_wants(x.buyer, 'pool')
+    on conflict do nothing;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+-- Text zum Zeitpunkt des Versands (aus pool_message, wenn free_id gesetzt ist)
+create or replace function public.free_message(p_user uuid, p_tag text, o public.push_outbox) returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  x public.free_gifts;
+  who text;
+  n int;
+  names text[];
+  url text;
+begin
+  if o.extra = 'cancel' then
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
+      'title', 'Gemeinsames Geschenk abgesagt',
+      'body', '„' || (o.info ->> 't') || '“ für ' || (o.info ->> 'o') || '. Abgesagt von ' || (o.info ->> 'b') || '.',
+      'url', '#/');
+  end if;
+  select * into x from public.free_gifts where id = o.free_id;
+  if not found or not public.free_visible_to(o.free_id, p_user) then return null; end if;
+  who := case when x.for_user is not null then public.push_name(x.for_user, p_user)
+              else coalesce((select g.bday_name from public.groups g where g.id = x.group_id), 'jemanden') end;
+  select count(*) into n from public.free_shares where gift_id = x.id;
+  url := '#/gemeinsam/' || x.id;
+  if o.extra = 'ask' then
+    if public.free_member(x.id, p_user) then return null; end if;
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 1,
+      'title', public.push_name(x.buyer, p_user) || ' fragt, ob du mitmachst',
+      'body', '„' || x.title || '“ gemeinsam für ' || who || ' schenken',
+      'url', url);
+  elsif o.extra = 'join' then
+    if x.buyer <> p_user then return null; end if;
+    select array_agg(public.push_name(y.actor, p_user) order by y.id) into names
+      from public.push_outbox y
+      where y.user_id = p_user and y.tag = p_tag and y.sent_at is not null and y.created_at > now() - interval '1 hour'
+        and public.free_member(x.id, y.actor);
+    if coalesce(cardinality(names), 0) = 0 then return null; end if;
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
+      'title', case when cardinality(names) = 1 then names[1] || ' macht mit' else public.push_list(names) || ' machen mit' end,
+      'body', '„' || x.title || '“ für ' || who || ' · ' || n || ' dabei',
+      'url', url);
+  elsif o.extra = 'bought' then
+    if not public.free_member(x.id, p_user) or x.buyer = p_user or x.bought_at is null then return null; end if;
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
+      'title', public.push_name(x.buyer, p_user) || ' hat „' || x.title || '“ gekauft',
+      'body', 'Gemeinsames Geschenk für ' || who || '. Denk an deinen Anteil.',
+      'url', url);
+  elsif o.extra = 'buyer' then
+    if x.buyer <> p_user then return null; end if;
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
+      'title', 'Du kaufst jetzt „' || x.title || '“',
+      'body', public.push_name(o.actor, p_user) || ' hat dir das gemeinsame Geschenk für ' || who || ' übergeben.',
+      'url', url);
+  elsif o.extra = 'due' then
+    if x.buyer <> p_user or x.min_people is null or n >= x.min_people or x.bought_at is not null then return null; end if;
+    return jsonb_build_object('kind', 'pool', 'tag', p_tag, 'badge', 0,
+      'title', 'Frist für „' || x.title || '“ ist um',
+      'body', n || ' von ' || x.min_people || ' dabei. Entscheide, wie es weitergeht.',
+      'url', url);
+  end if;
+  return null;
+end $$;
+
+-- ---------- Zugriffsregeln ----------
+
+alter table public.free_gifts enable row level security;
+alter table public.free_shares enable row level security;
+
+drop policy if exists "frei gemeinsam lesen" on public.free_gifts;
+drop policy if exists "frei anteile lesen" on public.free_shares;
+create policy "frei gemeinsam lesen" on public.free_gifts for select to authenticated
+  using (public.free_visible(id));
+create policy "frei anteile lesen" on public.free_shares for select to authenticated
+  using (public.free_visible(gift_id));
+
+revoke all on public.free_gifts, public.free_shares from anon, authenticated;
+grant select on public.free_gifts, public.free_shares to authenticated;
+
+revoke execute on function public.free_knows(uuid, uuid), public.free_member(uuid, uuid),
+  public.free_visible_to(uuid, uuid), public.free_visible(uuid), public.free_people(uuid, uuid),
+  public.free_audience(uuid, boolean, uuid[]), public.free_candidates(uuid, uuid),
+  public.free_clean_invited(uuid, uuid, uuid[]), public.free_link_check(),
+  public.free_start(uuid, uuid, uuid, uuid, text, text, numeric, text, numeric, boolean, uuid[], int, date, text),
+  public.free_update(uuid, text, text, numeric, text, boolean, uuid[], int, date, text),
+  public.free_join(uuid, numeric), public.free_leave(uuid), public.free_paid(uuid, uuid, boolean),
+  public.free_bought(uuid, boolean), public.free_handover(uuid, uuid), public.free_cancel(uuid),
+  public.free_names(uuid), public.push_on_free(), public.push_on_free_share(), public.push_on_free_change(),
+  public.push_on_free_end(), public.free_due(date), public.free_message(uuid, text, public.push_outbox),
+  public.gidea_take(uuid, text), public.bday_archive(uuid)
+  from public, anon, authenticated;
+grant execute on function public.free_visible(uuid), public.free_candidates(uuid, uuid),
+  public.free_start(uuid, uuid, uuid, uuid, text, text, numeric, text, numeric, boolean, uuid[], int, date, text),
+  public.free_update(uuid, text, text, numeric, text, boolean, uuid[], int, date, text),
+  public.free_join(uuid, numeric), public.free_leave(uuid), public.free_paid(uuid, uuid, boolean),
+  public.free_bought(uuid, boolean), public.free_handover(uuid, uuid), public.free_cancel(uuid),
+  public.gidea_take(uuid, text), public.bday_archive(uuid)
+  to authenticated;
