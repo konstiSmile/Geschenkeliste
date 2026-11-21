@@ -1,4 +1,4 @@
-# Geschenkeliste – Fahrplan (Stand 20.11.2026, Version 1.19)
+# Geschenkeliste – Fahrplan (Stand 21.11.2026, Version 1.20)
 
 Ein Paket = ein Chat. Jedes Paket ist für sich nutzbar. „schema.sql“ heißt: nach dem Push einmal im Supabase SQL-Editor ausführen. Details zu gebauten Paketen: `docs/technik.md`.
 
@@ -21,15 +21,19 @@ Ein Paket = ein Chat. Jedes Paket ist für sich nutzbar. „schema.sql“ heißt
 | 1.17 | Einfach bedienen | Klarere Wörter, Plus-Menü, Gruppenfenster, Mehr Angaben, Erste Schritte, Hilfe, Rückgängig, Wischen; 1.17.1 Freund entfernen | `5ba8114` |
 | 1.18 | Feinschliff | Benutzername unter Konto, Größe, Idee wird „Ich schenke das“, gesehen im Konto, Steckbrief für Personen ohne App | `58f96f7` |
 | 1.19 | 13 | Öffnen für Freunde: Sperrliste, Konten-Limit, Benutzername ändern, Ablehnen mit Pause und Rückgängig | `a2df016` |
+| 1.20 | Gemeinsam ohne Wunsch | Gemeinsames Geschenk frei, aus eigener Idee oder aus Idee in der Geburtstagsgruppe (auch ohne App) | `a9d07b4` |
 
 Gestrichen: Pakete 7 und 8 (Chats), Absprachen laufen über WhatsApp und Co.
 
 ## Offen für den Nutzer
-- schema.sql ausführen, App neu laden, Version 1.19 prüfen, in Supabase das Limit für anonyme Anmeldungen auf 10 setzen
+- schema.sql ausführen, App neu laden, Version 1.20 prüfen (Limit für anonyme Anmeldungen steht seit 21.11. auf 15)
 - Familie einladen, Wichteln eintragen und auslosen (Anfang Dezember)
 
-## Als Nächstes (vom Nutzer sortiert, 20.11.)
-1. Gemeinsam schenken ohne Wunsch bzw. Idee → gemeinsames Geschenk; Anlass beim Anlegen einer Idee wählen (Ideen pro Anlass); Push bei neuen Ideen in Geburtstagsgruppen.
+## Als Nächstes (vom Nutzer sortiert, 21.11.)
+1. ~~Gemeinsam schenken ohne Wunsch / Idee → gemeinsames Geschenk~~ (1.20)
+2. Anlass beim Anlegen einer Idee wählen (Ideen pro Anlass)
+3. Push bei neuen Ideen in Geburtstagsgruppen
+4. Vorschlag: Grenze „5 gesicherte Konten pro Anschluss und Stunde“ auf 10 anheben (Familienfeier im selben WLAN), Nutzer hat noch nicht entschieden
 
 Für jedes Paket: zurückhaltend, nichts Neues auf den Hauptseiten ohne Not, nicht überfordern.
 Aus „Einfach bedienen“ nicht gewählt (bei Bedarf später): größere Schrift, Schalter „Große Schrift“, dunklere Hinweistexte, größere Knöpfe, Einfach-Modus, Wischen auf Zeilen.

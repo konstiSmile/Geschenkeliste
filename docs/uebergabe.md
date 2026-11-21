@@ -1,25 +1,25 @@
-# Geschenkeliste – Übergabe (Stand 20.11.2026, Version 1.19)
+# Geschenkeliste – Übergabe (Stand 21.11.2026, Version 1.20)
 
-**Projekt-Übergabe:** Doc „Übergabe 5 – Geschenkeliste“ im Projekt (Thema 5, Chats heißen „5.<Nr> …“, letzter Chat 5.26). Startsatz: „Thema 5 (Geschenkeliste), Chat 5.<Nr>. Weiter laut ‚Übergabe 5 – Geschenkeliste‘. Nächster Schritt: …“
+**Projekt-Übergabe:** Doc „Übergabe 5 – Geschenkeliste“ im Projekt (Thema 5, Chats heißen „5.<Nr> …“, letzter Chat 5.27). Startsatz: „Thema 5 (Geschenkeliste), Chat 5.<Nr>. Weiter laut ‚Übergabe 5 – Geschenkeliste‘. Nächster Schritt: …“
 
 ## ZUERST (Wunsch des Nutzers)
 Bevor etwas besprochen oder gebaut wird: To-do-Liste aus „Offen beim Nutzer“ als kurze nummerierte Liste zum Abhaken geben, warten, kurz nachfragen, ob etwas aufgefallen ist. Repo erst danach klonen.
 
 ## Stand
-- Version **1.19 Öffnen für Freunde** gepusht (Commit `a2df016`), Cache `geschenkeliste-v29`, `?v=29` (Symbole `?v=24`). **schema.sql geändert**, Edge Function unverändert.
-- Tests: 552 RLS, 394 Playwright, 14 Edge Function, 9 Service Worker, alle grün.
+- Version **1.20 Gemeinsam ohne Wunsch** gepusht (Commit `a9d07b4`), Cache `geschenkeliste-v30`, `?v=30` (Symbole `?v=24`). **schema.sql geändert**, Edge Function unverändert.
+- Tests: 596 RLS, 415 Playwright, 14 Edge Function, 9 Service Worker, alle grün.
+- 1.19 beim Nutzer eingerichtet und geprüft (21.11.). Supabase-Limit anonyme Anmeldungen: 15 pro Stunde (Nutzerwahl).
 - App: https://konstismile.github.io/Geschenkeliste/ (Claude kann github.io nicht abrufen).
 
 ## Offen beim Nutzer
 1. schema.sql im Supabase SQL Editor ausführen: https://raw.githubusercontent.com/konstiSmile/Geschenkeliste/main/supabase/schema.sql
-2. Supabase → Authentication → Rate Limits: anonyme Anmeldungen pro Stunde von 30 auf 10.
-3. App neu laden, Konto → Weitere Einstellungen ganz unten: Version 1.19.
-4. Konto → Weitere Einstellungen → Anmeldung: Benutzername ändern ausprobieren (danach 30 Tage gesperrt, also bewusst wählen).
-5. Eine Freundschaftsanfrage ablehnen und „Rückgängig“ antippen.
-6. Anleitung (Claude Doc): Vorschlag „Neu mit Version 1.19“ annehmen.
+2. App neu laden, Konto → Weitere Einstellungen ganz unten: Version 1.20.
+3. Liste einer Person öffnen, ganz unten „Gemeinsam etwas anderes schenken“ ausprobieren.
+4. Eine eigene Idee öffnen: „Mit anderen zusammenlegen“.
+5. Anleitung (Claude Doc): Vorschlag „Neu mit Version 1.20“ annehmen.
 
 ## Nächster Schritt
-Gemeinsam schenken ohne Wunsch bzw. Idee → gemeinsames Geschenk; Anlass beim Anlegen einer Idee wählen; Push bei neuen Ideen in Geburtstagsgruppen (siehe `docs/fahrplan.md`).
+Anlass beim Anlegen einer Idee wählen, danach Push bei neuen Ideen in Geburtstagsgruppen (siehe `docs/fahrplan.md`). Offene Frage an den Nutzer: Grenze 5 gesicherte Konten pro Anschluss/Stunde auf 10?
 
 ## So arbeiten (sparsam)
 - Technik in `docs/technik.md` (nur passende Abschnitte lesen, `grep -n "^## "`), Planung in `docs/fahrplan.md`, Design in `docs/design-pop.md`.
