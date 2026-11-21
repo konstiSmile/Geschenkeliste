@@ -2,7 +2,7 @@
 /* Geschenkeliste – Wunschlisten für Familie und Freunde.
    Ohne Bibliotheken: spricht direkt mit Supabase (Auth + REST). */
 
-const VERSION = '1.20';
+const VERSION = '1.21';
 const SB_URL = 'https://qbdpzamygonpruaafcrt.supabase.co';
 const SB_KEY = 'sb_publishable_A7zukzk82Suux8jteQvLGA_WmXnZb14';
 const LS_KEY = 'geschenkeliste-v1';
@@ -349,6 +349,7 @@ async function passwordLogin(username, password) {
 async function sync(quiet) {
   if (!S.session) return;
   try {
+    let ideaOccOk = false;
     const [profiles, groups, members, wishes, wg, res, acc, admin, wd, wp, wx, wo, pp, ip, ideas, card, cardVis, cards, pools, shares, fr, wf, fq, nick, bd, gl, glp, gi, bdo, sst, fg, fsh] = await Promise.all([
       sb('/rest/v1/profiles?select=id,name'),
       // Anlass pro Gruppe ab 1.15, Geburtstagsgruppen ab 1.16
@@ -382,8 +383,11 @@ async function sync(quiet) {
       // ab 1.18 mit Steckbrief der Person, Größe und verknüpftem Wunsch
       sb('/rest/v1/idea_people?select=id,name,linked_user,created_at,card,card_stamps&order=created_at')
         .catch(() => sb('/rest/v1/idea_people?select=id,name,linked_user,created_at&order=created_at')).catch(() => null),
-      // ab 1.20 mit verknüpftem gemeinsamen Geschenk (free_id)
-      sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at,size,wish_id,free_id&order=created_at.desc')
+      // ab 1.20 mit verknüpftem gemeinsamen Geschenk (free_id), ab 1.21 mit Anlass
+      sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at,size,wish_id,free_id,occ_kind,occ_name,occ_date&order=created_at.desc')
+        .then(r => { ideaOccOk = true; return r; })
+        .catch(() => { ideaOccOk = false; return Promise.reject(); })
+        .catch(() => sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at,size,wish_id,free_id&order=created_at.desc'))
         .catch(() => sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at,size,wish_id&order=created_at.desc'))
         .catch(() => sb('/rest/v1/ideas?select=id,person,title,url,note,price,category,done_at,created_at&order=created_at.desc')).catch(() => null),
       // Steckbrief ab 1.12: eigener (Tabelle), Sichtbarkeit, die der anderen (gefiltert über card_list)
@@ -428,6 +432,7 @@ async function sync(quiet) {
       occOk: !!(groups[0] ? 'occ_kind' in groups[0] : bd), bd: bd || [], bdOk: !!bd, gl: gl || [], glp: glp || [], glOk: !!(gl && glp),
       gi: gi || [], bdgOk: !!(gi && bdo), bdOff: !!(bdo && bdo.length),
       seenRemote: sst && sst[0] ? sst[0].data : null, seenOk: !!sst,
+      ideaOccOk,     // schema.sql 1.21 ausgeführt (Anlass an Ideen)
       fsOk: !!sst,   // schema.sql 1.18 ausgeführt (Größe, Idee → Wunsch, Steckbrief ohne App)
       fcode: D.fcode, at: Date.now(), loaded: true };
     hidePendingDel();
@@ -1487,6 +1492,23 @@ function ideaTaken(i) {
 }
 const ideaDone = i => { const t = ideaTaken(i); return t ? t.r.status === 'gekauft' : !!i.done_at; };
 const byDone = (a, b) => (ideaDone(a) ? 1 : 0) - (ideaDone(b) ? 1 : 0);
+/* ---------- Anlass an Ideen (1.21) ---------- */
+// Nächster Termin des Anlasses einer Idee (Geburtstag nur, wenn die Person ihn eingetragen hat)
+function ideaOccNext(i) {
+  if (i.occ_kind === 'weihnachten') return nextYearly(12, 24);
+  if (i.occ_kind === 'geburtstag') { const p = ipById(i.person); return p && p.linked_user ? bdNext(bdOf(p.linked_user)) : null; }
+  if (i.occ_kind === 'sonstiges') { const d = parseDay(i.occ_date); return d && d >= todayDate() ? d : null; }
+  return null;
+}
+function ideaOccLabel(i) {
+  if (i.occ_kind === 'weihnachten') return 'Weihnachten';
+  if (i.occ_kind === 'geburtstag') return 'Geburtstag';
+  if (i.occ_kind !== 'sonstiges') return '';
+  const d = ideaOccNext(i);
+  return (i.occ_name || 'Anlass') + (d ? ', ' + fmtDate(d) : '');
+}
+// Offene zuerst, darin der nächste Anlass zuerst, Ideen ohne Termin danach
+const byIdea = (a, b) => byDone(a, b) || ((ideaOccNext(a) || Infinity) - (ideaOccNext(b) || Infinity));
 // Bereich oben im Ideenformular: verknüpfter Wunsch oder Auswahl „Passt zu einem Wunsch“
 function ideaTakeHtml(i, uid) {
   const t = ideaTaken(i);
@@ -1513,7 +1535,7 @@ function ideaTakeHtml(i, uid) {
 function ideaRow(i, ret) {
   const t = ideaTaken(i);
   const done = ideaDone(i);
-  const meta = [wishMeta(i), t ? (t.free ? `Gemeinsam, ${sharesOf(t.p.wish_id).length} dabei` : 'Ich schenke das') : (i.url ? domain(i.url) : ''), done ? (t ? 'gekauft' : 'besorgt') : ''].filter(Boolean).join(' · ');
+  const meta = [ideaOccLabel(i), wishMeta(i), t ? (t.free ? `Gemeinsam, ${sharesOf(t.p.wish_id).length} dabei` : 'Ich schenke das') : (i.url ? domain(i.url) : ''), done ? (t ? 'gekauft' : 'besorgt') : ''].filter(Boolean).join(' · ');
   return `<li class="row-item ${done ? 'done' : ''}">
       <button class="tick ${done ? 'on' : ''}" data-act="ideadone" data-id="${i.id}" aria-label="${done ? (t ? 'Doch nicht gekauft' : 'Doch nicht besorgt') : (t ? 'Als gekauft markieren' : 'Als besorgt markieren')}">${icon('check')}</button>
       <a class="row-main" href="#/i/${i.id}${ret ? '?r=' + ret : ''}"><span class="row-title">${esc(i.title)}</span>${meta ? `<span class="row-meta">${esc(meta)}</span>` : ''}</a>
@@ -1539,7 +1561,7 @@ function viewIdeas() {
   }
   // Personen mit offenen Ideen zuerst, dann nach Namen; frei angelegte ohne Ideen bleiben sichtbar
   const people = D.ip.filter(p => ideasFor(p.id).length || !p.linked_user).map(p => {
-    const list = ideasFor(p.id).slice().sort(byDone);
+    const list = ideasFor(p.id).slice().sort(byIdea);
     return { p, list, open: list.filter(i => !ideaDone(i)).length };
   }).sort((a, b) => (b.open ? 1 : 0) - (a.open ? 1 : 0) || ipName(a.p).localeCompare(ipName(b.p), 'de'));
   const sec = ({ p, list, open }) => `<div class="sechead ideahead"><a href="#/f/${friendKey(p)}?r=ideen" class="ideaperson">${ipAvatar(p, 'sm')}<h2>${esc(ipName(p))}</h2></a>
@@ -1737,7 +1759,7 @@ function viewFriend(key) {
   const friend = uid && isFriend(uid);
   const ws = uid ? openWishes(uid).sort(byPrio) : [];
   const nFree = ws.filter(w => !resOf(w.id)).length;
-  const ideas = p ? ideasFor(p.id).slice().sort(byDone) : [];
+  const ideas = p ? ideasFor(p.id).slice().sort(byIdea) : [];
   const nOpen = ideas.filter(i => !ideaDone(i)).length;
   const where = uid ? [shared.map(g => g.name).join(', '), friend ? 'befreundet' : ''].filter(Boolean).join(' · ') : (p.linked_user ? 'Nicht mehr in deinen Gruppen' : 'Ohne App');
   const real = uid && nickOf(uid) && realName(uid) && realName(uid) !== nickOf(uid) ? `<p class="row-meta">Heißt in der App ${esc(realName(uid))}</p>` : '';
@@ -1911,7 +1933,8 @@ function viewIdeaForm(id, key) {
         <label class="${cur === 'new' ? '' : 'hide'}" id="pnew">Name<input name="pname" maxlength="40" autocomplete="off" placeholder="z. B. Oma Ruth"></label>
         <label>Was könnte passen?<input name="title" maxlength="120" required value="${esc(i.title)}" placeholder="z. B. Fotobuch vom Urlaub"></label>
       </div>
-      ${fold('i-more-' + id, 'more', 't1', 'Mehr Angaben', D.fsOk ? 'Link, Preis, Kategorie, Größe, Notiz' : 'Link, Preis, Kategorie, Notiz', `<div class="card fields">
+      ${fold('i-more-' + id, 'more', 't1', 'Mehr Angaben', (D.ideaOccOk ? 'Anlass, ' : '') + (D.fsOk ? 'Link, Preis, Kategorie, Größe, Notiz' : 'Link, Preis, Kategorie, Notiz'), `<div class="card fields">
+        ${D.ideaOccOk ? ideaOccFields(i) : ''}
         <div class="field"><div class="fieldhead"><label for="f-url">Link</label><button type="button" class="link withicon" data-act="pasteurl">${icon('paste')}Einfügen</button></div>
           <input id="f-url" name="url" inputmode="url" autocomplete="off" value="${esc(i.url || '')}" placeholder="https://"></div>
         <div class="two">
@@ -1920,18 +1943,30 @@ function viewIdeaForm(id, key) {
         </div>
         ${D.fsOk ? `<label>Größe<input name="size" maxlength="40" autocomplete="off" value="${esc(i.size || '')}" placeholder="z. B. M oder 42">${sizes ? `<small class="fhelp">Laut Steckbrief: ${esc(sizes)}</small>` : ''}</label>` : ''}
         <label>Notiz<textarea name="note" maxlength="1000" rows="3" placeholder="Wo gesehen, Farbe">${esc(i.note || '')}</textarea></label>
-      </div>`, !!(i.url || i.price != null || i.category || i.note || i.size))}
+      </div>`, !!(i.url || i.price != null || i.category || i.note || i.size || i.occ_kind))}
       <button class="primary" type="submit">Speichern</button>
       ${done}
       ${del}
     </form>${privacyFoot('die Person selbst')}`, { tab: 'list', back });
 }
 
+function ideaOccFields(i) {
+  const k = i.occ_kind || '';
+  const opts = [['', 'Kein bestimmter'], ['weihnachten', 'Weihnachten'], ['geburtstag', 'Geburtstag'], ['sonstiges', 'Sonstiges']]
+    .map(([v, l]) => `<option value="${v}"${v === k ? ' selected' : ''}>${l}</option>`).join('');
+  const s = k === 'sonstiges';
+  return `<label>Anlass<select name="okind">${opts}</select></label>
+        <div class="two occ-more${s ? '' : ' hide'}">
+          <label>Name<input name="oname" maxlength="40" autocomplete="off" value="${esc(i.occ_name || '')}" placeholder="z. B. Hochzeit"></label>
+          <label>Datum<input name="odate" type="date" value="${esc(i.occ_date || '')}"></label>
+        </div>`;
+}
+
 // Abschnitt auf der Seite einer Person in der Gruppe
 function personIdeas(gid, uid) {
   if (!D.ideasOk) return '';
   const p = ipFor(uid);
-  const list = p ? ideasFor(p.id).slice().sort(byDone) : [];
+  const list = p ? ideasFor(p.id).slice().sort(byIdea) : [];
   const ret = gid ? `g/${gid}/p/${uid}` : `p/${uid}`;
   const key = p ? 'p:' + p.id : 'u:' + uid;
   return `<div class="sechead"><h2>Deine Ideen</h2><a class="link" href="#/f/u:${uid}?r=${ret}">Alles zu ${esc(nameOf(uid))}</a></div>
@@ -3805,6 +3840,14 @@ const forms = {
     if (url === false) throw new Error('Der Link sieht nicht richtig aus.');
     const price = parsePrice(f.price.value);
     if (price === false) throw new Error('Der Preis sieht nicht richtig aus, z. B. 24,99.');
+    // Anlass (1.21) vor dem Anlegen einer neuen Person prüfen
+    let occ = null;
+    if (f.okind) {
+      const k = f.okind.value || null, other = k === 'sonstiges';
+      const oname = other ? f.oname.value.trim() : '';
+      if (other && !oname) throw new Error('Gib dem Anlass einen Namen, z. B. Hochzeit.');
+      occ = { occ_kind: k, occ_name: other ? oname : null, occ_date: other ? f.odate.value || null : null };
+    }
     const v = f.person.value;
     let person;
     if (v === 'new') {
@@ -3819,6 +3862,7 @@ const forms = {
     else throw new Error('Wähle aus, für wen die Idee ist.');
     const row = { person, title, url, price, category: f.category.value || null, note: f.note.value.trim() || null };
     if (f.size) row.size = f.size.value.trim() || null;
+    if (occ) Object.assign(row, occ);
     if (id === 'neu') await sb('/rest/v1/ideas', { method: 'POST', prefer: 'return=minimal', body: row });
     else await sb('/rest/v1/ideas?id=eq.' + id, { method: 'PATCH', prefer: 'return=minimal', body: row });
     await sync(true);
@@ -4594,6 +4638,10 @@ document.addEventListener('change', e => {
   if (e.target.name === 'person' && e.target.form && ['idea', 'glAdd', 'bdaynew'].includes(e.target.form.dataset.form)) {
     const n = $('#pnew');
     if (n) { n.classList.toggle('hide', e.target.value !== 'new'); if (e.target.value === 'new') n.querySelector('input').focus(); }
+  }
+  if (e.target.name === 'okind' && e.target.form) {
+    const box = e.target.form.querySelector('.occ-more');
+    if (box) { box.classList.toggle('hide', e.target.value !== 'sonstiges'); if (e.target.value === 'sonstiges') box.querySelector('input').focus(); }
   }
   if (e.target.name === 'kind' && e.target.form && e.target.form.dataset.form === 'occasion') {
     const f = e.target.form, k = e.target.value, need = k === 'geburtstag' || k === 'sonstiges';

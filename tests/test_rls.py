@@ -1704,12 +1704,12 @@ def with_ip(uid, sql, ip):
 
 
 run('truncate public.signup_log')
-ips = [str(uuid.uuid4()) for _ in range(6)]
+ips = [str(uuid.uuid4()) for _ in range(11)]
 for u in ips:
     run(f"insert into auth.users (id, is_anonymous) values ('{u}', true);")
 res = [with_ip(u, f"public.secure_account('ip{i}x', 'geheim123')", '203.0.113.7')[0] for i, u in enumerate(ips)]
-check('Offen: 5 Konten pro Anschluss und Stunde', res == [True] * 5 + [False])
-ok, r = with_ip(ips[5], "public.secure_account('ip5x', 'geheim123')", '203.0.113.8')
+check('Offen: 10 Konten pro Anschluss und Stunde (seit 1.21)', res == [True] * 10 + [False])
+ok, r = with_ip(ips[10], "public.secure_account('ip10x', 'geheim123')", '203.0.113.8')
 check('Offen: anderer Anschluss geht', ok)
 _, out, _ = run("select count(*) from public.signup_log where ip_hash like '203%'")
 check('Offen: IP nur als Hash', out == '0')
@@ -1928,6 +1928,27 @@ _, out, _ = run('select public.free_due(current_date)')
 check('Ohne Wunsch: Frist um, zu wenige', out == '1')
 _, out, _ = run('select public.push_daily(current_date)')
 check('Ohne Wunsch: täglicher Lauf bleibt heil', out.isdigit())
+
+# ---------- Anlass an Ideen (1.21) ----------
+HA, HB = (str(uuid.uuid4()) for _ in range(2))
+for u in (HA, HB):
+    run(f"insert into auth.users (id, is_anonymous) values ('{u}', true);")
+HP = as_user(HA, "insert into public.idea_people (name) values ('Tante Ilse') returning id")[1][0]['id']
+def idea(uid, cols, vals):
+    return as_user(uid, f"insert into public.ideas (person, title{cols}) values ('{HP}', 'X'{vals}) returning id")[0]
+check('Anlass: ohne geht', idea(HA, '', ''))
+check('Anlass: Weihnachten', idea(HA, ', occ_kind', ", 'weihnachten'"))
+check('Anlass: Geburtstag', idea(HA, ', occ_kind', ", 'geburtstag'"))
+check('Anlass: Sonstiges mit Name, ohne Datum', idea(HA, ', occ_kind, occ_name', ", 'sonstiges', 'Hochzeit'"))
+check('Anlass: Sonstiges mit Name und Datum', idea(HA, ', occ_kind, occ_name, occ_date', ", 'sonstiges', 'Hochzeit', '2027-05-01'"))
+check('Anlass: Sonstiges ohne Name nicht', not idea(HA, ', occ_kind', ", 'sonstiges'"))
+check('Anlass: Sonstiges mit leerem Namen nicht', not idea(HA, ', occ_kind, occ_name', ", 'sonstiges', '  '"))
+check('Anlass: Name zu lang nicht', not idea(HA, ', occ_kind, occ_name', f", 'sonstiges', '{'x' * 41}'"))
+check('Anlass: Weihnachten mit Datum nicht', not idea(HA, ', occ_kind, occ_date', ", 'weihnachten', '2026-12-24'"))
+check('Anlass: unbekannte Art nicht', not idea(HA, ', occ_kind', ", 'ostern'"))
+check('Anlass: Name ohne Art nicht', not idea(HA, ', occ_name', ", 'Hochzeit'"))
+ok, out = as_user(HB, "select count(*) n from public.ideas where occ_kind is not null")
+check('Anlass: andere sehen nichts', ok and out[0]['n'] == 0)
 
 print(f'\n{passed} ok, ' + ('alle Tests grün' if not fails else f'{fails} Fehler'))
 sys.exit(1 if fails else 0)

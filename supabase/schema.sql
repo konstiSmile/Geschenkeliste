@@ -3261,7 +3261,7 @@ language sql stable security definer set search_path = '' as $$
     where h.username = p and h.until > now() and h.user_id is distinct from p_user);
 $$;
 
--- Höchstens 5 gesicherte Konten pro Anschluss und Stunde. Ohne Kopfzeilen (SQL Editor, Tests) keine Grenze.
+-- Höchstens 10 gesicherte Konten pro Anschluss und Stunde (seit 1.21, vorher 5). Ohne Kopfzeilen (SQL Editor, Tests) keine Grenze.
 create or replace function public.signup_check() returns void
 language plpgsql security definer set search_path = '' as $$
 declare
@@ -3277,7 +3277,7 @@ begin
   if ip is null then return; end if;
   k := encode(extensions.digest(ip, 'sha256'), 'hex');
   delete from public.signup_log where at < now() - interval '1 day';
-  if (select count(*) from public.signup_log where ip_hash = k and at > now() - interval '1 hour') >= 5 then
+  if (select count(*) from public.signup_log where ip_hash = k and at > now() - interval '1 hour') >= 10 then
     raise exception 'Zu viele neue Konten' using errcode = '54000';
   end if;
   insert into public.signup_log (ip_hash) values (k);
@@ -3868,3 +3868,15 @@ grant execute on function public.free_visible(uuid), public.free_candidates(uuid
   public.free_bought(uuid, boolean), public.free_handover(uuid, uuid), public.free_cancel(uuid),
   public.gidea_take(uuid, text), public.bday_archive(uuid)
   to authenticated;
+
+-- ============================================================
+-- Anlass an Ideen (1.21): Weihnachten, Geburtstag (der Person) oder Sonstiges (Name, Datum freiwillig)
+-- ============================================================
+alter table public.ideas add column if not exists occ_kind text;
+alter table public.ideas add column if not exists occ_name text;
+alter table public.ideas add column if not exists occ_date date;
+alter table public.ideas drop constraint if exists ideas_occ_check;
+alter table public.ideas add constraint ideas_occ_check check (
+  (occ_kind is null and occ_name is null and occ_date is null)
+  or (occ_kind is not null and occ_kind in ('weihnachten', 'geburtstag') and occ_name is null and occ_date is null)
+  or (occ_kind is not null and occ_kind = 'sonstiges' and occ_name is not null and char_length(btrim(occ_name)) between 1 and 40));
